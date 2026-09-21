@@ -50,7 +50,10 @@ packages = ["src/sbci"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "src"]
-addopts = "--doctest-modules --strict-markers"
+addopts = "--doctest-modules --strict-markers --ignore=tests/reference"
+# tests/reference holds MATLAB-facing generators that are run by hand.
+# --doctest-modules imports every .py it collects, and importing a script
+# runs it, so they are kept out of collection entirely.
 doctest_optionflags = "ELLIPSIS NORMALIZE_WHITESPACE"
 markers = ["needs_data: requires the downloaded tutorial subject"]
 
