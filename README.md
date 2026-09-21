@@ -22,6 +22,11 @@ pip install sbci
 sbci download hcp-ya --subject 100307        # one subject, SC + FC, ~100 MB
 ```
 
+`sbci download` needs the data release, which does not exist yet. Until it
+does, there is a synthetic connectome on the real grid so the package can be
+tried today -- `sbci.example()`, or `sbci example --out sub-example_sc.h5`.
+Its connectivity is generated rather than measured, and its metadata says so.
+
 ```python
 import sbci
 
@@ -54,7 +59,28 @@ the data release exists.
 | `.reduce(rank=K)` / `sbci.reduce(cc_list, rank=K)` | implemented; matches the MATLAB reference to float64 rounding (PORTING.md item 5) |
 | `sbci.align(cc_list, method="encore")` | implemented; geometry and template match MATLAB to float64 rounding, the registration to r = 0.99999979 (PORTING.md item 4) |
 | `sbci.stats.local_test(scores, design)` | implemented; **no reference exists**, so verified against `scipy.stats` and against the procedures' own guarantees (PORTING.md item 5) |
+| `sbci.example(modality="sc"\|"fc")` | implemented; synthetic connectivity on the real grid, passes `sbci validate` |
+| `sbci info <file>` | implemented; what a file holds, without opening Python |
+| `sbci example --out <file>` | implemented; writes a file to try the package on |
+| `sbci atlases [--match ...]` | implemented; lists the bundled atlases and their region counts |
 | `sbci download` | pending the data release (SPEC_QUESTIONS.md item 6) |
+
+## Trying it without data
+
+```python
+import sbci
+
+cc = sbci.example()                  # synthetic, on the real ico4 grid
+cc.to_atlas("Schaefer200").shape     # (200, 200)
+cc.plot(cc.seed(vertex=1234))
+```
+
+The grid, the vertex areas, the medial-wall mask and the file format are real;
+the connectivity is generated from smooth bumps on the sphere. A file written
+this way passes every `sbci validate` check, so it is a faithful subject for
+learning the API, writing tests and checking a plotting stack -- and never a
+basis for a claim about brains. Its metadata records `pipeline_version` as
+`synthetic-example` and `streamline_count` as zero.
 
 ## Getting around the package
 

@@ -94,6 +94,26 @@ def test_importing_sbci_stays_light():
     assert out.stdout.strip() == "[]", out.stdout
 
 
+def test_no_lazy_name_is_shadowed_by_a_submodule():
+    """A submodule binds itself onto its parent package once imported.
+
+    So a function exported as ``sbci.foo`` and a module named ``sbci/foo.py``
+    cannot coexist: importing the module silently replaces the function, and
+    ``__getattr__`` never runs again. ``example`` hit exactly this, which is
+    why the module is ``examples``.
+    """
+    import importlib
+    import types
+
+    for name, module in sbci._LAZY.items():
+        importlib.import_module(f"sbci.{module}")  # bind the submodule, as real use would
+        resolved = getattr(sbci, name)
+        assert not isinstance(resolved, types.ModuleType), (
+            f"sbci.{name} resolves to a module, not the object it promises: "
+            f"sbci/{module}.py shadows it"
+        )
+
+
 def test_unknown_attribute_suggests_a_real_one():
     typo = "lod_atlas"
     with pytest.raises(AttributeError, match="Did you mean 'load_atlas'"):
