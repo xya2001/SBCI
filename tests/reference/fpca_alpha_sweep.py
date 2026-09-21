@@ -10,6 +10,7 @@ import numpy as np
 
 from sbci.reduction import fit_basis
 
+
 def main():
     rng = np.random.default_rng(4)
     n, n_subjects, true_rank = 24, 12, 3
@@ -40,7 +41,6 @@ def main():
         result = fit_basis(matrices, np.eye(n), ring, rank=1, alpha=alpha, seed=0)
         vector = result.basis[:, 0]
         print(f"{alpha:10g} {vector @ ring @ vector:28.6f} {result.explained[-1]:11.4f}")
-
 
 
 if __name__ == "__main__":

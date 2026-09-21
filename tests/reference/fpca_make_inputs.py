@@ -14,6 +14,7 @@ import numpy as np
 from scipy import sparse
 from scipy.io import savemat
 
+
 def main():
     sys.path.insert(0, "/nas/longleaf/home/xya/sbci/tests")
     from sbci.alignment import SphericalGrid, rotate_off_poles
@@ -26,7 +27,6 @@ def main():
     grid = SphericalGrid(rotate_off_poles(vertices), faces, order=2)
     nv = grid.n_vertices
     print(f"grid: {nv} vertices per hemisphere, {2 * nv} combined")
-
 
     def stiffness(points, triangles):
         """Cotangent stiffness: the Dirichlet energy quadratic form."""
@@ -50,7 +50,6 @@ def main():
             shape=(n, n),
         ).toarray()
         return 0.5 * (matrix + matrix.T)
-
 
     J_block = np.diag(grid.areas)
     R_block = stiffness(grid.vertices, grid.faces)
@@ -99,7 +98,6 @@ def main():
         weights=weights,
     )
     print(f"wrote {OUT}/fpca_inputs.mat and .npz")
-
 
 
 if __name__ == "__main__":
