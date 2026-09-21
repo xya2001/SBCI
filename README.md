@@ -1,0 +1,144 @@
+# sbci
+
+Continuous brain connectivity: read, parcellate, smooth, and couple
+surface-based continuous connectomes.
+
+**To use it: [USAGE.md](USAGE.md)** -- setup on Longleaf, every working
+function with a worked example, and what the unfinished ones tell you.
+
+**Start here: [BLUEPRINT.md](BLUEPRINT.md)** -- what this package is, what
+"finished" means, where it stands, and what blocks what.
+
+> **Status: pre-alpha.** The API below is frozen in signature but several
+> methods are not implemented yet -- they raise `NotImplementedError` naming
+> exactly what has to happen first. See [PORTING.md](PORTING.md) for the MATLAB
+> components still to port and [SPEC_QUESTIONS.md](SPEC_QUESTIONS.md) for the
+> decisions WP1 owes this package.
+
+## The five-minute start
+
+```bash
+pip install sbci
+sbci download hcp-ya --subject 100307        # one subject, SC + FC, ~100 MB
+```
+
+```python
+from sbci import ContinuousConnectome, load_atlas
+
+cc = ContinuousConnectome.load("sub-100307_sc.h5")
+M  = cc.to_atlas(load_atlas("Schaefer200"))   # 200 x 200 matrix
+p  = cc.seed(vertex=1234)                      # profile on the surface
+cc.plot(p)                                     # inflated-surface figure
+cc.to_cifti("sub-100307_sc.dconn.nii")         # opens in Workbench; 16.9 GB
+```
+
+Running that script on a machine none of us configured, from a blank Python
+environment, in under five minutes, is the acceptance criterion for this
+package. It is encoded in `tests/test_five_minute_start.py`, which skips until
+the data release exists.
+
+## API
+
+| Call | Status |
+| --- | --- |
+| `ContinuousConnectome.load(path)` | implemented (HDF5) |
+| `.save(path)` | implemented |
+| `.to_atlas(atlas, how="mass"\|"mean")` | implemented; matches `parcellate_sc.m` to float64 rounding |
+| `.seed(vertex=...)` / `.seed(region=...)` | implemented |
+| `.coupling(fc, scope=...)` | implemented; matches the MATLAB to float64 rounding |
+| `.plot(map, surface=...)` | implemented; inflated, white, pial and sphere bundled |
+| `.to_cifti(path)` | implemented; fsLR-32k dense connectome, 16.9 GB |
+| `sbci validate <file>` | implemented |
+| `.smooth(kernel=..., bandwidth=..., eigenpairs=...)` | implemented for `rdk` and `matern`; matches MATLAB to 3.25 float32-eps. Re-smooths from endpoints stored in the file, finding the Laplace-Beltrami basis via `$SBCI_LBO_DIR` if not passed. The default `shk` is withheld (PORTING.md item 6) |
+| `.reduce(rank=K)` / `sbci.reduce(cc_list, rank=K)` | implemented; matches the MATLAB reference to float64 rounding (PORTING.md item 5) |
+| `sbci.align(cc_list, method="encore")` | implemented; geometry and template match MATLAB to float64 rounding, the registration to r = 0.99999979 (PORTING.md item 4) |
+| `sbci.stats.local_test(scores, design)` | implemented; **no reference exists**, so verified against `scipy.stats` and against the procedures' own guarantees (PORTING.md item 5) |
+| `sbci download` | pending the data release (SPEC_QUESTIONS.md item 6) |
+
+## Atlases
+
+44 atlases ship inside the package (about 330 KB), so `to_atlas` needs no
+network, no FreeSurfer and no MATLAB:
+
+```python
+from sbci import list_atlases, load_atlas
+
+load_atlas("Schaefer200").n_regions   # 200
+load_atlas("Desikan").n_regions       # 68
+load_atlas("Glasser").n_regions       # 360
+```
+
+Short names (`Schaefer200`, `Desikan`, `DK`, `Destrieux`, `Glasser`,
+`Brainnetome`, `Yeo7`, `Yeo17`) resolve to the stored names, ignoring case,
+spaces, hyphens and underscores. `list_atlases()` gives the full set, which
+also includes Gordon, the PALS-B12 family and CoCoNest at 23 scales.
+
+Label `0` means "no region" -- the medial wall, plus everything outside a
+partial-coverage atlas. Regions are numbered `1..K` with no gaps.
+
+Regenerate them with `tools/convert_atlases.py` if the source ever changes;
+the output is committed so no release step needs MATLAB.
+
+## Using legacy pipeline output
+
+`tools/import_legacy.py` converts existing SBCI `.mat` output into the HDF5
+format, so a cohort processed with the old pipeline can be used today without
+reprocessing:
+
+```bash
+python tools/import_legacy.py \
+    --sc smoothed_sc_avg_0.005_ico4.mat \
+    --fc fc_avg_ico4.mat \
+    --mapping mapping_avg_ico4.npz \
+    --subject 100307 --out derivatives/
+sbci validate derivatives/sub-100307_sc.h5
+```
+
+Verified end to end on the SBCI_Toolkit example subject: both files pass every
+validator check, `to_atlas(Schaefer200)` returns a 200x200 matrix retaining
+99.98% of the connectome mass, and SC and FC correlate at r = 0.26 across the
+19,900 region pairs.
+
+## Development on Longleaf
+
+Longleaf's default `python3` is 3.8, which this package does not support.
+
+```bash
+./scripts/setup_longleaf.sh                                   # once
+module load python/3.12.4                                     # every session
+source /work/users/x/y/$(whoami)/sbci-venv/bin/activate
+pytest
+```
+
+**Load the module before activating, every time.** The virtualenv's interpreter
+is dynamically linked against the module's `libpython3.12.so.1.0`, which is not
+on the default library path. Activating without loading the module gives:
+
+```
+python: error while loading shared libraries: libpython3.12.so.1.0:
+cannot open shared object file: No such file or directory
+```
+
+That is a missing module, not a broken environment — `module load` fixes it
+without recreating anything.
+
+The virtualenv lives on `/work` rather than in `$HOME` because home quotas are
+50 GB and a scientific-Python environment is several hundred megabytes. `/work`
+is scratch and **is purged**, so the environment is disposable by design:
+`scripts/setup_longleaf.sh` rebuilds it from nothing. Only this repository is
+persistent, so anything worth keeping belongs in git.
+
+`scripts/test.sbatch` runs the suite as a SLURM job:
+
+```bash
+sbatch scripts/test.sbatch
+```
+
+The suite currently finishes in well under a second, so the login node is fine
+for it today. The batch script exists because the full-grid and
+tutorial-subject tests will not be, once the data release lands, and those do
+not belong on a login node.
+
+## License
+
+MIT -- see [LICENSE](LICENSE).

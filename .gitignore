@@ -1,0 +1,41 @@
+# Byte-compiled / build artifacts
+__pycache__/
+*.py[cod]
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Environments
+.venv/
+venv/
+.env
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+
+# Docs
+_build/
+.jupyter_cache/
+
+# Editor / OS cruft -- these were committed in the old repos (WP4 hygiene)
+.vs/
+.asv/
+.DS_Store
+.idea/
+*.swp
+
+# SLURM
+slurm-*.out
+
+# Data: never commit derivatives or tractograms
+*.h5
+*.mat
+*.tck
+*.trk
+*.nii
+*.nii.gz
+!tests/data/*.h5
