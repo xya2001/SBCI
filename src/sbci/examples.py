@@ -107,8 +107,8 @@ def example(modality: str = "sc", seed: int = 0) -> ContinuousConnectome:
     1.0
     >>> float(dense[~cc.mask].sum())           # nothing on the medial wall
     0.0
-    >>> sbci.example("fc").data.min() < 0      # FC is signed
-    np.True_
+    >>> bool(sbci.example("fc").data.min() < 0)   # FC is signed
+    True
     """
     if modality not in spec.MODALITIES:
         raise ValueError(f"modality must be one of {spec.MODALITIES}, got {modality!r}")

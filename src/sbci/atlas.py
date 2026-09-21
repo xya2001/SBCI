@@ -129,8 +129,8 @@ class Atlas:
         >>> mask = atlas.region_mask("LH_bankssts")
         >>> bool(mask.any()), mask.dtype == bool
         (True, True)
-        >>> (atlas.region_mask(1) == mask).all()
-        np.True_
+        >>> bool((atlas.region_mask(1) == mask).all())
+        True
         """
         labels = np.asarray(self.labels)
         if isinstance(region, (int, np.integer)) and not isinstance(region, bool):

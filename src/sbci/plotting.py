@@ -78,7 +78,10 @@ def plot_surface(
     >>> figure = cc.plot(cc.seed(vertex=1234))       # doctest: +SKIP
     >>> figure.savefig("seed.png", dpi=150)           # doctest: +SKIP
     """
-    import matplotlib.pyplot as plt
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError as exc:  # pragma: no cover - depends on environment
+        raise ImportError(_MISSING) from exc
 
     nilearn_plotting = _import_nilearn()
 
