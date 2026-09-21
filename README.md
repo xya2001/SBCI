@@ -23,13 +23,13 @@ sbci download hcp-ya --subject 100307        # one subject, SC + FC, ~100 MB
 ```
 
 ```python
-from sbci import ContinuousConnectome, load_atlas
+import sbci
 
-cc = ContinuousConnectome.load("sub-100307_sc.h5")
-M  = cc.to_atlas(load_atlas("Schaefer200"))   # 200 x 200 matrix
-p  = cc.seed(vertex=1234)                      # profile on the surface
-cc.plot(p)                                     # inflated-surface figure
-cc.to_cifti("sub-100307_sc.dconn.nii")         # opens in Workbench; 16.9 GB
+cc = sbci.load("sub-100307_sc.h5")
+M  = cc.to_atlas("Schaefer200")        # 200 x 200 matrix
+p  = cc.seed(vertex=1234)              # profile on the surface
+cc.plot(p)                             # inflated-surface figure
+cc.to_cifti("sub-100307_sc.dconn.nii") # opens in Workbench; 16.9 GB
 ```
 
 Running that script on a machine none of us configured, from a blank Python
@@ -41,12 +41,13 @@ the data release exists.
 
 | Call | Status |
 | --- | --- |
-| `ContinuousConnectome.load(path)` | implemented (HDF5) |
+| `sbci.load(path)` | implemented; `.h5` and `.dconn.nii`, validated on read |
+| `ContinuousConnectome.load(path)` | the same thing, if you prefer the class |
 | `.save(path)` | implemented |
-| `.to_atlas(atlas, how="mass"\|"mean")` | implemented; matches `parcellate_sc.m` to float64 rounding |
-| `.seed(vertex=...)` / `.seed(region=...)` | implemented |
+| `.to_atlas(atlas, how="mass"\|"mean")` | implemented; takes an `Atlas` or a name such as `"Schaefer200"`; matches `parcellate_sc.m` to float64 rounding |
+| `.seed(vertex=...)` / `.seed(region=...)` | implemented; `region=` takes a vertex mask or an `(atlas, region)` pair |
 | `.coupling(fc, scope=...)` | implemented; matches the MATLAB to float64 rounding |
-| `.plot(map, surface=...)` | implemented; inflated, white, pial and sphere bundled |
+| `.plot(values, surface=...)` | implemented; inflated, white, pial and sphere bundled |
 | `.to_cifti(path)` | implemented; fsLR-32k dense connectome, 16.9 GB |
 | `sbci validate <file>` | implemented |
 | `.smooth(kernel=..., bandwidth=..., eigenpairs=...)` | implemented for `rdk` and `matern`; matches MATLAB to 3.25 float32-eps. Re-smooths from endpoints stored in the file, finding the Laplace-Beltrami basis via `$SBCI_LBO_DIR` if not passed. The default `shk` is withheld (PORTING.md item 6) |
@@ -54,6 +55,47 @@ the data release exists.
 | `sbci.align(cc_list, method="encore")` | implemented; geometry and template match MATLAB to float64 rounding, the registration to r = 0.99999979 (PORTING.md item 4) |
 | `sbci.stats.local_test(scores, design)` | implemented; **no reference exists**, so verified against `scipy.stats` and against the procedures' own guarantees (PORTING.md item 5) |
 | `sbci download` | pending the data release (SPEC_QUESTIONS.md item 6) |
+
+## Getting around the package
+
+Everything public is reachable straight off `sbci`, and so is every submodule,
+so `import sbci` is all the import line anyone needs:
+
+```python
+import sbci
+
+sbci.load, sbci.smooth, sbci.align, sbci.reduce, sbci.local_test
+sbci.stats.local_test          # submodules resolve too
+```
+
+The heavier submodules load on first use, so `import sbci` costs about 300 ms
+and pulls in neither matplotlib nor scipy unless you touch something that
+needs them. `tests/test_api_surface.py` pins both properties.
+
+Anything wrong with a *file or its contents* raises a subclass of
+`sbci.SbciError`, so one `except` covers a pipeline's input problems while a
+mistake in your own arguments still raises a plain `ValueError`:
+
+```python
+try:
+    cc = sbci.load(path)
+except sbci.SbciError as exc:
+    print(f"{path} is unusable: {exc}")
+```
+
+`SbciError` subclasses also derive from the built-in exception you would reach
+for first -- `FormatError` is a `KeyError`, `MetadataError` is a `ValueError`
+-- so existing code keeps working.
+
+Names that do not exist suggest ones that do, rather than printing the whole
+catalogue:
+
+```python
+>>> sbci.load_atlas("Shaefer200")
+UnknownAtlasError: unknown atlas 'Shaefer200'. Did you mean 'Schaefer200'?
+>>> sbci.load_atlas("Desikan").region_mask("LH_banksts")
+ValueError: aparc has no region named 'LH_banksts'. Did you mean 'LH_bankssts'?
+```
 
 ## Atlases
 

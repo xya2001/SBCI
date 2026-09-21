@@ -42,6 +42,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from .errors import FormatError, MissingDataError
+
 KERNELS = ("shk", "rdk", "matern")
 """The kernel vocabulary, following the decision recorded as SPEC_QUESTIONS.md
 item 10.
@@ -363,7 +365,7 @@ class Endpoints:
         data = scipy.io.loadmat(path)
         missing = [k for k in ("surf_in", "surf_out", "vtx_in", "vtx_out") if k not in data]
         if missing:
-            raise KeyError(f"{path} has no {missing}")
+            raise FormatError(f"{path} has no {missing}")
         optional = {}
         if all(k in data for k in ("tri_in", "tri_out", "pt_in", "pt_out")):
             optional = {
@@ -539,7 +541,7 @@ def load_eigenpairs(path, hemisphere: str) -> tuple[np.ndarray, np.ndarray]:
     lam_key, vec_key = f"Lambda_{hemisphere}", f"U_{hemisphere}"
     if lam_key not in data or vec_key not in data:
         available = [k for k in data if not k.startswith("__")]
-        raise KeyError(f"{path} has no {lam_key}/{vec_key}; it has {available}")
+        raise FormatError(f"{path} has no {lam_key}/{vec_key}; it has {available}")
 
     eigenvalues = np.asarray(data[lam_key], dtype=np.float64).ravel()
     eigenvectors = np.asarray(data[vec_key], dtype=np.float64)
@@ -673,12 +675,12 @@ def smooth(connectome, kernel: str = "shk", bandwidth: float | None = None, eige
             "kernel='matern'."
         )
     if getattr(connectome, "endpoints", None) is None:
-        raise ValueError(_NO_ENDPOINTS)
+        raise MissingDataError(_NO_ENDPOINTS)
     if eigenpairs is None:
         eigenpairs = find_basis()
     if eigenpairs is None:
         searched = "\n  ".join(str(d) for d in _candidate_basis_directories())
-        raise ValueError(
+        raise MissingDataError(
             _NO_EIGENPAIRS.format(kernel=kernel)
             + f"\n\nLooked for {EIGENPAIR_FILES[0]} and {EIGENPAIR_FILES[1]} in:"
             f"\n  {searched}"

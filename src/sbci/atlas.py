@@ -19,6 +19,7 @@ vertices in its totals.
 
 from __future__ import annotations
 
+import difflib
 import re
 from dataclasses import dataclass
 from functools import lru_cache
@@ -26,7 +27,14 @@ from importlib import resources
 
 import numpy as np
 
+from .errors import SbciError
+
 SUFFIX = "_ico4.npz"
+
+
+class UnknownAtlasError(SbciError, ValueError):
+    """No bundled atlas goes by that name."""
+
 
 #: Short names accepted in place of the file name an atlas is stored under.
 #: The brief's five-minute start calls ``load_atlas("Schaefer200")``, so the
@@ -45,6 +53,19 @@ ALIASES: dict[str, str] = {
         f"schaefer{n}": f"Schaefer2018_{n}Parcels_7Networks_order"
         for n in (100, 200, 300, 400, 500, 600, 700, 800, 900, 1000)
     },
+}
+
+
+#: How to spell each short name back to a user. The alias table is keyed on
+#: lowercase so lookup can be case-insensitive, but a suggestion should read
+#: the way the documentation writes it.
+DISPLAY: dict[str, str] = {
+    "dk": "DK",
+    "desikan-killiany": "Desikan-Killiany",
+    "destrieux2005": "Destrieux2005",
+    "yeo7": "Yeo7",
+    "yeo17": "Yeo17",
+    **{f"schaefer{n}": f"Schaefer{n}" for n in range(100, 1100, 100)},
 }
 
 
@@ -88,6 +109,49 @@ class Atlas:
         ``PALS_B12_OrbitoFrontal``.
         """
         return float((np.asarray(self.labels) != 0).mean())
+
+    def region_mask(self, region):
+        """Boolean mask over vertices for one region, by name or label id.
+
+        This is what :meth:`sbci.ContinuousConnectome.seed` wants for its
+        ``region=`` argument, so a region profile reads as one line.
+
+        Parameters
+        ----------
+        region
+            A region name as it appears in :attr:`names`, matched ignoring
+            case, or an integer label from :attr:`region_ids`.
+
+        Examples
+        --------
+        >>> from sbci import load_atlas
+        >>> atlas = load_atlas("Desikan")
+        >>> mask = atlas.region_mask("LH_bankssts")
+        >>> bool(mask.any()), mask.dtype == bool
+        (True, True)
+        >>> (atlas.region_mask(1) == mask).all()
+        np.True_
+        """
+        labels = np.asarray(self.labels)
+        if isinstance(region, (int, np.integer)) and not isinstance(region, bool):
+            if int(region) not in set(self.region_ids.tolist()):
+                raise ValueError(
+                    f"{self.name} has no region {int(region)}; labels run 1..{self.n_regions}"
+                )
+            return labels == int(region)
+
+        wanted = str(region).strip().lower()
+        for index, candidate in enumerate(self.names):
+            if candidate.strip().lower() == wanted:
+                return labels == self.region_ids[index]
+
+        close = difflib.get_close_matches(str(region), list(self.names), n=3, cutoff=0.5)
+        if close:
+            joined = " or ".join(repr(c) for c in close)
+            hint = f" Did you mean {joined}?"
+        else:
+            hint = ""
+        raise ValueError(f"{self.name} has no region named {region!r}.{hint}")
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
         return f"<Atlas {self.name} with {self.n_regions} regions>"
@@ -153,10 +217,16 @@ def resolve(name: str) -> str:
         if _key(candidate) == key:
             return candidate
 
-    raise ValueError(
-        f"unknown atlas {name!r}. Bundled atlases are {available}. "
-        f"Short names also accepted: {tuple(sorted(ALIASES))}."
-    )
+    lookup = {_key(c): c for c in available}
+    lookup.update({_key(a): DISPLAY.get(a, a.title()) for a in ALIASES})
+    close = difflib.get_close_matches(_key(name), list(lookup), n=3, cutoff=0.6)
+    suggestions = [lookup[c] for c in close]
+    if suggestions:
+        joined = " or ".join(repr(s) for s in suggestions)
+        hint = f" Did you mean {joined}?"
+    else:
+        hint = " Call sbci.list_atlases() for the full set."
+    raise UnknownAtlasError(f"unknown atlas {name!r}.{hint}")
 
 
 @lru_cache(maxsize=8)

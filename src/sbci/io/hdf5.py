@@ -36,6 +36,7 @@ import h5py
 import numpy as np
 
 from .. import spec
+from ..errors import FormatError
 from ..metadata import Metadata
 
 CONNECTIVITY = "connectivity"
@@ -55,7 +56,7 @@ def _read_endpoints(handle) -> Any:
     group = handle[ENDPOINTS]
     missing = [name for name in spec.ENDPOINT_DATASETS if name not in group]
     if missing:
-        raise KeyError(f"/{ENDPOINTS} is present but has no {missing}")
+        raise FormatError(f"/{ENDPOINTS} is present but has no {missing}")
 
     sizes = {name: group[name].shape[0] for name in spec.ENDPOINT_DATASETS}
     if len(set(sizes.values())) != 1:
@@ -129,7 +130,7 @@ def read_hdf5(path: str | Path) -> dict[str, Any]:
     with h5py.File(path, "r") as handle:
         for required in (CONNECTIVITY, AREA, MASK, METADATA):
             if required not in handle:
-                raise KeyError(f"{path.name} has no /{required} dataset")
+                raise FormatError(f"{path.name} has no /{required} dataset")
 
         raw = handle[METADATA][()]
         parts: dict[str, Any] = {

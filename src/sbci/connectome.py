@@ -8,7 +8,8 @@ from typing import Any
 import numpy as np
 
 from . import grid, io, parcellation
-from .atlas import Atlas
+from .atlas import Atlas, load_atlas
+from .errors import InvalidFileError
 from .metadata import Metadata
 
 
@@ -77,7 +78,7 @@ class ContinuousConnectome:
         elif suffixes.endswith((".dconn.nii", ".dconn.nii.gz")):
             parts = io.read_cifti(path)
         else:
-            raise ValueError(
+            raise InvalidFileError(
                 f"unrecognized connectome file {path.name!r}; "
                 "expected a .h5 computational file or a .dconn.nii exchange file"
             )
@@ -91,7 +92,7 @@ class ContinuousConnectome:
         """Confirm the arrays agree on the number of vertices."""
         n = grid.n_from_condensed(self.data.size)
         if self.area.size != n or self.mask.size != n:
-            raise ValueError(
+            raise InvalidFileError(
                 f"connectivity implies {n} vertices but area has {self.area.size} "
                 f"and mask has {self.mask.size}"
             )
@@ -125,13 +126,15 @@ class ContinuousConnectome:
 
     # --- implemented API ---------------------------------------------------
 
-    def to_atlas(self, atlas: Atlas, how: str = "mass") -> np.ndarray:
+    def to_atlas(self, atlas: Atlas | str, how: str = "mass") -> np.ndarray:
         """Aggregate to a region-by-region matrix for a bundled atlas.
 
         Parameters
         ----------
         atlas
-            Parcellation from :func:`sbci.load_atlas`.
+            An :class:`~sbci.Atlas`, or the name of a bundled one -- anything
+            :func:`sbci.load_atlas` accepts, such as ``"Schaefer200"`` or
+            ``"Desikan"``.
         how
             ``"mass"`` preserves total connectivity; ``"mean"`` divides by the
             region areas to give a density. FC is aggregated through Fisher-z
@@ -139,10 +142,12 @@ class ContinuousConnectome:
 
         Examples
         --------
-        >>> M = cc.to_atlas(load_atlas("Schaefer200"))   # doctest: +SKIP
-        >>> M.shape                                       # doctest: +SKIP
+        >>> M = cc.to_atlas("Schaefer200")   # doctest: +SKIP
+        >>> M.shape                           # doctest: +SKIP
         (200, 200)
         """
+        if isinstance(atlas, str):
+            atlas = load_atlas(atlas)
         return parcellation.parcellate(
             self.dense(), atlas, self.area, how=how, fisher_z=self.modality == "fc"
         )
@@ -151,8 +156,9 @@ class ContinuousConnectome:
         """Connectivity profile of one seed, as a map over the surface.
 
         Give either a ``vertex`` index, returning that vertex's density slice,
-        or a ``region`` -- an atlas label mask or boolean array -- returning the
-        area-weighted marginal of that region.
+        or a ``region``, returning the area-weighted marginal over it. A region
+        is a boolean mask over vertices, or an ``(atlas, region)`` pair naming
+        one -- ``cc.seed(region=("Desikan", "LH_bankssts"))``.
 
         Examples
         --------
@@ -177,9 +183,19 @@ class ContinuousConnectome:
                 profile[vertex + 1 :] = self.data[start : start + (n - vertex - 1)]
             return profile
 
+        if isinstance(region, tuple) and len(region) == 2:
+            atlas, which = region
+            if isinstance(atlas, str):
+                atlas = load_atlas(atlas)
+            region = atlas.region_mask(which)
+
         member = np.asarray(region)
         if member.dtype != bool:
-            raise TypeError("region= must be a boolean mask over vertices")
+            raise TypeError(
+                "region= must be a boolean mask over vertices, or an "
+                '(atlas, region) pair such as ("Desikan", "LH_bankssts"); '
+                f"got an array of dtype {member.dtype}"
+            )
         if member.size != n:
             raise ValueError(f"region mask has {member.size} entries, expected {n}")
         weights = np.where(member, self.area, 0.0)
@@ -273,15 +289,24 @@ class ContinuousConnectome:
 
         return _reduce(self, rank=rank, **kwargs)
 
-    def plot(self, map: np.ndarray, surface: str = "inflated", **kwargs):
+    def plot(self, values: np.ndarray, surface: str = "inflated", **kwargs):
         """Render a per-vertex map on a cortical surface.
 
         Returns the matplotlib figure. Needs the plotting extra:
         ``pip install 'sbci[plotting]'``.
+
+        Parameters
+        ----------
+        values
+            One number per vertex, such as the output of :meth:`seed` or
+            :meth:`coupling`.
+        surface
+            Which bundled geometry to draw on: ``"inflated"``, ``"white"``,
+            ``"pial"`` or ``"sphere"``.
         """
         from .plotting import plot_surface
 
-        return plot_surface(map, surface=surface, connectome=self, **kwargs)
+        return plot_surface(values, surface=surface, connectome=self, **kwargs)
 
 
 def _condensed_index(i: int, j: int, n: int) -> int:

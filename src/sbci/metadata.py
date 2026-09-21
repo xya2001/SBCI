@@ -7,9 +7,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from . import spec
+from .errors import SbciError
 
 
-class MetadataError(ValueError):
+class MetadataError(SbciError, ValueError):
     """Raised when a file's metadata is missing keys or is self-inconsistent."""
 
 
