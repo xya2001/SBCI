@@ -377,7 +377,7 @@ diagonalization. A full `eigh` on the 5124-vertex grid would cost hours for a
 single vector. ARPACK is the library MATLAB's `eigs` itself calls, so the large
 case is if anything closer to the reference; the two paths agree to 5.3e-15.
 
-## 6. Spherical heat kernel -- PORTED, r = 0.978 AGAINST THE CORRECT REFERENCE
+## 6. Spherical heat kernel -- PORTED, r = 0.978. CAUSE OF THE RESIDUAL FOUND
 
 - **From:** [`dcmoyer/concon`](https://github.com/dcmoyer/concon), C++, MIT.
   Invoked by `sbci_step5_structural.sh` as `c3_main Compute_Kernel --sigma
@@ -413,26 +413,67 @@ harmonics:
 | best global scale | 6.52 |
 | relative error after scaling | 0.206 |
 
-**What is explained.** The support difference is not the issue: `c3_main` keeps
-7,664,821 pairs to this port's 13,125,126, but the mass this port places
-outside that support is **0.43%**, and restricting to the kept support changes
-the correlation by 0.0007. The global scale of 6.5 is a normalization
-convention -- this port normalizes each endpoint's kernel column to sum one,
-and `convert_raw.py` applies no normalization at all.
+**The global scale** of 6.5 is a normalization convention: this port normalizes
+each endpoint's kernel column to sum one, and `convert_raw.py` applies no
+normalization at all -- its normalizing block is commented out in the source.
 
-**What is not explained.** A 20% relative error remains after scaling. Since
-the correlation is 0.978, the disagreement is structured rather than noise: a
-per-vertex or per-endpoint factor rather than a global one. The undocumented
-arguments are the obvious suspects -- `--epsilon 0.001`, and
-`--OPT_VAL_exp_num_kern_samps 6` with `--OPT_VAL_exp_num_harm_samps 5`, which
-imply `c3_main` evaluates by sampling rather than in closed form.
+**The 20% residual after scaling is compact support.** An earlier draft of this
+section said "the support difference is not the issue", on the grounds that
+this port places only 0.43% of its mass outside the *released file's* support.
+That was the wrong comparison. The released file's support is the union over a
+million streamlines and says almost nothing about the support of the *kernel*,
+which is far tighter -- and it is the kernel's support that differs.
 
-**Where that leaves shipping it.** `smooth(kernel="shk")` still raises. r =
-0.978 is far better than 0.65 and establishes that the maths is right, but it
-is not the float-rounding agreement every other port in this package meets, and
-a 20% amplitude error would propagate into every downstream number. The
-remaining work is small and well posed: identify the normalization and the
-sampling convention, then re-run the comparison above.
+### Asking concon directly
+
+`c3_main` is an ordinary x86-64 Linux executable, it runs, and it is not
+stripped. That makes the kernel measurable rather than inferable. Feed it a
+single streamline from p to q and its output is
+
+    D(i, j) = K(theta_i) * K(theta_j)
+
+so the stored entries over-determine K: `log D(i, j) = f(theta_i) + f(theta_j)`
+is a linear system for `f = log K` which many runs solve on a fine angular grid
+with no per-run normalization to guess. `tests/reference/concon_probe.py` does
+this; it needs the binary and the lab grid files, so it is run by hand.
+
+**concon's kernel has compact support.** One streamline at sigma = 0.005 yields
+2,046 stored entries -- a 64 x 64 outer product, not the 13 million a
+whole-sphere kernel would give. Measured:
+
+| sigma | support | vertices | support / sqrt(sigma) |
+| --- | --- | --- | --- |
+| 0.0025 | 7.93 deg | 16 | 2.769 |
+| 0.0050 | 11.89 deg | 31 | 2.936 |
+| 0.0100 | 16.53 deg | 61 | 2.885 |
+
+So the kernel vanishes at about **2.9 sqrt(sigma) radians**, and this port's
+kernel, which spreads over the whole sphere, is wrong everywhere beyond that.
+It places 10.7% of its mass there. That is exactly the deficit the distance
+analysis kept finding at 12-60 degrees and could not attribute to bandwidth or
+truncation.
+
+**`--epsilon` is not what does it.** Swept over 0.0001, 0.001, 0.01 and 0.1 the
+support is identical at 11.894 degrees, to the vertex. Whatever that argument
+controls, it is not the cutoff -- which removes the leading suspect this file
+carried for months.
+
+**Inside the support there is a taper.** Against the recovered profile, the bare
+truncated heat kernel has rms error 0.085; multiplying by a window that
+vanishes at the cutoff drops that to **0.010-0.013** for any reasonable window
+shape. The exact taper is not yet identified, and the remaining candidates are
+`--OPT_VAL_exp_num_kern_samps 6` and `--OPT_VAL_exp_num_harm_samps 5`: the
+symbols `c3::Subject::calc_kern_lookup_table(double, int)` and
+`calc_harm_lookup_table(int, int)` confirm the kernel is tabulated rather than
+evaluated in closed form, and 2^5 = 32 matches `--OPT_VAL_num_harm 33`.
+
+The binary also links Google's `spherical-harmonics` library --
+`sh::EvalSH`, `sh::EvalSHSlow`, `sh::EvalLegendrePolynomial` -- which is where
+the harmonic evaluation convention should be read from.
+
+**Where that leaves shipping it.** `smooth(kernel="shk")` still raises. The
+cause is now identified rather than suspected, and the remaining work is to
+pin the taper and re-run the comparison above.
 
 ### What the port gets right
 
@@ -450,6 +491,9 @@ within 2.4% of the released file's 5,079,082 non-zero pairs.
 | wrong vertex ordering | angular separation of streamline ends | 16.9 deg median against 90 deg chance -- ordering correct |
 | wrong bandwidth | scan 0.002 to 0.02 | flat 0.57-0.65, peak 0.6513 at 0.008; no peak near 1 |
 | wrong truncation | 17 to 65 harmonics | identical to four decimals; converged |
+| wrong bandwidth convention | scan the decay constant 0.005 down to 0.0005 | **0.005 is right** -- flatness of the ratio against distance worsens monotonically, 1.77 to 79.06, as the kernel narrows |
+| thresholding the kernel | cutoffs 1e-4 to 0.1 of the peak | helps the far band, but the 12-60 deg deficit holds at ~0.65 at every cutoff |
+| `--epsilon` sets the support | sweep 1e-4 to 0.1 against `c3_main` | **no effect** -- support identical to the vertex |
 | missing per-vertex Jacobian | fit log(released/mine) = g_i + g_j | explains 13.5% of variance, and applying it makes r *worse* (0.29) |
 | endpoints snapped to vertices | recompute at continuous barycentric positions | **no effect** -- r = 0.6438 against 0.6446 snapped |
 

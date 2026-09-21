@@ -39,3 +39,7 @@ slurm-*.out
 *.nii
 *.nii.gz
 !tests/data/*.h5
+
+# gprof output: c3_main is built with profiling and drops this
+# wherever it is run from.
+gmon.out
