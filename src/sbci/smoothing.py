@@ -130,14 +130,21 @@ def _assemble(rho: np.ndarray, eigenvectors: np.ndarray) -> np.ndarray:
     return (eigenvectors * rho[np.newaxis, :]) @ eigenvectors.T
 
 
-NUM_HARMONICS = 32
-"""Harmonics ``concon`` sums.
+NUM_HARMONICS = 33
+"""Terms ``concon`` sums, so degrees ``l = 0 .. 32``.
 
-Hardcoded there, and ``--OPT_VAL_num_harm`` is **ignored**: ``c3_main`` prints
-"num_harmonics now global constant (for speed)" at startup and
-``subject.cpp`` checks ``if(num_harm != 32)``. Passing 9, 17, 25, 33, 49 or 65
-to the binary gives a bit-identical kernel, which was measured before the
-source was read. The pipeline's ``--OPT_VAL_num_harm 33`` is a no-op.
+The count is hardcoded and ``--OPT_VAL_num_harm`` is **ignored**: ``c3_main``
+prints "num_harmonics now global constant (for speed)" at startup, and passing
+it 9, 17, 25, 33, 49 or 65 gives a bit-identical kernel. The pipeline's
+``--OPT_VAL_num_harm 33`` therefore changes nothing, though it happens to name
+the value actually used.
+
+Fixed at 33 by measurement rather than by reading: across bandwidths 0.00125
+to 0.02, 33 terms reproduces the binary's peak to 0.06-0.1% and its shape to
+rms 0.0002, where 32 terms drifts to 4% at the narrowest bandwidth and 34
+terms overshoots. The truncation matters -- at sigma 0.005 the last term still
+carries 0.37% of the peak -- so a port that summed further would stop
+reproducing the released cohorts.
 """
 
 KERNEL_EPSILON = 0.001
@@ -164,7 +171,7 @@ def kernel_cutoff(
     --------
     >>> import numpy as np
     >>> round(float(np.degrees(kernel_cutoff(0.005))), 3)
-    12.204
+    12.231
     >>> round(float(np.degrees(kernel_cutoff(0.01))), 3)
     17.369
     """
@@ -222,7 +229,7 @@ def spherical_heat_kernel(
     sigma
         Bandwidth. The released cohorts use 0.005.
     harmonics
-        Where to truncate. ``concon`` hardcodes 32 -- see :data:`NUM_HARMONICS`.
+        Number of terms. ``concon`` hardcodes 33 -- see :data:`NUM_HARMONICS`.
     epsilon
         Cutoff threshold; ``None`` leaves the series untruncated in angle,
         which is useful for studying it but is not what the pipeline did.
@@ -231,9 +238,10 @@ def spherical_heat_kernel(
     -----
     Verified against ``c3_main`` itself, by running it on a single streamline
     so its output is the kernel: at sigma 0.005 this matches the binary to
-    **rms 0.0015** across the ico4 ring distances, against 0.090 for the heat
+    **rms 0.0002** across the ico4 ring distances, against 0.090 for the heat
     kernel. The predicted cutoffs reproduce the binary's support exactly at
-    sigma 0.0025, 0.005 and 0.01, and K(0) agrees to 0.2%.
+    sigma 0.0025, 0.005 and 0.01, and K(0) agrees to 0.06% there and to 0.1%
+    across bandwidths from 0.00125 to 0.02.
     ``tests/reference/concon_probe.py`` regenerates the measurement.
 
     Examples
@@ -242,7 +250,7 @@ def spherical_heat_kernel(
     >>> from sbci.smoothing import spherical_heat_kernel
     >>> centre = float(spherical_heat_kernel(1.0, 0.005))
     >>> round(centre, 3)
-    269.514
+    270.267
     >>> float(spherical_heat_kernel(np.cos(np.radians(20.0)), 0.005))  # past the cutoff
     0.0
     """

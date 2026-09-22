@@ -443,11 +443,11 @@ def test_the_kernel_matches_the_binary_it_ports():
 
     values = spherical_heat_kernel(np.cos(np.radians(angle)), sigma=0.005)
     ratio = values / values[0]
-    assert np.sqrt(np.mean((ratio - measured) ** 2)) < 0.003
+    assert np.sqrt(np.mean((ratio - measured) ** 2)) < 0.0005
 
     # The absolute scale is right too, not just the shape: concon's own peak
     # was 270.10, read off a run whose endpoints sat exactly on vertices.
-    assert float(values[0]) == pytest.approx(270.10, rel=5e-3)
+    assert float(values[0]) == pytest.approx(270.10, rel=1e-3)
 
 
 def test_the_cutoff_reproduces_the_binarys_support():
@@ -493,22 +493,23 @@ def test_a_very_wide_kernel_goes_flat():
 
 
 def test_the_truncation_is_thirty_two_and_is_part_of_the_definition():
-    """The binary hardcodes 32 harmonics, and 32 is not converged.
+    """The binary hardcodes 33 terms, and 33 is not converged.
 
     The pipeline passes --OPT_VAL_num_harm 33, but c3_main ignores it: it
     prints "num_harmonics now global constant (for speed)" and subject.cpp
-    checks against 32. Feeding the binary 9, 17, 25, 33, 49 and 65 gives a
-    bit-identical kernel, which is how this was found before the source was
-    read. Since the sum is not converged at 32, a port that "improved" on it by
-    summing more terms would stop reproducing the released cohorts.
+    prints so at startup. Feeding the binary 9, 17, 25, 33, 49 and 65 gives a
+    bit-identical kernel. The count was pinned at 33 by matching the binary's
+    peak across bandwidths 0.00125 to 0.02, where 32 drifts to 4% and 34
+    overshoots. Since the sum is not converged, a port that "improved" on it by
+    summing further would stop reproducing the released cohorts.
     """
     from sbci.smoothing import NUM_HARMONICS, spherical_heat_kernel
 
-    assert NUM_HARMONICS == 32, "c3_main hardcodes 32, whatever the flag says"
+    assert NUM_HARMONICS == 33, "33 terms, l = 0..32, whatever the flag says"
 
     cosine = np.cos(np.linspace(0, np.radians(12.0), 200))
     truncated = spherical_heat_kernel(cosine, sigma=0.005, epsilon=None)
-    further = spherical_heat_kernel(cosine, sigma=0.005, harmonics=64, epsilon=None)
+    further = spherical_heat_kernel(cosine, sigma=0.005, harmonics=65, epsilon=None)
     assert np.abs(truncated - further).max() / truncated.max() > 1e-3, (
         "32 terms is not converged, so the truncation has to be matched"
     )
