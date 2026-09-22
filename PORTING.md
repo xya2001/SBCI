@@ -471,9 +471,47 @@ The binary also links Google's `spherical-harmonics` library --
 `sh::EvalSH`, `sh::EvalSHSlow`, `sh::EvalLegendrePolynomial` -- which is where
 the harmonic evaluation convention should be read from.
 
+**The taper is not an artifact of the tabulation.** Raising
+`--OPT_VAL_exp_num_kern_samps` from the pipeline's 6 to 7 and 8 leaves the
+kernel bit-identical -- 1.0000, 0.7432, 0.4436, 0.2751, 0.1035 across the
+rings -- and only dropping it to 3 changes anything. The support stays at
+11.894 degrees to the vertex throughout. So concon's kernel is a
+compactly-supported kernel by definition, not a coarsely-sampled heat kernel,
+and the port needs the real functional form rather than a finer evaluation of
+the one it has.
+
+### Confirming it on the released data
+
+Applying a window that vanishes at the measured cutoff, against the ADNI
+subject's own endpoints (40,000 sampled of 1,001,877) and its released matrix:
+
+| kernel | r | drift | 2-6 deg | 6-12 | 12-25 | 25-60 | 60-180 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| no window (what the port does today) | 0.9747 | 1.86 | 0.97 | 0.88 | **0.65** | **0.52** | 0.56 |
+| times `1 - u^3` | 0.9882 | 1.36 | 1.04 | 1.05 | 1.13 | 1.24 | 0.91 |
+| times `1 - u^4` | **0.9891** | 1.37 | 1.02 | 1.03 | 1.07 | 1.12 | 0.82 |
+
+where `u = theta / (2.9 sqrt(sigma))` and "drift" is how far the ratio against
+the released file wanders across the distance bands -- a flat ratio means the
+shape is right, which correlation alone does not test.
+
+The 12-60 degree deficit that no bandwidth and no threshold could remove is
+gone: 0.65 and 0.52 become 1.07 and 1.12. The remaining error halves, `1 - r`
+falling from 0.0253 to 0.0109. The windows above are approximations chosen to
+test the diagnosis, not the real taper, so the residual overshoot at 12-60
+degrees and the shortfall beyond 60 are what identifying the true form should
+remove.
+
+(The support counts are not comparable in that table: it samples 40,000
+streamlines where the released file used 1,001,877, so this port's density is
+sparser for that reason alone.)
+
 **Where that leaves shipping it.** `smooth(kernel="shk")` still raises. The
-cause is now identified rather than suspected, and the remaining work is to
-pin the taper and re-run the comparison above.
+cause is identified, measured, and confirmed to account for most of the
+residual. What remains is the exact taper -- and since `c3_main` runs and
+`tests/reference/concon_probe.py` recovers its kernel to whatever precision is
+wanted, that is now an ordinary curve-fitting job rather than an
+archaeological one.
 
 ### What the port gets right
 
