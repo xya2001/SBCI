@@ -263,15 +263,14 @@ and the format version keeps its `-draft` suffix.
 
 **Then, in dependency order:**
 
-1. **The spherical heat kernel**, which the Q10 decision makes the default.
-   Without it the package cannot reproduce the released cohorts. The port
-   reaches **r = 0.978** against the input `c3_main` was actually given, which
-   was found only late, on five ADNI subjects; the 0.65 reported for most of
-   this work was measured against a file from a different pipeline branch. What
-   remains is a 20% amplitude error after the best global scale, which is a
-   normalization or sampling convention rather than the mathematics. The naming correction the
-   decision implied is already applied: `shk` is the spherical heat kernel and
-   the Matérn kernel is `matern`.
+1. **The spherical kernel**, which the Q10 decision makes the default -- now
+   **done**. It reproduces `c3_main` at r = 1.000000 across five ADNI
+   subjects. The residual recorded here for months as "a normalization or
+   sampling convention" was neither: `concon`'s kernel is not the heat kernel,
+   its weight is `(2l+1)^(3/2)/sqrt(4 pi)` and it has compact support, both
+   read from its source once the binary was found to run. The naming the
+   decision implied is applied: `shk` is the spherical kernel and the Matérn
+   kernel is `matern`.
 2. **FPCA reduction.** Needed by the reduced-rank API and the cohort notebook,
    and **blocked on verification rather than effort**: two of its three MATLAB
    dependencies are no longer downloadable, so the reference cannot be run and

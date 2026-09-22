@@ -9,11 +9,11 @@ function with a worked example, and what the unfinished ones tell you.
 **Start here: [BLUEPRINT.md](BLUEPRINT.md)** -- what this package is, what
 "finished" means, where it stands, and what blocks what.
 
-> **Status: pre-alpha.** The API below is frozen in signature but several
-> methods are not implemented yet -- they raise `NotImplementedError` naming
-> exactly what has to happen first. See [PORTING.md](PORTING.md) for the MATLAB
-> components still to port and [SPEC_QUESTIONS.md](SPEC_QUESTIONS.md) for the
-> decisions WP1 owes this package.
+> **Status: pre-alpha.** Every method in the API below is implemented and
+> verified against its reference; only `sbci download` waits on the data
+> release. See [PORTING.md](PORTING.md) for how each port was verified and
+> [SPEC_QUESTIONS.md](SPEC_QUESTIONS.md) for the decisions WP1 owes this
+> package.
 
 ## The five-minute start
 

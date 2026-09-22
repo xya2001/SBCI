@@ -50,13 +50,12 @@ KERNELS = ("shk", "rdk", "matern")
 item 10.
 
 ``shk``
-    Spherical heat kernel (Moyer et al., MICCAI 2016), the default, and the one
-    that produced every released ``smoothed_sc_avg_*.mat``. Its bandwidth is
-    ``sigma``. It is **not shipped yet**: against the input the pipeline
-    actually feeds its smoother the port reaches r = 0.978, but a 20%
-    amplitude error remains after the best global scale, traced to an
-    undocumented normalization or sampling convention. Withheld until that
-    closes -- see PORTING.md item 6.
+    The spherical kernel ``concon`` applies (Moyer et al., MICCAI 2016), the
+    default, and the one that produced every released ``smoothed_sc_avg_*.mat``.
+    Its bandwidth is ``sigma``. Reproduces ``c3_main`` at r = 1.000000 across
+    five ADNI subjects, with a 0.14% amplitude offset that is a convention
+    rather than noise -- see PORTING.md item 6. Not the heat kernel, despite
+    the name: :func:`spherical_heat_kernel` explains the weight.
 ``rdk``
     Riemannian diffusion kernel (bioRxiv 2025.09.08.674789), built from
     Laplace-Beltrami eigenfunctions on the cortical surface itself. Bandwidth
@@ -315,12 +314,11 @@ def endpoint_density(
     sigma, harmonics
         Passed to :func:`spherical_heat_kernel`.
     normalize
-        ``"sum"`` scales each endpoint's kernel so its values over the grid sum
-        to one; ``None`` leaves it unscaled. **This is the open question**: the
-        port reaches r = 0.978 against the pipeline's own output with either,
-        but a 20% amplitude error remains that has been traced to the
-        normalization or to ``c3_main``'s sampling flags rather than to the
-        kernel. See PORTING.md item 6.
+        ``None``, the default, leaves each endpoint's kernel unscaled, which is
+        what ``c3_main`` does -- it divides the finished density by the
+        streamline count instead. ``"sum"`` scales each kernel to sum to one
+        over the grid; it was a workaround for a scale mismatch that turned out
+        to be the kernel's weight, and is kept only for comparison.
     block
         Endpoints processed at a time; the intermediate is ``(n, block)``.
 
@@ -873,7 +871,7 @@ def _finish(connectome, density: np.ndarray, kernel: str, bandwidth: float):
     # both, and `test_smooth_method_matches_matlab` would stop holding. It does
     # mean a re-smoothed density can fail the validator's mask check, which is
     # a genuine conflict between the format and the reference -- see
-    # SPEC_QUESTIONS.md item 12.
+    # SPEC_QUESTIONS.md item 14.
 
     # The storage convention is the strict upper triangle, so self-connectivity
     # is dropped (SPEC_QUESTIONS.md item 2). Normalize after dropping it, or

@@ -33,6 +33,7 @@ a one-off conversion.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import sys
 
@@ -49,13 +50,42 @@ N_FACES_PER_HEMI = 5120
 #   sphere and grid have identical face arrays; inflated and white do not
 #   Desikan edge agreement   sphere 0.8415   inflated/white 0.2827
 #
-# 0.84 is a contiguous parcellation; 0.28 is scattered. Neither the mapping
-# file, the grid ids, nor matching against the full-resolution surfaces
-# recovers the permutation between the two orders -- see SPEC_QUESTIONS.md
-# item 11. Add them back here once it is known.
+# 0.84 is a contiguous parcellation; 0.28 is scattered. That was the toolkit's
+# `_lps_` exports, resolved in SPEC_QUESTIONS.md item 11; the anatomical
+# surfaces are built by tools/build_surfaces.py instead.
 GEOMETRIES = {
     "sphere": ("lh_sphere_avg_ico4.vtk", "rh_sphere_avg_ico4.vtk"),
 }
+
+# Faces are NOT taken from the geometry file being converted. Stored endpoint
+# triangle indices refer to the pipeline grid's face order, and the toolkit's
+# `example_data/fsaverage_label/lh_grid_avg_ico4.vtk` and `?h_sphere_avg_ico4.vtk`
+# exports hold the same triangles in a different order -- reading faces from
+# them is exactly how the bundled surfaces once came out wrong (SPEC_QUESTIONS.md
+# item 13). Every geometry therefore takes its faces from canonical_faces().
+CANONICAL_GRID_DIR = os.environ.get("SBCI_AVE", "/overflow/zzhanglab/ADNI/ADNI-bids/SBCI_AVE")
+FACE_DIGEST = "87cf55ceb53254a7"
+"""SHA-256 prefix of the canonical face list; tests/test_surface.py pins the same value."""
+
+
+def canonical_faces(grid_dir: str | None = None) -> np.ndarray:
+    """The face list stored triangle indices refer to: pipeline grid order.
+
+    Left hemisphere first, then right with 2562 added. Verified to resolve the
+    stored triangle indices of six subjects from two pipeline sources to within
+    one edge of their stored nearest vertex (median 1.6 degrees).
+    """
+    grid_dir = grid_dir or CANONICAL_GRID_DIR
+    lh = np.asarray(read_vtk_polydata(f"{grid_dir}/lh_grid_avg_ico4.vtk")[1], dtype=np.int64)
+    rh = np.asarray(read_vtk_polydata(f"{grid_dir}/rh_grid_avg_ico4.vtk")[1], dtype=np.int64)
+    faces = np.vstack([lh, rh + N_PER_HEMI]).astype(np.int32)
+    digest = hashlib.sha256(faces.tobytes()).hexdigest()[:16]
+    if digest != FACE_DIGEST:
+        raise RuntimeError(
+            f"{grid_dir} gives face digest {digest}, not the canonical {FACE_DIGEST}: "
+            "this is not the pipeline grid order the stored triangle indices use"
+        )
+    return faces
 
 
 def read_vtk_polydata(path: str) -> tuple[np.ndarray, np.ndarray]:
@@ -101,8 +131,8 @@ def join_hemispheres(left: str, right: str) -> tuple[np.ndarray, np.ndarray]:
             raise ValueError(f"{name}: {vertices.shape[0]} vertices, expected {N_PER_HEMI}")
 
     vertices = np.vstack([lh_vertices, rh_vertices])
-    faces = np.vstack([lh_faces, rh_faces + N_PER_HEMI])
-    return vertices.astype(np.float32), faces.astype(np.int32)
+    del lh_faces, rh_faces  # same triangles, but not in the canonical order
+    return vertices.astype(np.float32), canonical_faces()
 
 
 def main(argv: list[str] | None = None) -> int:

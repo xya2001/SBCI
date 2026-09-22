@@ -176,7 +176,7 @@ def smooth_default():
     It reproduces c3_main at r = 1.000000 across five ADNI subjects; see
     PORTING.md item 6. The density it returns can carry medial-wall mass,
     exactly as both references do, so this checks mass and finiteness rather
-    than running the validator -- SPEC_QUESTIONS.md item 12.
+    than running the validator -- SPEC_QUESTIONS.md item 14.
     """
     # The spherical kernel is evaluated per endpoint, so a whole subject takes
     # the better part of an hour. This audit exists to exercise the documented

@@ -10,7 +10,10 @@ time, which is what establishes the correspondence.
 
     position[i] = mean of the fsaverage coordinates over mapping[i]
 
-Faces come from `lh/rh_grid_avg_ico4.vtk`, already in grid order.
+Faces come from convert_surfaces.canonical_faces(): the pipeline grid's order,
+digest-checked. The toolkit's own `fsaverage_label/lh_grid_avg_ico4.vtk` export
+holds the same triangles in a different order and must not be used for faces
+(SPEC_QUESTIONS.md item 13).
 
 An earlier attempt instead matched the grid sphere against the toolkit's VTK
 export of the full-resolution sphere. That export is not in fsaverage's vertex
@@ -34,7 +37,7 @@ import nibabel as nib
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from convert_surfaces import read_vtk_polydata  # noqa: E402
+from convert_surfaces import canonical_faces  # noqa: E402
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 from sbci import load_atlas  # noqa: E402
@@ -67,12 +70,7 @@ def main() -> int:
     with np.load(f"{D}/mapping_avg_ico4.npz", allow_pickle=True) as data:
         mapping = [np.asarray(m).ravel() for m in data["mapping"]]
 
-    faces = np.vstack(
-        [
-            read_vtk_polydata(f"{D}/lh_grid_avg_ico4.vtk")[1],
-            read_vtk_polydata(f"{D}/rh_grid_avg_ico4.vtk")[1] + N,
-        ]
-    ).astype(np.int32)
+    faces = canonical_faces()
 
     surfaces = {}
     for name in GEOMETRIES:

@@ -20,15 +20,12 @@ from importlib import resources
 import numpy as np
 
 sys.path.insert(0, "/nas/longleaf/home/xya/sbci/tools")
-from convert_surfaces import read_vtk_polydata
+from convert_surfaces import canonical_faces
 
-AVE = "/overflow/zzhanglab/ADNI/ADNI-bids/SBCI_AVE"
-N_PER_HEMI = 2562
-
-lh_faces = np.asarray(read_vtk_polydata(f"{AVE}/lh_grid_avg_ico4.vtk")[1], dtype=np.int32)
-rh_faces = np.asarray(read_vtk_polydata(f"{AVE}/rh_grid_avg_ico4.vtk")[1], dtype=np.int32)
-canonical = np.vstack([lh_faces, rh_faces + N_PER_HEMI]).astype(np.int32)
-print(f"canonical face list: {canonical.shape}, lh {lh_faces.shape[0]} + rh {rh_faces.shape[0]}")
+canonical = canonical_faces()
+print(
+    f"canonical face list: {canonical.shape}, digest-checked against convert_surfaces.FACE_DIGEST"
+)
 
 directory = resources.files("sbci.data.surfaces")
 for name in ("inflated", "white", "pial", "sphere"):

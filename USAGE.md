@@ -152,9 +152,9 @@ figure.savefig("coupling.png", dpi=150)
 ```
 
 Four panels, each hemisphere seen laterally and medially. Needs the plotting
-extra, which `setup_longleaf.sh` installs. Only the spherical surface is
-bundled; inflated and white are withheld because the toolkit ships them in a
-different vertex order from the data (`SPEC_QUESTIONS.md` item 11).
+extra, which `setup_longleaf.sh` installs. Four geometries are bundled --
+inflated (the default), white, pial and sphere -- all in the grid's vertex
+order and sharing one face list (`SPEC_QUESTIONS.md` items 11 and 13).
 
 ## `save` and `sbci validate`
 
@@ -253,13 +253,18 @@ reproduces the reference kernel only to r = 0.94.
 reference run used to within 5e-08. Both are asserted in
 `tests/test_matlab_reference.py`.
 
-`kernel="shk"`, the default, still raises. Against the input `c3_main` was
-actually given -- found on five ADNI subjects, not in the toolkit's example
-data -- the port reaches **r = 0.978**, so the maths is right. What remains is
-a 20% amplitude error after the best global scale, traced to a normalization or
-sampling convention that is not documented. It is withheld until that closes,
-because a 20% amplitude error would propagate into every downstream number. See
-PORTING.md item 6.
+`kernel="shk"`, the default, reproduces `c3_main` at **r = 1.000000** across
+five ADNI subjects, with the scale factor at 0.99858 and nothing fitted. The
+kernel is not the heat kernel its name suggests: `concon` compounds a `(2l+1)`
+weight with a normalized spherical harmonic, giving `(2l+1)^(3/2)`, and it has
+compact support at about `2.9*sqrt(sigma)` radians. Two residuals remain and
+are documented rather than hidden -- a 0.14% amplitude offset and 0.08% more
+non-zero pairs, both identical across subjects. A full subject takes about
+fifty minutes. See PORTING.md item 6.
+
+A re-smoothed density can carry mass on the medial wall, exactly as both
+references do, so `sbci validate` may flag a file saved straight from it --
+SPEC_QUESTIONS.md item 14.
 
 ## Reducing a cohort to a handful of numbers
 
@@ -425,7 +430,8 @@ means an OnDemand desktop session rather than a plain `ssh`.
 
 | Call | Raises | Because |
 | --- | --- | --- |
-| `sc.smooth()` | `NotImplementedError` | the default `shk` kernel is withheld; pass `kernel="rdk"` (PORTING.md item 6) |
+| `sc.smooth()` on a file with no `/endpoints` | `MissingDataError` | nothing to re-smooth from; the group is optional |
+| `sc.smooth()` on endpoints stored as vertices only | `MissingDataError` | `shk` needs where each streamline crossed, not the nearest vertex |
 | `sbci download` | `SystemExit` | needs the data release (Q6) |
 
 Every message names what has to happen and where it is tracked, and a test

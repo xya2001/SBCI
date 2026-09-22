@@ -200,24 +200,21 @@ discovery held in simulation, power rising with effect size), which establishes
 that the statistics are correctly *implemented*, not that they are the right
 statistics. **Ask whoever specified the API to confirm the intent.**
 
-**The spherical heat kernel is absent, but no longer mysterious.** It is the
-default `kernel="shk"` by the WP1 decision and it raises. For most of this work
-it measured r = 0.65 against `smoothed_sc_avg_0.005_ico4.mat`, and that was the
-wrong comparison: `SBCI_Py3/scripts/ADNI_example/sbci_step5_structural.sh` shows
-that file and `mesh_intersections_ico4.mat` come from different branches of the
-pipeline. Given the input `c3_main` is actually fed --
-`subject_xing_sphere_avg_coords.tsv`, which five ADNI subjects under
-`/overflow/zzhanglab/ADNI/ADNI-bids/` carry beside their output -- the same
-implementation reaches **r = 0.978**.
+**The spherical kernel ships, and is verified against the binary itself.**
+`kernel="shk"` is the default by the WP1 decision and it works. It reproduces
+`c3_main` at **r = 1.000000** across all five ADNI subjects under
+`/overflow/zzhanglab/ADNI/ADNI-bids/` that carry both the input `c3_main` was
+fed and the matrix it wrote, with the scale factor at 0.99858 and nothing
+fitted. The kernel was read from `concon`'s source -- public MIT code, named by
+the binary's debug info -- and confirmed by running `c3_main` on a single
+streamline so that its output is the kernel: `tests/reference/concon_probe.py`
+regenerates that measurement, and `tests/test_smoothing.py` pins the kernel to
+the binary's own numbers at rms 0.0005.
 
-A 20% amplitude error remains after the best global scale. It is not the
-support: 0.43% of this port's mass lies outside what `c3_main` keeps, and
-restricting to the kept support moves the correlation by 0.0007. The suspects
-are the undocumented arguments `--epsilon 0.001` and the two
-`OPT_VAL_exp_num_*_samps` flags, which imply `c3_main` evaluates by sampling
-rather than in closed form. **A reviewer who can ask the `concon` author what
-those do could close this in an afternoon**, and `shk` could then ship as the
-default the WP1 decision calls for.
+Two residuals remain, both reproducible to five digits across subjects and so
+conventions rather than noise: a 0.14% amplitude offset and 0.08% more non-zero
+pairs. A reviewer can re-run the five-subject comparison from PORTING.md item
+6; it needs the lab data and about an hour per subject.
 
 
 **The format is a draft.** `SPEC_VERSION` is `0.1.0-draft` and

@@ -105,7 +105,7 @@ out = "/work/users/x/y/xya/sbci-figures/tour_coupling.png"
 figure.savefig(out, dpi=100)
 matplotlib.pyplot.close(figure)
 print(f"  sc.plot(map) -> matplotlib figure, saved to {out}")
-print("  Only the sphere is bundled; inflated and white are withheld (Q11).")
+print("  Inflated, white, pial and sphere are bundled, in the grid's vertex order (Q11).")
 
 heading("8. save and validate")
 import subprocess

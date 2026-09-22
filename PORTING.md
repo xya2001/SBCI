@@ -594,7 +594,7 @@ caught, because none of its tests had barycentric endpoints:
 2. The in-place Legendre recurrence (below) refused a scalar argument, because
    a scalar is a 0-d array and numpy will not use one as an `out=` target.
 3. **The bundled surfaces' faces were in the wrong order.** See
-   SPEC_QUESTIONS.md item 11: stored triangle indices refer to the pipeline
+   SPEC_QUESTIONS.md item 13: stored triangle indices refer to the pipeline
    grid's face list, the package shipped a different order of the same
    triangles, and every index resolved about 85 degrees from where it should.
    This was latent in the format handling long before the kernel was touched.

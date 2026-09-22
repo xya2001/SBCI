@@ -713,7 +713,7 @@ def test_resmoothing_leaves_the_medial_wall_as_the_reference_does():
     mass there, and MATLAB's rdk density does too. Zeroing it inside smooth()
     would make the method diverge from both and break
     test_smooth_method_matches_matlab, so the conflict is recorded as
-    SPEC_QUESTIONS.md item 12 rather than papered over. This pins the choice.
+    SPEC_QUESTIONS.md item 14 rather than papered over. This pins the choice.
     """
     from sbci.smoothing import _finish
 
