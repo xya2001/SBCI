@@ -382,32 +382,92 @@ def _fine_sphere(subdivisions=3):
     return vertices, voronoi_areas(vertices, faces)
 
 
-def test_the_spherical_kernel_integrates_to_one():
-    """A heat kernel is a probability density: only the l=0 term survives."""
-    from sbci.smoothing import spherical_heat_kernel
+def test_the_kernel_does_not_integrate_to_one():
+    """The kernel concon applies is not a probability density, and that is fine.
 
-    vertices, areas = _fine_sphere(4)
-    pole = np.array([0.0, 0.0, 1.0])
-    values = spherical_heat_kernel(vertices @ pole, sigma=0.005)
-    assert float(values @ areas) == pytest.approx(1.0, rel=2e-3)
-
-
-def test_the_spherical_kernel_peaks_at_its_centre_and_falls_away():
-    """It falls cleanly near the centre, then rings -- the series is truncated.
-
-    Monotonicity would be the wrong thing to assert: at sigma 0.005 the kernel
-    decays for the first 22 degrees and then oscillates at the 0.05% level,
-    which is what truncating a Legendre series does.
+    A heat kernel integrates to 1 because its weight is (2l+1)/4pi and only the
+    l=0 term survives integration. concon's weight is (2l+1)^(3/2)/sqrt(4pi),
+    so the surviving term leaves sqrt(4pi) instead. The pipeline divides by the
+    streamline count afterwards rather than normalizing the kernel, so this
+    factor is part of what the released files carry.
     """
     from sbci.smoothing import spherical_heat_kernel
 
-    angles = np.linspace(0.0, np.pi, 200)
+    pole = np.array([0.0, 0.0, 1.0])
+
+    def integral(subdivisions):
+        vertices, areas = _fine_sphere(subdivisions)
+        return float(spherical_heat_kernel(vertices @ pole, 0.005, epsilon=None) @ areas)
+
+    # The kernel spans about 12 degrees, so a coarse grid under-resolves it;
+    # refining converges on sqrt(4 pi), which is what pins the constant.
+    coarse, fine = integral(4), integral(5)
+    target = np.sqrt(4 * np.pi)
+    assert abs(fine - target) < abs(coarse - target), "should converge as the grid refines"
+    assert fine == pytest.approx(target, rel=5e-3)
+    assert fine > 3.0, "and so emphatically not 1"
+
+
+def test_the_kernel_falls_from_its_centre_then_stops_dead():
+    """Inside the cutoff it decays; beyond it, it is exactly zero.
+
+    The truncated series would ring past the cutoff, but concon never evaluates
+    it there: compute_kernel.cpp only visits vertices within the cutoff angle,
+    so the kernel has compact support and no ringing survives into the output.
+    """
+    from sbci.smoothing import kernel_cutoff, spherical_heat_kernel
+
+    angles = np.linspace(0.0, np.pi, 400)
     values = spherical_heat_kernel(np.cos(angles), sigma=0.005)
+    cutoff = kernel_cutoff(0.005)
 
     assert values[0] == values.max()
-    near = angles < np.radians(20)
-    assert np.all(np.diff(values[near]) < 0), "should fall away from its centre"
-    assert values.min() > -0.001 * values.max(), "ringing should stay tiny"
+    inside = angles < cutoff
+    assert np.all(np.diff(values[inside]) < 0), "should fall away from its centre"
+    assert np.all(values[~inside] == 0.0), "and be exactly zero beyond the cutoff"
+    assert values.min() >= 0.0, "so nothing rings negative"
+
+
+def test_the_kernel_matches_the_binary_it_ports():
+    """Pinned against c3_main itself, run on a single streamline.
+
+    One streamline gives D(i,j) = K(theta_i) K(theta_j), so the output is the
+    kernel. These are the values it produced at sigma 0.005, at the ico4 ring
+    distances from a grid vertex; tests/reference/concon_probe.py regenerates
+    them. The heat kernel this package used to implement misses them by 0.09.
+    """
+    from sbci.smoothing import spherical_heat_kernel
+
+    angle = np.array([0.0, 3.962, 6.430, 7.930, 9.960, 11.890])
+    measured = np.array([1.0000, 0.7441, 0.4442, 0.2751, 0.1035, 0.01016])
+
+    values = spherical_heat_kernel(np.cos(np.radians(angle)), sigma=0.005)
+    ratio = values / values[0]
+    assert np.sqrt(np.mean((ratio - measured) ** 2)) < 0.003
+
+    # The absolute scale is right too, not just the shape: concon's own peak
+    # was 270.10, read off a run whose endpoints sat exactly on vertices.
+    assert float(values[0]) == pytest.approx(270.10, rel=5e-3)
+
+
+def test_the_cutoff_reproduces_the_binarys_support():
+    """The predicted cutoff has to keep exactly the vertices concon keeps.
+
+    Measured from c3_main: 16, 31 and 61 vertices at sigma 0.0025, 0.005 and
+    0.01, whose outermost rings sit at 7.932, 11.894 and 16.528 degrees.
+    """
+    from sbci.smoothing import kernel_cutoff
+
+    for sigma, outermost, next_ring in [
+        (0.0025, 7.932, 8.9),
+        (0.005, 11.894, 12.61),
+        (0.01, 16.528, 17.5),
+    ]:
+        cutoff = np.degrees(kernel_cutoff(sigma))
+        assert outermost < cutoff < next_ring, (
+            f"sigma {sigma}: cutoff {cutoff:.3f} must keep the ring at "
+            f"{outermost} and drop the next"
+        )
 
 
 def test_a_wider_kernel_is_flatter():
@@ -420,38 +480,38 @@ def test_a_wider_kernel_is_flatter():
     assert narrow.std() > wide.std()
 
 
-def test_a_very_wide_kernel_approaches_the_uniform_density():
-    """As diffusion runs, the kernel forgets where it started."""
+def test_a_very_wide_kernel_goes_flat():
+    """At a large bandwidth every term but l=0 dies, leaving a constant.
+
+    That constant is 1/sqrt(4pi), not the heat kernel's 1/4pi, for the same
+    reason the kernel does not integrate to one.
+    """
     from sbci.smoothing import spherical_heat_kernel
 
     values = spherical_heat_kernel(np.cos(np.linspace(0, np.pi, 50)), sigma=5.0)
-    np.testing.assert_allclose(values, 1 / (4 * np.pi), rtol=1e-3)
+    np.testing.assert_allclose(values, 1 / np.sqrt(4 * np.pi), rtol=1e-3)
 
 
-def test_the_pipelines_truncation_is_part_of_the_definition():
-    """33 harmonics is not converged at the released bandwidth, and that matters.
+def test_the_truncation_is_thirty_two_and_is_part_of_the_definition():
+    """The binary hardcodes 32 harmonics, and 32 is not converged.
 
-    A porting attempt that "improves" on the pipeline by summing more terms
-    would stop reproducing it. At sigma 0.005 the 33-term kernel sits 0.31%
-    from a converged one and the 17-term kernel 20% away, so the truncation has
-    to be matched, not exceeded.
+    The pipeline passes --OPT_VAL_num_harm 33, but c3_main ignores it: it
+    prints "num_harmonics now global constant (for speed)" and subject.cpp
+    checks against 32. Feeding the binary 9, 17, 25, 33, 49 and 65 gives a
+    bit-identical kernel, which is how this was found before the source was
+    read. Since the sum is not converged at 32, a port that "improved" on it by
+    summing more terms would stop reproducing the released cohorts.
     """
-    from sbci.smoothing import SPHERICAL_HARMONICS, spherical_heat_kernel
+    from sbci.smoothing import NUM_HARMONICS, spherical_heat_kernel
 
-    assert SPHERICAL_HARMONICS == 33, "the pipeline passes --OPT_VAL_num_harm 33"
+    assert NUM_HARMONICS == 32, "c3_main hardcodes 32, whatever the flag says"
 
-    cosine = np.cos(np.linspace(0, np.pi, 200))
-    converged = spherical_heat_kernel(cosine, sigma=0.005, harmonics=129)
-    peak = converged.max()
-
-    errors = {
-        n: np.abs(spherical_heat_kernel(cosine, sigma=0.005, harmonics=n) - converged).max()
-        for n in (17, 25, 33, 49, 65)
-    }
-    assert errors[17] / peak > 0.1, "17 terms is nowhere near converged"
-    assert 0.001 < errors[33] / peak < 0.01, "33 terms leaves a small signature"
-    assert errors[65] / peak < 1e-6, "65 terms has converged"
-    assert errors[17] > errors[25] > errors[33] > errors[49] > errors[65]
+    cosine = np.cos(np.linspace(0, np.radians(12.0), 200))
+    truncated = spherical_heat_kernel(cosine, sigma=0.005, epsilon=None)
+    further = spherical_heat_kernel(cosine, sigma=0.005, harmonics=64, epsilon=None)
+    assert np.abs(truncated - further).max() / truncated.max() > 1e-3, (
+        "32 terms is not converged, so the truncation has to be matched"
+    )
 
 
 def test_endpoint_density_is_symmetric_and_hemisphere_respecting():

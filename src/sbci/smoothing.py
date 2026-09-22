@@ -39,6 +39,7 @@ normalizing constant and then clips the negatives to zero, and so does this.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 
 import numpy as np
 
@@ -129,69 +130,126 @@ def _assemble(rho: np.ndarray, eigenvectors: np.ndarray) -> np.ndarray:
     return (eigenvectors * rho[np.newaxis, :]) @ eigenvectors.T
 
 
-SPHERICAL_HARMONICS = 33
-"""Harmonics the pipeline truncates the spherical heat kernel at.
+NUM_HARMONICS = 32
+"""Harmonics ``concon`` sums.
 
-From ``sbci_step5_structural.sh``: ``--OPT_VAL_num_harm 33``.
+Hardcoded there, and ``--OPT_VAL_num_harm`` is **ignored**: ``c3_main`` prints
+"num_harmonics now global constant (for speed)" at startup and
+``subject.cpp`` checks ``if(num_harm != 32)``. Passing 9, 17, 25, 33, 49 or 65
+to the binary gives a bit-identical kernel, which was measured before the
+source was read. The pipeline's ``--OPT_VAL_num_harm 33`` is a no-op.
+"""
+
+KERNEL_EPSILON = 0.001
+"""Where ``concon`` cuts the kernel off, from ``--epsilon``.
+
+``compute_kernel.cpp`` scans ``x = cos(theta)`` down from 1.0 in steps of
+1e-4 and stops at the first ``x`` where the kernel falls below this; vertices
+beyond that angle get nothing. The kernel's descent there is steep enough that
+anything from 1e-6 to 0.1 gives the same cutoff to three decimals, which is why
+sweeping the flag against the binary appeared to do nothing.
 """
 
 
-def spherical_heat_kernel(cosine, sigma: float, harmonics: int = SPHERICAL_HARMONICS):
-    r"""Heat kernel on the unit sphere, as a truncated Legendre series.
+@lru_cache(maxsize=32)
+def kernel_cutoff(
+    sigma: float, epsilon: float = KERNEL_EPSILON, harmonics: int = NUM_HARMONICS
+) -> float:
+    """Angle in radians beyond which the kernel is zero.
+
+    Reproduces ``compute_kernel.cpp``'s scan exactly, including its 1e-4 step
+    in the cosine, so the cutoff lands on the same grid vertices.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> round(float(np.degrees(kernel_cutoff(0.005))), 3)
+    12.204
+    >>> round(float(np.degrees(kernel_cutoff(0.01))), 3)
+    17.369
+    """
+    cosines = np.arange(1.0, -1.0, -0.0001)
+    values = _legendre_series(cosines, sigma, harmonics)
+    below = np.nonzero(values < epsilon)[0]
+    return float(np.arccos(np.clip(cosines[below[0]], -1.0, 1.0))) if below.size else np.pi
+
+
+def _legendre_series(cosine: np.ndarray, sigma: float, harmonics: int) -> np.ndarray:
+    """The untruncated sum, shared by the kernel and its cutoff scan."""
+    degree = np.arange(harmonics)
+    weight = (2 * degree + 1) ** 1.5 / np.sqrt(4 * np.pi) * np.exp(-degree * (degree + 1) * sigma)
+    previous = np.ones_like(cosine)
+    total = weight[0] * previous
+    if harmonics > 1:
+        current = cosine.copy()
+        total = total + weight[1] * current
+        for order in range(1, harmonics - 1):
+            previous, current = (
+                current,
+                ((2 * order + 1) * cosine * current - order * previous) / (order + 1),
+            )
+            total = total + weight[order + 1] * current
+    return total
+
+
+def spherical_heat_kernel(
+    cosine, sigma: float, harmonics: int = NUM_HARMONICS, epsilon: float | None = KERNEL_EPSILON
+):
+    r"""The kernel ``concon`` applies, on the unit sphere.
 
     .. math::
-        h_\sigma(\cos\gamma) = \sum_{l=0}^{L}
-            \frac{2l+1}{4\pi} e^{-l(l+1)\sigma} P_l(\cos\gamma)
+        K_\sigma(\cos\gamma) = \sum_{l=0}^{31}
+            \frac{(2l+1)^{3/2}}{\sqrt{4\pi}}\, e^{-l(l+1)\sigma}\, P_l(\cos\gamma)
 
-    This is the kernel ``concon`` applies, and ``--sigma`` is diffusion time:
-    of the three readings of that flag this is the one that reproduces the
-    pipeline's own output, and its support lands within 2.4% of the released
-    file's.
+    zero beyond :func:`kernel_cutoff`.
+
+    **This is not the heat kernel**, whose weight is :math:`(2l+1)/4\pi`.
+    ``sigma_opt.cpp`` sums ``exp(-sigma*l*(l+1)) * (2l+1) * harm_lookup[l]``,
+    and ``subject.cpp`` fills that lookup with ``sh::EvalSH(l, 0, 0, acos(x))``
+    -- the *normalized* spherical harmonic :math:`Y_l^0`, which already carries
+    :math:`\sqrt{(2l+1)/4\pi}`. The two factors compound into
+    :math:`(2l+1)^{3/2}`, which looks like a Legendre polynomial was intended
+    where a normalized harmonic was used. Intended or not, it is what produced
+    every released cohort, so it is what this package reproduces. The extra
+    :math:`\sqrt{2l+1}` upweights high degrees and makes the kernel markedly
+    narrower than a true heat kernel.
 
     Parameters
     ----------
     cosine
-        Cosines of the angle between points, any shape. Values are clipped to
-        ``[-1, 1]`` so unit vectors that are a rounding step too long are safe.
+        Cosines of the angle between points, any shape. Clipped to
+        ``[-1, 1]``, so unit vectors a rounding step too long are safe.
     sigma
-        Diffusion time. The released cohorts use 0.005.
+        Bandwidth. The released cohorts use 0.005.
     harmonics
-        Where to truncate. The pipeline uses 33; the result is converged to
-        four decimals by about 17.
+        Where to truncate. ``concon`` hardcodes 32 -- see :data:`NUM_HARMONICS`.
+    epsilon
+        Cutoff threshold; ``None`` leaves the series untruncated in angle,
+        which is useful for studying it but is not what the pipeline did.
 
     Notes
     -----
-    **The truncation is part of the definition, not an approximation to it.**
-    At the released bandwidth of 0.005 the ``l = 33`` term still carries weight
-    0.0195, and the 33-term sum differs from a converged one by 0.31% of its
-    peak; at 17 terms the error is 20%. Anything that hopes to reproduce the
-    pipeline has to truncate where the pipeline truncates.
-
-    A truncated series also rings. At sigma 0.005 the kernel falls cleanly for
-    the first 22 degrees and then oscillates, dipping to -0.008 against a peak
-    of 15.9 -- about -0.05%. :func:`endpoint_density` clips those negatives, as
-    the reference does.
+    Verified against ``c3_main`` itself, by running it on a single streamline
+    so its output is the kernel: at sigma 0.005 this matches the binary to
+    **rms 0.0015** across the ico4 ring distances, against 0.090 for the heat
+    kernel. The predicted cutoffs reproduce the binary's support exactly at
+    sigma 0.0025, 0.005 and 0.01, and K(0) agrees to 0.2%.
+    ``tests/reference/concon_probe.py`` regenerates the measurement.
 
     Examples
     --------
     >>> import numpy as np
     >>> from sbci.smoothing import spherical_heat_kernel
-    >>> float(spherical_heat_kernel(1.0, 0.005)) > float(spherical_heat_kernel(0.0, 0.005))
-    True
+    >>> centre = float(spherical_heat_kernel(1.0, 0.005))
+    >>> round(centre, 3)
+    269.514
+    >>> float(spherical_heat_kernel(np.cos(np.radians(20.0)), 0.005))  # past the cutoff
+    0.0
     """
     cosine = np.clip(np.asarray(cosine, dtype=np.float64), -1.0, 1.0)
-    degree = np.arange(harmonics + 1)
-    weight = ((2 * degree + 1) / (4 * np.pi)) * np.exp(-degree * (degree + 1) * sigma)
-
-    previous = np.ones_like(cosine)
-    current = cosine.copy()
-    total = weight[0] * previous + weight[1] * current
-    for order in range(1, harmonics):
-        previous, current = (
-            current,
-            ((2 * order + 1) * cosine * current - order * previous) / (order + 1),
-        )
-        total = total + weight[order + 1] * current
+    total = _legendre_series(cosine, sigma, harmonics)
+    if epsilon is not None:
+        total = np.where(cosine < np.cos(kernel_cutoff(sigma, epsilon, harmonics)), 0.0, total)
     return total
 
 
@@ -203,7 +261,7 @@ def endpoint_density(
     hemisphere_out,
     vertex_hemisphere,
     sigma: float,
-    harmonics: int = SPHERICAL_HARMONICS,
+    harmonics: int = NUM_HARMONICS,
     normalize: str = "sum",
     block: int = 4096,
 ):
