@@ -13,6 +13,7 @@ import pathlib
 import numpy as np
 import pytest
 
+from sbci.metadata import template as metadata_template
 from sbci.smoothing import (
     TRUNCATION_FLOOR,
     Endpoints,
@@ -612,3 +613,129 @@ def test_reading_the_concon_endpoint_file(tmp_path):
     # The file stores 1 - surface, so a 1 in the column means the left hemisphere.
     np.testing.assert_array_equal(hemisphere_in, [0, 1])
     np.testing.assert_array_equal(hemisphere_out, [1, 0])
+
+
+def test_endpoint_positions_rebuilds_points_on_the_sphere():
+    """The shk path needs continuous positions, and nothing else exercised it.
+
+    Wiring smooth(kernel="shk") up the first time crashed here on a real file,
+    because the triangle offset was read from an attribute Endpoints does not
+    carry. Every unit test passed regardless: none of them had barycentric
+    endpoints. This one does.
+    """
+    from sbci.smoothing import Endpoints, endpoint_positions
+    from sbci.surface import load_surface
+
+    sphere = load_surface("sphere")
+    faces_per_hemi = sphere.faces.shape[0] // 2
+    rng = np.random.default_rng(0)
+    count = 64
+
+    tri_in = rng.integers(0, faces_per_hemi, count)
+    tri_out = rng.integers(0, faces_per_hemi, count)
+    surf_in = rng.integers(0, 2, count).astype(np.int8)
+    surf_out = rng.integers(0, 2, count).astype(np.int8)
+    bary = rng.random((count, 3))
+    bary /= bary.sum(axis=1, keepdims=True)
+
+    endpoints = Endpoints(
+        surf_in=surf_in,
+        surf_out=surf_out,
+        vtx_in=np.zeros(count, int),
+        vtx_out=np.zeros(count, int),
+        tri_in=tri_in,
+        tri_out=tri_out,
+        bary_in=bary,
+        bary_out=bary.copy(),
+    )
+    points_in, points_out = endpoint_positions(endpoints, surface=sphere)
+
+    assert points_in.shape == (count, 3)
+    np.testing.assert_allclose(np.linalg.norm(points_in, axis=1), 1.0, atol=1e-12)
+    np.testing.assert_allclose(np.linalg.norm(points_out, axis=1), 1.0, atol=1e-12)
+
+    # A point must lie in its own triangle, so the nearest vertex of that
+    # triangle is nearer than the triangle's own circumradius is wide.
+    corners = sphere.vertices[
+        sphere.faces[tri_in + Endpoints.global_hemisphere_offset(surf_in, faces_per_hemi)]
+    ]
+    corners = corners / np.linalg.norm(corners, axis=2, keepdims=True)
+    inside = np.einsum("sj,skj->sk", points_in, corners).max(axis=1)
+    assert np.all(inside > np.cos(np.radians(5.0))), "should sit inside its own triangle"
+
+
+def test_endpoint_positions_refuses_a_file_without_them():
+    from sbci.errors import MissingDataError
+    from sbci.smoothing import Endpoints, endpoint_positions
+
+    bare = Endpoints(
+        surf_in=np.zeros(3, np.int8),
+        surf_out=np.zeros(3, np.int8),
+        vtx_in=np.zeros(3, int),
+        vtx_out=np.zeros(3, int),
+    )
+    with pytest.raises(MissingDataError, match="barycentric"):
+        endpoint_positions(bare)
+
+
+@pytest.mark.parametrize(
+    "shape", [(), (1,), (5,), (3, 4), (2, 3, 4)], ids=["scalar", "one", "vector", "2d", "3d"]
+)
+def test_the_kernel_preserves_the_shape_it_is_given(shape):
+    """Including a scalar, which is a 0-d array and cannot be an `out=` target.
+
+    The recurrence writes through `out=` buffers to avoid allocating 168 MB per
+    term when smoothing a subject. numpy refuses a 0-d array there, so
+    `spherical_heat_kernel(1.0, ...)` raised TypeError until the series learned
+    to work on a flat view and reshape back.
+    """
+    from sbci.smoothing import spherical_heat_kernel
+
+    cosine = np.full(shape, 0.999) if shape else 0.999
+    assert np.shape(spherical_heat_kernel(cosine, 0.005)) == shape
+
+
+def test_the_kernel_is_elementwise():
+    """Evaluating together or one at a time has to give the same answer."""
+    from sbci.smoothing import spherical_heat_kernel
+
+    cosine = np.cos(np.radians(np.array([0.0, 4.0, 8.0, 12.0, 30.0])))
+    together = spherical_heat_kernel(cosine, 0.005)
+    apart = np.array([float(spherical_heat_kernel(c, 0.005)) for c in cosine])
+    np.testing.assert_allclose(together, apart, rtol=0, atol=1e-12)
+
+
+def test_resmoothing_leaves_the_medial_wall_as_the_reference_does():
+    """smooth() must not silently mask, however tempting it is.
+
+    The format requires a stored file to carry nothing on the medial wall, but
+    neither reference produces one: c3_main's released output puts 0.87% of its
+    mass there, and MATLAB's rdk density does too. Zeroing it inside smooth()
+    would make the method diverge from both and break
+    test_smooth_method_matches_matlab, so the conflict is recorded as
+    SPEC_QUESTIONS.md item 12 rather than papered over. This pins the choice.
+    """
+    from sbci.smoothing import _finish
+
+    n = 8
+    rng = np.random.default_rng(0)
+    dense = rng.random((n, n))
+    dense = dense + dense.T
+    mask = np.ones(n, dtype=bool)
+    mask[[2, 5]] = False
+
+    class Fake:
+        def __init__(self, data, area, mask, metadata, coords, endpoints):
+            self.data, self.area, self.mask = data, area, mask
+            self.metadata, self.coords, self.endpoints = metadata, coords, endpoints
+
+    connectome = Fake(None, np.full(n, 1.0 / n), mask, metadata_template("sc"), None, None)
+    out = _finish(connectome, dense.copy(), "shk", 0.005)
+
+    from sbci.grid import to_dense
+
+    result = to_dense(out.data, n)
+    assert float(np.abs(result[~mask]).sum()) > 0.0, "the wall keeps what the reference gives it"
+    assert float(connectome.area @ result.astype(np.float64) @ connectome.area) == pytest.approx(
+        1.0, rel=1e-6
+    )

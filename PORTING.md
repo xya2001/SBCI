@@ -45,6 +45,28 @@ throughout, so it is **more accurate than the reference, not different from
 it**. If bit-compatibility with legacy output is ever needed, cast `Lambda` to
 float32 before calling `diffusion_kernel`.
 
+### The public API path, end to end
+
+Steps 3 and 4 validated the kernel through a hand-written density loop. Driving
+`ContinuousConnectome.smooth(kernel="shk")` instead -- building a connectome
+from `mesh_intersections_ico4.mat`, calling the method, saving, validating --
+is what found all three bugs above, and the face-order one could not have been
+found any other way.
+
+It scores r = 0.972 rather than 1.000000, and that is the input file, not the
+port. Both endpoint sources on the **same 200,000 rows**, so sampling noise is
+identical and only the endpoints differ:
+
+| endpoint source | correlation |
+| --- | --- |
+| `subject_xing_sphere_avg_coords.tsv`, what `c3_main` was fed | **0.998193** |
+| `mesh_intersections_ico4.mat` | 0.969720 |
+
+The two disagree by a median 1.25 degrees, but with a tail: 3.14 at the 90th
+percentile and 42 at the maximum. Displacing the correct endpoints uniformly by
+1.25 degrees costs almost nothing (0.99263 to 0.99235), so it is that tail of
+relocated endpoints that accounts for the gap, not the typical difference.
+
 ### Speed
 
 The whole smoothing takes **4.4 s** for both hemispheres, against a WP3 target
@@ -559,6 +581,45 @@ the normalization by streamline count was applied correctly. Correlation is
 
 The port keeps 0.09% more pairs than `c3_main`, which is `--final_thold 1e-9`:
 the reference drops values below it and this port does not yet.
+
+### Shipping it
+
+`smooth(kernel="shk")` no longer raises. Getting from "the kernel is right" to
+"the method works" took three more bugs, none of which the 554-test suite
+caught, because none of its tests had barycentric endpoints:
+
+1. `endpoint_positions` read `endpoints.n_faces_per_hemi`, which `Endpoints`
+   does not carry -- `from_global` takes it as an argument and drops it. The
+   offset now comes from the mesh itself.
+2. The in-place Legendre recurrence (below) refused a scalar argument, because
+   a scalar is a 0-d array and numpy will not use one as an `out=` target.
+3. **The bundled surfaces' faces were in the wrong order.** See
+   SPEC_QUESTIONS.md item 11: stored triangle indices refer to the pipeline
+   grid's face list, the package shipped a different order of the same
+   triangles, and every index resolved about 85 degrees from where it should.
+   This was latent in the format handling long before the kernel was touched.
+
+Two residuals remain against `c3_main`, both reproducible to five digits
+across all five subjects, so both are conventions rather than noise: a
+**0.142% amplitude offset** -- the kernel's peak is 0.06% high and the density
+is a product of two kernels -- and **0.08% more non-zero pairs**, at the cutoff
+boundary. Neither is the float-rounding agreement the MATLAB ports reach, and
+they cannot be, since this compares against a C++ binary with its own harmonic
+library rather than against MATLAB running the same algorithm.
+
+### Speed
+
+`_legendre_series` accumulated with `total = total + weight[l] * current`,
+allocating a fresh 168 MB array per term over a `(5124, 4096)` block, a few
+hundred times per subject. Reusing three buffers made it **5.8x faster**
+(28.98s to 5.02s per block) and changed nothing beyond float reordering, 2.3e-12.
+
+It is still slower than it should be. The kernel is zero beyond 12.2 degrees,
+so only about 31 of 5,124 vertices per endpoint are non-zero, and this port
+evaluates all of them: roughly 99.4% of the arithmetic computes zeros.
+`concon` avoids that with a quad-tree over the mesh -- `helper_construct_QT`
+is in its symbols. A sparse neighbourhood lookup is the obvious next
+optimization and should be worth one to two orders of magnitude.
 
 ### What this cost, and what it bought
 

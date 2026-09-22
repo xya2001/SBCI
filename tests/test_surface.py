@@ -171,3 +171,46 @@ def test_surface_dataclass_is_constructible():
     """Surface is a plain value object, usable without the bundled data."""
     surface = Surface("toy", np.zeros((3, 3)), np.array([[0, 1, 2]], dtype=np.int32))
     assert surface.n_vertices == 3
+
+
+FACE_DIGEST = "87cf55ceb53254a7"
+"""SHA-256 prefix of the bundled face list, in the order it must be in."""
+
+
+def test_the_face_order_is_the_one_triangle_indices_mean():
+    """The HDF5 format stores endpoints as a triangle index plus weights.
+
+    Those indices come from the pipeline's grid mesh, and the bundled surfaces
+    once held the same 10,240 triangles in a different order -- so every stored
+    index resolved to an unrelated triangle about 85 degrees away, and
+    smooth(kernel="shk") produced a density uncorrelated with the reference.
+    Reordering the faces fixed it; this digest is what stops it drifting back.
+    Regenerate with tools/align_surface_faces.py if the grid ever changes.
+    """
+    import hashlib
+
+    faces = np.asarray(load_surface("sphere").faces, dtype=np.int32)
+    assert hashlib.sha256(faces.tobytes()).hexdigest()[:16] == FACE_DIGEST
+
+
+@pytest.mark.parametrize("name", GEOMETRIES)
+def test_every_geometry_shares_that_face_list(name):
+    """One topology shared by four geometries.
+
+    A mesh carrying its own face order would break triangle indices for
+    whichever surface happened to be loaded.
+    """
+    np.testing.assert_array_equal(
+        np.asarray(load_surface(name).faces), np.asarray(load_surface("sphere").faces)
+    )
+
+
+def test_each_face_stays_within_one_hemisphere():
+    """No triangle may bridge the hemispheres.
+
+    A per-hemisphere triangle index would otherwise be ambiguous.
+    """
+    faces = np.asarray(load_surface("sphere").faces)
+    left = faces < N_VERTICES_PER_HEMI
+    assert np.all(left.all(axis=1) | (~left).all(axis=1))
+    assert int(left.all(axis=1).sum()) == faces.shape[0] // 2

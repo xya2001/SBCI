@@ -170,16 +170,52 @@ def smooth():
 check(".smooth(kernel=..., bandwidth=...)", smooth)
 
 
-def smooth_withheld():
-    try:
-        sc_e.smooth()
-    except NotImplementedError as e:
-        assert "PORTING.md item 6" in str(e)
-        return "default shk withheld, and says why"
-    raise AssertionError("shk should be withheld")
+def smooth_default():
+    """The default kernel is shk, and it now works rather than raising.
+
+    It reproduces c3_main at r = 1.000000 across five ADNI subjects; see
+    PORTING.md item 6. The density it returns can carry medial-wall mass,
+    exactly as both references do, so this checks mass and finiteness rather
+    than running the validator -- SPEC_QUESTIONS.md item 12.
+    """
+    # The spherical kernel is evaluated per endpoint, so a whole subject takes
+    # the better part of an hour. This audit exists to exercise the documented
+    # API, not to re-measure agreement -- that is PORTING.md item 6, five
+    # subjects at r = 1.000000 -- so it runs on a slice of the endpoints.
+    endpoints = sc_e.endpoints
+    keep = slice(0, 20_000)
+    small = type(endpoints)(
+        surf_in=endpoints.surf_in[keep],
+        surf_out=endpoints.surf_out[keep],
+        vtx_in=endpoints.vtx_in[keep],
+        vtx_out=endpoints.vtx_out[keep],
+        n_per_hemi=endpoints.n_per_hemi,
+        tri_in=None if endpoints.tri_in is None else endpoints.tri_in[keep],
+        tri_out=None if endpoints.tri_out is None else endpoints.tri_out[keep],
+        bary_in=None if endpoints.bary_in is None else endpoints.bary_in[keep],
+        bary_out=None if endpoints.bary_out is None else endpoints.bary_out[keep],
+    )
+    sliced = type(sc_e)(
+        data=sc_e.data,
+        area=sc_e.area,
+        mask=sc_e.mask,
+        metadata=sc_e.metadata,
+        coords=sc_e.coords,
+        endpoints=small,
+    )
+    out = sliced.smooth()
+    assert out.metadata["kernel"] == "shk", out.metadata["kernel"]
+    dense = out.dense().astype(np.float64)
+    mass = float(area @ dense @ area)
+    assert abs(mass - 1) < 1e-8, mass
+    assert np.isfinite(dense).all() and dense.min() >= 0.0
+    return (
+        f"shk sigma {out.metadata['bandwidth']}, unit mass {mass:.10f}, "
+        f"on {small.n_streamlines:,} endpoints"
+    )
 
 
-check("  .smooth() default is withheld", smooth_withheld)
+check("  .smooth() default kernel shk", smooth_default)
 
 print("\n=== 6. reduction and inference ===")
 

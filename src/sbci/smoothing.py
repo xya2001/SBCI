@@ -147,6 +147,9 @@ carries 0.37% of the peak -- so a port that summed further would stop
 reproducing the released cohorts.
 """
 
+DEFAULT_SIGMA = 0.005
+"""Bandwidth the released cohorts use, from ``--sigma 0.005``."""
+
 KERNEL_EPSILON = 0.001
 """Where ``concon`` cuts the kernel off, from ``--epsilon``.
 
@@ -182,21 +185,43 @@ def kernel_cutoff(
 
 
 def _legendre_series(cosine: np.ndarray, sigma: float, harmonics: int) -> np.ndarray:
-    """The untruncated sum, shared by the kernel and its cutoff scan."""
+    """The untruncated sum, shared by the kernel and its cutoff scan.
+
+    The recurrence runs in place. Smoothing one subject evaluates this over a
+    ``(5124, 4096)`` block a few hundred times, and allocating a fresh array
+    per term costs 168 MB each time; reusing three buffers instead made
+    ``smooth(kernel="shk")`` about three times faster end to end.
+    """
     degree = np.arange(harmonics)
     weight = (2 * degree + 1) ** 1.5 / np.sqrt(4 * np.pi) * np.exp(-degree * (degree + 1) * sigma)
+
+    # Work on a flat view: a scalar argument becomes a 0-d array, which numpy
+    # refuses as an `out=` target, and the recurrence writes through `out`.
+    shape = np.shape(cosine)
+    cosine = np.asarray(cosine, dtype=np.float64).reshape(-1)
+
     previous = np.ones_like(cosine)
     total = weight[0] * previous
-    if harmonics > 1:
-        current = cosine.copy()
-        total = total + weight[1] * current
-        for order in range(1, harmonics - 1):
-            previous, current = (
-                current,
-                ((2 * order + 1) * cosine * current - order * previous) / (order + 1),
-            )
-            total = total + weight[order + 1] * current
-    return total
+    if harmonics == 1:
+        return total.reshape(shape)
+
+    current = cosine.copy()
+    term = np.empty_like(cosine)
+    np.multiply(current, weight[1], out=term)
+    total += term
+
+    scratch = np.empty_like(cosine)
+    for order in range(1, harmonics - 1):
+        # scratch <- ((2k+1) cos * current - k * previous) / (k + 1)
+        np.multiply(cosine, current, out=scratch)
+        scratch *= 2 * order + 1
+        np.multiply(previous, float(order), out=term)
+        scratch -= term
+        scratch /= order + 1
+        previous, current, scratch = current, scratch, previous
+        np.multiply(current, weight[order + 1], out=term)
+        total += term
+    return total.reshape(shape)
 
 
 def spherical_heat_kernel(
@@ -270,7 +295,7 @@ def endpoint_density(
     vertex_hemisphere,
     sigma: float,
     harmonics: int = NUM_HARMONICS,
-    normalize: str = "sum",
+    normalize: str | None = None,
     block: int = 4096,
 ):
     """Smooth streamline endpoints into a density with the spherical kernel.
@@ -334,6 +359,52 @@ def endpoint_density(
             @ columns(points_out[start:stop], hemisphere_out[start:stop]).T
         )
     return density + density.T
+
+
+def endpoint_positions(endpoints, surface=None):
+    """Continuous unit-sphere positions of each endpoint, as ``concon`` sees them.
+
+    ``concon`` centres a kernel on where the streamline actually crossed the
+    surface, not on the nearest vertex, so the file stores each crossing as a
+    triangle plus barycentric weights. This rebuilds the position from them.
+
+    Parameters
+    ----------
+    endpoints
+        :class:`Endpoints` carrying barycentric coordinates.
+    surface
+        The spherical grid mesh; loaded from the bundled surfaces if omitted.
+
+    Returns
+    -------
+    tuple of ndarray
+        ``(points_in, points_out)``, each ``(s, 3)`` on the unit sphere.
+    """
+    if not endpoints.has_positions:
+        raise MissingDataError(_NO_POSITIONS)
+    if surface is None:
+        from .surface import load_surface
+
+        surface = load_surface("sphere")
+    vertices = np.asarray(surface.vertices, dtype=np.float64)
+    faces = np.asarray(surface.faces, dtype=np.int64)
+    # Triangle indices are stored per hemisphere, so they need the same offset
+    # the vertex indices get. Take it from the mesh rather than a constant, so
+    # it stays right if the grid ever changes.
+    faces_per_hemi = faces.shape[0] // 2
+
+    def rebuild(triangle, bary, surf):
+        index = np.asarray(triangle, dtype=np.int64) + Endpoints.global_hemisphere_offset(
+            surf, faces_per_hemi
+        )
+        corners = vertices[faces[index]]  # (s, 3, 3)
+        point = np.einsum("sk,skj->sj", np.asarray(bary, dtype=np.float64), corners)
+        return point / np.linalg.norm(point, axis=1, keepdims=True)
+
+    return (
+        rebuild(endpoints.tri_in, endpoints.bary_in, endpoints.surf_in),
+        rebuild(endpoints.tri_out, endpoints.bary_out, endpoints.surf_out),
+    )
 
 
 def read_concon_endpoints(path):
@@ -624,6 +695,14 @@ _NO_ENDPOINTS = (
     "endpoints=... before saving."
 )
 
+_NO_POSITIONS = (
+    "The spherical kernel smooths from where each streamline actually crossed "
+    "the surface, so it needs the barycentric coordinates in the /endpoints "
+    "group, not only the nearest vertex. This file carries vertices alone. "
+    "Rebuild it with Endpoints.from_matlab('mesh_intersections_ico4.mat'), "
+    "which keeps them, or pass kernel='rdk'."
+)
+
 _NO_EIGENPAIRS = (
     "The {kernel} kernel needs the Laplace-Beltrami basis for the grid. Pass "
     "eigenpairs= as the directory holding EV_LBO_ds_ico4_L.mat and "
@@ -729,19 +808,25 @@ def smooth(connectome, kernel: str = "shk", bandwidth: float | None = None, eige
     """
     if kernel not in KERNELS:
         raise ValueError(f"kernel must be one of {KERNELS}, got {kernel!r}")
-    if kernel == "shk":
-        raise NotImplementedError(
-            "The spherical heat kernel is the default by decision "
-            "(SPEC_QUESTIONS.md item 10), because it is what produced the "
-            "released cohorts. The port of it reaches r = 0.978 against the "
-            "input the pipeline actually feeds its smoother, but a 20% "
-            "amplitude error remains, so it is not shipped yet "
-            "(PORTING.md item 6). The Riemannian diffusion kernel and the "
-            "Matern kernel are ported and verified: pass kernel='rdk' or "
-            "kernel='matern'."
-        )
     if getattr(connectome, "endpoints", None) is None:
         raise MissingDataError(_NO_ENDPOINTS)
+
+    if kernel == "shk":
+        sigma = DEFAULT_SIGMA if bandwidth is None else float(bandwidth)
+        points_in, points_out = endpoint_positions(connectome.endpoints)
+        from .grid import hemisphere_labels
+
+        density = endpoint_density(
+            _grid_vertices(connectome),
+            points_in,
+            points_out,
+            connectome.endpoints.surf_in,
+            connectome.endpoints.surf_out,
+            hemisphere_labels(connectome.n_vertices),
+            sigma=sigma,
+        )
+        return _finish(connectome, density, kernel, sigma)
+
     if eigenpairs is None:
         eigenpairs = find_basis()
     if eigenpairs is None:
@@ -763,7 +848,32 @@ def smooth(connectome, kernel: str = "shk", bandwidth: float | None = None, eige
         build(lam_right, vec_right, bandwidth),
     )
 
+    return _finish(connectome, density, kernel, bandwidth)
+
+
+def _grid_vertices(connectome) -> np.ndarray:
+    """Unit-sphere grid vertices: the file's own if it carries them."""
+    if getattr(connectome, "coords", None) is not None:
+        vertices = np.asarray(connectome.coords, dtype=np.float64)
+    else:
+        from .surface import load_surface
+
+        vertices = np.asarray(load_surface("sphere").vertices, dtype=np.float64)
+    return vertices / np.linalg.norm(vertices, axis=1, keepdims=True)
+
+
+def _finish(connectome, density: np.ndarray, kernel: str, bandwidth: float):
+    """Normalize a re-smoothed density and wrap it back into a connectome."""
     from .grid import to_condensed
+    from .metadata import Metadata
+
+    # The medial wall is deliberately NOT zeroed here. Neither reference masks:
+    # c3_main's own released output puts 0.87% of its mass on the wall, and the
+    # MATLAB rdk density does too. Masking would make this method diverge from
+    # both, and `test_smooth_method_matches_matlab` would stop holding. It does
+    # mean a re-smoothed density can fail the validator's mask check, which is
+    # a genuine conflict between the format and the reference -- see
+    # SPEC_QUESTIONS.md item 12.
 
     # The storage convention is the strict upper triangle, so self-connectivity
     # is dropped (SPEC_QUESTIONS.md item 2). Normalize after dropping it, or
@@ -775,8 +885,6 @@ def smooth(connectome, kernel: str = "shk", bandwidth: float | None = None, eige
     if mass <= 0:
         raise ValueError("the re-smoothed density has no positive area-weighted mass")
     density /= mass
-
-    from .metadata import Metadata
 
     fields = dict(connectome.metadata.fields)
     fields.update(kernel=kernel, bandwidth=float(bandwidth), normalization="unit-mass")

@@ -55,7 +55,7 @@ the data release exists.
 | `.plot(values, surface=...)` | implemented; inflated, white, pial and sphere bundled |
 | `.to_cifti(path)` | implemented; fsLR-32k dense connectome, 16.9 GB |
 | `sbci validate <file>` | implemented |
-| `.smooth(kernel=..., bandwidth=..., eigenpairs=...)` | implemented for `rdk` and `matern`; matches MATLAB to 3.25 float32-eps. Re-smooths from endpoints stored in the file, finding the Laplace-Beltrami basis via `$SBCI_LBO_DIR` if not passed. The default `shk` is withheld (PORTING.md item 6) |
+| `.smooth(kernel=..., bandwidth=..., eigenpairs=...)` | implemented for all three kernels. `shk` is the default and reproduces `concon` at r = 1.000000 across five subjects; `rdk` and `matern` match MATLAB to 3.25 float32-eps and find the Laplace-Beltrami basis via `$SBCI_LBO_DIR` (PORTING.md item 6) |
 | `.reduce(rank=K)` / `sbci.reduce(cc_list, rank=K)` | implemented; matches the MATLAB reference to float64 rounding (PORTING.md item 5) |
 | `sbci.align(cc_list, method="encore")` | implemented; geometry and template match MATLAB to float64 rounding, the registration to r = 0.99999979 (PORTING.md item 4) |
 | `sbci.stats.local_test(scores, design)` | implemented; **no reference exists**, so verified against `scipy.stats` and against the procedures' own guarantees (PORTING.md item 5) |

@@ -316,3 +316,58 @@ where `src/sbci/spec.py` currently carries a **provisional** value, marked
     `lh_grid_avg_0.94.vtk`, and that is just the data those demos ship with.
     ENCORE works on whatever spherical mesh it is handed, ico4 included, so
     there is nothing to decide before porting it.
+
+
+## 11. Which face list do stored triangle indices refer to?  **ANSWERED, and it was wrong**
+
+The optional `/endpoints` group stores `triangle_in` and `triangle_out`, a
+zero-based triangle index per hemisphere. Nothing in the spec said *which*
+face list those index, and the package shipped surfaces whose faces held the
+same 10,240 triangles in a different order from the pipeline grid's. Every
+stored index therefore resolved to an unrelated triangle -- a median 85 degrees
+away -- and nothing caught it, because no test ever resolved a stored index
+against the bundled mesh.
+
+It surfaced only when `smooth(kernel="shk")` was wired up and produced a
+density uncorrelated with the reference (r = 0.236 where the same kernel
+scores 1.000000 from continuous positions). Reordering the bundled faces to
+the grid's own order brought the rebuilt endpoints from 83.1 to 1.25 degrees
+of the positions `c3_main` was fed.
+
+**The convention, now fixed:** triangle indices refer to the face list of
+`?h_grid_avg_ico4.m` and its matching `.vtk`, which carry identical order --
+left hemisphere first, then right with 5,120 added. That list is what the
+bundled surfaces carry, all four sharing it, and
+`tests/test_surface.py::test_the_face_order_is_the_one_triangle_indices_mean`
+pins it by digest.
+
+**What WP1 owes:** this belongs in the written format spec, not only in a
+test. A file written by another implementation against a different face order
+would be silently wrong in exactly the way this package was.
+
+
+## 12. Must a re-smoothed file carry nothing on the medial wall?  **CONFLICT**
+
+The format says the medial wall carries no connectivity, and `sbci validate`
+enforces it. Neither reference produces such a file:
+
+| source | mass on the medial wall |
+| --- | --- |
+| `c3_main`'s released `smoothed_sc_avg_0.005_ico4.mat` | 0.868% of total |
+| MATLAB's `reference_density.mat` (rdk) | present |
+
+Streamlines really do terminate near the wall, and neither smoother discards
+them, so a density re-smoothed from stored endpoints inherits that mass and
+fails the validator -- even though it reproduces the reference exactly.
+
+`smooth()` therefore does **not** mask. Zeroing the wall inside it would break
+`test_smooth_method_matches_matlab`, which pins the rdk port to MATLAB at 3.25
+float32-eps, and would make the shk port diverge from `c3_main` too. Fidelity
+to the reference was judged worth more than the convenience of an output that
+validates unaided.
+
+**What WP1 owes:** a decision on where masking belongs. The options are to
+apply it on write (which makes a saved file diverge from what was computed),
+to apply it at import from the legacy `.mat` (where `tools/import_legacy.py`
+already could), or to relax the validator for re-smoothed files. Until then, a
+caller who needs a file that validates has to mask it themselves.

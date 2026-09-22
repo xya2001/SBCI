@@ -100,16 +100,20 @@ def test_shape_mismatch_is_caught_on_load(tmp_path, connectome):
         truncated._check_shapes()
 
 
-@pytest.mark.parametrize(
-    ("call", "pointer"),
-    [
-        (lambda cc: cc.smooth(), "PORTING.md item 6"),
-    ],
-)
-def test_pending_ports_say_what_is_missing(connectome, call, pointer):
-    """An unported method must name what has to happen, not just fail."""
-    with pytest.raises(NotImplementedError, match=pointer):
-        call(connectome)
+@pytest.mark.parametrize("kernel", ["shk", "rdk", "matern"])
+def test_no_kernel_is_a_placeholder(connectome, kernel):
+    """Every name in KERNELS has to be implemented, not a stub.
+
+    ``shk`` raised NotImplementedError for as long as the kernel concon
+    actually applies was unidentified. Now that all three are ported, the only
+    thing smoothing this connectome can complain about is that it carries no
+    endpoints -- so a NotImplementedError here means a regression, or a fourth
+    kernel added to the vocabulary before it was written.
+    """
+    from sbci.errors import MissingDataError
+
+    with pytest.raises(MissingDataError, match="endpoints"):
+        connectome.smooth(kernel=kernel)
 
 
 def test_coupling_validates_before_failing(connectome):
