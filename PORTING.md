@@ -377,7 +377,7 @@ diagonalization. A full `eigh` on the 5124-vertex grid would cost hours for a
 single vector. ARPACK is the library MATLAB's `eigs` itself calls, so the large
 case is if anything closer to the reference; the two paths agree to 5.3e-15.
 
-## 6. Spherical heat kernel -- PORTED, r = 0.978. CAUSE OF THE RESIDUAL FOUND
+## 6. Spherical kernel -- DONE, r = 1.000000 AT FULL SCALE
 
 - **From:** [`dcmoyer/concon`](https://github.com/dcmoyer/concon), C++, MIT.
   Invoked by `sbci_step5_structural.sh` as `c3_main Compute_Kernel --sigma
@@ -506,12 +506,70 @@ remove.
 streamlines where the released file used 1,001,877, so this port's density is
 sparser for that reason alone.)
 
-**Where that leaves shipping it.** `smooth(kernel="shk")` still raises. The
-cause is identified, measured, and confirmed to account for most of the
-residual. What remains is the exact taper -- and since `c3_main` runs and
-`tests/reference/concon_probe.py` recovers its kernel to whatever precision is
-wanted, that is now an ordinary curve-fitting job rather than an
-archaeological one.
+### The kernel, resolved
+
+There is no taper. `concon` is public MIT code and the binary's debug info
+names its files, so the kernel could be read rather than fitted.
+`sigma_opt.cpp` sums `exp(-sigma*l*(l+1)) * (2l+1) * harm_lookup[l][x]`, and
+`subject.cpp` fills that lookup with `sh::EvalSH(l, 0, 0, acos(x))` -- the
+*normalized* spherical harmonic `Y_l^0`, which already carries
+`sqrt((2l+1)/4pi)`. The two factors compound, so the weight is
+
+    (2l+1)^(3/2) / sqrt(4 pi)
+
+and **not** the heat kernel's `(2l+1)/(4pi)`. It looks like a Legendre
+polynomial was intended where a normalized harmonic was used. Intended or not,
+it produced every released cohort, so it is what this package reproduces. The
+extra `sqrt(2l+1)` upweights high degrees, which is the whole reason concon's
+kernel is so much narrower than a heat kernel -- and the reason the port's
+correlation sat at 0.978 for months.
+
+The term count is 33, degrees `l = 0..32`, fixed by measuring the binary's
+peak at five bandwidths rather than by reading: at sigma 0.01 and above the
+series has converged and the count cannot matter, and all candidates agree;
+below, they separate, and 33 tracks the binary to 0.06-0.1% where 32 drifts to
+4% and 34 overshoots. `--OPT_VAL_num_harm` is ignored either way.
+
+The cutoff does come from `--epsilon`: `compute_kernel.cpp` scans
+`x = cos(theta)` down from 1.0 in steps of 1e-4 and stops where the kernel
+first falls below it. The descent there is steep enough that 1e-6 to 0.1 all
+give the same angle, which is why sweeping the flag against the binary looked
+inert. `compute_kernel.cpp` also divides by the streamline count, which is why
+the normalizing block in `convert_raw.py` is commented out.
+
+### Full scale, all 1,001,877 endpoints
+
+Against what `c3_main` wrote for `sub-168S6561`, with the heat kernel the
+package used to implement as a control:
+
+| | shipped kernel | heat kernel |
+| --- | --- | --- |
+| correlation | **1.000000** | 0.981784 |
+| best scale | **0.99858** | 155.83 |
+| relative error after scaling | **0.00007** | 0.18980 |
+| relative error, no rescaling | **0.00142** | 0.99381 |
+| drift across distance bands | **1.000** | 1.756 |
+| ratio by band | **1.000 throughout** | 0.872 ... 0.497 |
+| non-zero pairs | 7,671,633 | 13,125,126 |
+
+against the released file's 7,664,821. The scale factor is 0.99858 with
+nothing fitted, where the old kernel needed 6.5 on this subject and 155.8 once
+the normalization by streamline count was applied correctly. Correlation is
+1.000000 over all 13,125,126 pairs.
+
+The port keeps 0.09% more pairs than `c3_main`, which is `--final_thold 1e-9`:
+the reference drops values below it and this port does not yet.
+
+### What this cost, and what it bought
+
+For most of this file's life the disagreement was recorded as a normalization
+or sampling convention, and three separate hypotheses -- bandwidth, spectral
+truncation, kernel thresholding -- were each tested and eliminated against the
+released matrix. None of them could have found it, because the released matrix
+is a million kernels summed together and is a weak instrument for inspecting
+one. What found it was running `c3_main` on a *single* streamline, where the
+output is the kernel itself; the weight was then confirmed from the source.
+`tests/reference/concon_probe.py` keeps that measurement reproducible.
 
 ### What the port gets right
 
