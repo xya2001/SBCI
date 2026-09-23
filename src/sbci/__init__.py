@@ -60,6 +60,10 @@ _LAZY: dict[str, str] = {
     "Alignment": "alignment",
     "Encore": "alignment",
     "Warp": "alignment",
+    "endpoints_align": "conseal",
+    "EndpointAlignment": "conseal",
+    "EndpointConnectome": "conseal",
+    "EndpointWarp": "conseal",
     "reduce": "reduction",
     "Reduction": "reduction",
     "fit_basis": "reduction",
@@ -81,6 +85,7 @@ _SUBMODULES: tuple[str, ...] = (
     "alignment",
     "atlas",
     "connectome",
+    "conseal",
     "coupling",
     "errors",
     "examples",
@@ -99,6 +104,7 @@ _SUBMODULES: tuple[str, ...] = (
 
 if TYPE_CHECKING:  # pragma: no cover - for type checkers only
     from .alignment import Alignment, Encore, Warp, align
+    from .conseal import EndpointAlignment, EndpointConnectome, EndpointWarp, endpoints_align
     from .coupling import structure_function_coupling
     from .examples import example
     from .parcellation import parcellate
@@ -149,6 +155,10 @@ __all__ = [
     "Alignment",
     "Encore",
     "Warp",
+    "endpoints_align",
+    "EndpointAlignment",
+    "EndpointConnectome",
+    "EndpointWarp",
     "reduce",
     "Reduction",
     "fit_basis",

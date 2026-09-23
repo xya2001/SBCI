@@ -375,6 +375,39 @@ Two things to know before trusting the numbers:
   2% of its range between adjacent step sizes. Pass `delta=1e-10` to reproduce
   the reference's conditioning exactly. PORTING.md item 4 has the measurements.
 
+## Aligning by endpoints (ConSEAL)
+ENCORE moves a smoothed density. ConSEAL moves the streamline endpoints
+themselves: each endpoint rides along with the warped triangle it fell in, the
+density is re-smoothed from where the endpoints now sit, and nothing is ever
+resampled. It needs files that store the endpoints with their barycentric
+positions (`cc.endpoints.has_positions`), which the pipeline's
+`mesh_intersections_ico4.mat` provides.
+```python
+import sbci
+subjects = [sbci.load(p) for p in paths]
+result = sbci.endpoints_align(subjects)        # the public code's defaults
+result.template                               # Karcher median, a square-root density
+result.costs[0]                               # the cost trace of subject 1
+result.warps[0].save("sub-001_conseal_warp.npz")
+aligned = result.aligned_endpoints(0)         # an Endpoints object: re-smooth it, count it
+```
+**This is a batch job too**, though a lighter one: the heat kernel at the
+published bandwidth has 89 nonzeros per row on ico4, so an iteration costs
+seconds per 100,000 streamlines rather than minutes. Three things to know:
+- **The defaults are the public code's, not the paper's.** Step 0.05, up to
+  100 iterations, threshold 1e-4, a 0.2 clamp on the largest displacement and
+  5% Laplacian smoothing of the velocity field every step. The paper's own
+  experiments were run from a fork without the clamp and smoothing, at step 0.1
+  and threshold 1e-6; `viscosity=0, step_clamp=float("inf"), delta=0.1,
+  threshold=1e-6` gives that update rule. PORTING.md item 7 explains the
+  lineage.
+- **Four errors in the reference are corrected by default.** Its gradient adds
+  a term in the wrong tangent frame and differentiates a differently
+  normalized kernel; a refused warp step still enters its velocity field; and
+  a rising cost is accepted as convergence. `strict_upstream=True` reproduces
+  all four, and does so to the digits of the MATLAB reference run.
+- **Rigid initialization is off by default**, as in the reference's own
+  example; `init_rotation=True` runs the multi-shell rotation search first.
 ## Writing the exchange file
 
 ```python

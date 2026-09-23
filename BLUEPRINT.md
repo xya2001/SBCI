@@ -102,7 +102,7 @@ ContinuousConnectome          the only object a user constructs
 ├── seed                      one vertex's or region's profile
 ├── coupling                  structure–function coupling
 ├── smooth                    re-smooth from endpoints
-├── reduce                    reduced-rank scores             [pending]
+├── reduce                    reduced-rank scores
 └── plot                      surface figure
 ```
 
@@ -116,8 +116,9 @@ src/sbci/
   parcellation.py  vertex → region aggregation            [ported]
   smoothing.py     the kernels                            [see section 7]
   coupling.py      the three SFC forms                    [ported, verified]
-  reduction.py     FPCA scores                            [not ported]
-  alignment.py     ENCORE                                 [not ported]
+  reduction.py     FPCA scores                            [ported, verified]
+  alignment.py     ENCORE                                 [ported, verified]
+  conseal.py       ConSEAL, endpoint alignment            [ported, verified]
   stats.py         local inference                        [no reference]
   atlas.py         44 bundled parcellations
   surface.py       bundled meshes

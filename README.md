@@ -58,6 +58,7 @@ the data release exists.
 | `.smooth(kernel=..., bandwidth=..., eigenpairs=...)` | implemented for all three kernels. `shk` is the default and reproduces `concon` at r = 1.000000 across five subjects; `rdk` and `matern` match MATLAB to 3.25 float32-eps and find the Laplace-Beltrami basis via `$SBCI_LBO_DIR` (PORTING.md item 6) |
 | `.reduce(rank=K)` / `sbci.reduce(cc_list, rank=K)` | implemented; matches the MATLAB reference to float64 rounding (PORTING.md item 5) |
 | `sbci.align(cc_list, method="encore")` | implemented; geometry and template match MATLAB to float64 rounding, the registration to r = 0.99999979 (PORTING.md item 4) |
+| `sbci.endpoints_align(cc_list)` | implemented; ConSEAL, which warps the streamline endpoints themselves. Every stage matches the public MATLAB to the single precision it carries; four errors in that reference are corrected by default and reproducible with `strict_upstream=True` (PORTING.md item 7) |
 | `sbci.stats.local_test(scores, design)` | implemented; **no reference exists**, so verified against `scipy.stats` and against the procedures' own guarantees (PORTING.md item 5) |
 | `sbci.example(modality="sc"\|"fc")` | implemented; synthetic connectivity on the real grid, passes `sbci validate` |
 | `sbci info <file>` | implemented; what a file holds, without opening Python |

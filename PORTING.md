@@ -405,9 +405,10 @@ case is if anything closer to the reference; the two paths agree to 5.3e-15.
   Invoked by `sbci_step5_structural.sh` as `c3_main Compute_Kernel --sigma
   ${BANDWIDTH} --epsilon 0.001 --final_thold 0.000000001 --OPT_VAL_num_harm 33
   --OPT_VAL_exp_num_kern_samps 6 --OPT_VAL_exp_num_harm_samps 5`.
-- **To:** not committed yet. See the verification below: against the correct
-  reference the port reaches **r = 0.978**, not the 0.65 this file reported for
-  most of its life. The 0.65 was measured against the wrong input.
+- **To:** `src/sbci/smoothing.py`, reached through `cc.smooth(kernel="shk")`.
+  Against the correct reference the port reaches **r = 1.00000000** at full
+  scale (see below); the 0.65 this file reported for most of its life was
+  measured against the wrong input.
 
 ### The verification that was missing, and now exists
 
@@ -822,6 +823,225 @@ Three parameters remain undocumented and unaccounted for: `--epsilon 0.001`,
 two imply ConCon evaluates by sampling rather than exactly, which a closed-form
 implementation would not reproduce. Whether the estimator is the plain kernel
 density estimate assumed here is also worth confirming with the author.
+
+## 7. ConSEAL -- DONE, VERIFIED AGAINST MATLAB; FOUR ERRORS IN THE REFERENCE, CORRECTED BY DEFAULT
+
+- **From:** the public MATLAB in [`MartyCole/Encore`](https://github.com/MartyCole/Encore)
+  at commit `27e4e7d` (`concons/SConcon.m`, `core/Concon.m`, `core/Encore.m`,
+  `core/SphericalWarp.m`, `core/SphericalGrid.m`, `kernels/SphericalHeatKernel.m`,
+  `mexfiles/aabb_mex.cpp`, `mexfiles/build_adjacency.cpp`,
+  `utils/create_search_schedule.m`, `utils/icosahedral_*.m`,
+  `analysis/get_dice_score.m`, `analysis/get_overlap_coefficient.m`), the
+  implementation behind Xiang, Cole and Zhang, *ConSEAL* (arXiv:2605.16742).
+- **To:** `src/sbci/conseal.py`, reached through `sbci.endpoints_align()`. The
+  MEX kernels are reimplemented (a centroid k-d tree replaces the libigl AABB
+  tree, the adjacency is a sparse scatter in float64), the kernel is kept
+  sparse, and the geometry (`SphericalGrid`, exponential and logarithm maps,
+  Voronoi areas, tangent basis) is shared with ENCORE in `alignment.py`.
+- **Reference run:** `tests/reference/conseal_reference.m` runs the public
+  code, CPU only, on a level-4 icosphere with three synthetic 40,000-streamline
+  subjects and dumps every intermediate; `conseal_compare.py` diffs the port
+  against it in `strict_upstream` mode.
+
+### The author's copies on Longleaf were checked first
+
+The request was to port the public code but to check `/users/x/y/xya/` for a
+newer version. Five copies exist there and in `~/ondemand`; none changes the
+public algorithm, but they do say which code the paper's numbers came from.
+
+| Copy | What it is | Differs from `27e4e7d` by |
+| --- | --- | --- |
+| `/users/x/y/xya/Encore_new` (June 13, 2026) | clone of `27e4e7d` | `use_GPU` defaults to `false`, `canUseGPU()` guard, the GPU flag passed through `apply_warp`. No algorithmic change. |
+| `/users/x/y/xya/Encore-main` (May 12) | earlier snapshot, CPU-only rewrite | `SConcon` stores triangle indices as `int32` (fixing item 6 below); `trace(Q Q_mu)` written as an elementwise sum; a plotting colormap; two data paths. Same mathematics. |
+| `/users/x/y/xya/Encore` (October 2025 lineage, edited to June 19, 2026) | the research fork the experiments were run in (`experiments/`, `accuracy_comparison_under_large_deformation/`, `MMD_kernel/`, `trait_predict/`) | a different algorithm: the derivative of `Q` is ENCORE's central difference through `ConConInterpolator`, not the analytic kernel derivative; warps compose directly on vertex positions (`compose_warp`), not through a stationary velocity field; no step clamp and no Laplacian smoothing; step 0.1 and threshold 1e-6, stopping on `abs(cost change)`; `F = K A K'` with a precomputed kernel. These are the paper's stated settings. |
+| `/users/x/y/xya/ConCon_Alignment`, `~/ondemand/data/encore` | the ENCORE reference of item 4 | not ConSEAL |
+
+So the paper describes the fork, and the public repository is a later
+refactor that introduced the stationary-velocity warp, the analytic
+derivative, the regularization -- and the errors below. This item ports the
+public code, as asked; `viscosity=0, step_clamp=inf, delta=0.1, threshold=1e-6`
+recovers the fork's update rule (not its finite-difference derivative).
+
+### What matches the MATLAB reference
+
+`conseal_compare.py` on the reference dump, port in `strict_upstream=True`
+mode, float64 against MATLAB's `single` kernels:
+
+| Stage | Agreement (max abs, relative to the largest entry) |
+| --- | --- |
+| Voronoi areas, frames, tangent basis, divergence | 3e-16 to 6e-15 (float64 rounding) |
+| heat kernel `K`, cutoff included | 4.1e-8 |
+| kernel derivatives `dK.x/y/z` | 1.3e-6 |
+| adjacency (float64 here, float32 there) | 2.0e-4 of the largest entry, 2.0e-9 absolute |
+| `F`, `F_e1`, `F_e2` | 9e-6, 2.9e-5, 3.1e-5 |
+| `Q`, `Q_e1`, `Q_e2` | 2.9e-5, 8.4e-5, 9.7e-5 |
+| gradient and step, both hemispheres | 6.1e-7, 6.6e-7 |
+| warp vertices after one composed step | 6.6e-10 |
+| velocity field, Jacobian | 1.6e-16, 3.7e-9 |
+| endpoints carried along by the warp | 2.9e-5 (single-precision coordinates in MATLAB) |
+| cost after one step | 0.102993884 against 0.102993876 |
+| cost trace, six registration iterations | 7e-8 to 4e-7 relative at every iteration |
+| Karcher-median template, five iterations | 2.1e-5 |
+
+Every stage agrees to the precision MATLAB carries it in. The two closest-point
+searches picked the same triangle for every one of 240,000 endpoints.
+
+### What was found in the reference
+
+The port reproduces all of these under `strict_upstream=True`; by default it
+corrects 1 to 4. Numbering matches the module docstring.
+
+1. **A gradient term in the wrong tangent frame.** `Concon.evaluate` forms
+   `Dx = dK A K'` and symmetrizes it, `Dx + Dx.'`, before projecting each row
+   onto that row's frame. The added term is the derivative of `F(a, c)` with
+   respect to the *other* vertex `c` -- a vector tangent at `c` -- dotted with
+   the frame at `a`. ENCORE's derivative is single-slot and its gradient
+   formula already doubles the first-slot term for the second slot;
+   `Encore.compute_gradient` kept the doubling, so the second slot is counted
+   once correctly and once nonsensically.
+2. **The derivative is of the wrong product.** `SConcon.evaluate` returns
+   `K~' A K~` with `K~` row-normalized (each source spreads unit mass, so `F`
+   sums to one), but `SphericalHeatKernel.build_derivative` differentiates
+   `K~` with respect to its row vertex with the normalization propagated, and
+   `Concon.evaluate` contracts it as `dK A K~'`: the derivative of `K~ A K~'`,
+   whose normalization sits on the evaluation side. The two coincide only
+   where the kernel's row sums are constant.
+3. **A refused step still enters the velocity field.** `SphericalWarp.compose`
+   adds the displacement and smooths it before testing for folded triangles;
+   when the test fails it keeps the field and discards only the vertices, so
+   field and vertices disagree from then on.
+4. **A cost increase is treated as convergence.** `Encore.register` stops when
+   `cost(iter) - cost(iter+1) < threshold`, which includes an increase; the
+   step that caused it is already composed and is what is returned. `Final
+   Cost` prints `cost(iter)`, the previous value. (The same family of defect
+   as item 4's second bug.)
+5. **The cost is a plain sum over vertex pairs.** The Voronoi integration
+   matrix `A` is built and never used. The gradient is the consistent gradient
+   of that plain sum, so this is a discretization choice and not a bug;
+   `area_weighted=True` weights both.
+6. **`int16` triangle indices** overflow once both hemispheres exceed 32,767
+   vertices, i.e. ico6 and finer. The author's `Encore-main` copy already uses
+   `int32`; the port uses `int64`.
+7. **The leave-one-out bandwidth score** subtracts `K(t_in,t_in) K(t_out,t_out)' / (M-1)`
+   as the streamline's own contribution, without its barycentric weights and
+   with `1/(M-1)` where the symmetrized adjacency uses `1/(2N)`. Bandwidth
+   selection only; the paper fixes `sigma = 0.005`.
+8. **Undocumented regularization.** The paper says none; the public code
+   smooths the velocity field by 5% of its cotangent Laplacian at every
+   composition and clamps the largest step to 0.2 (`compute_step_size`). The
+   fork has neither. Both are reproduced here because they are what the public
+   code does.
+9. `get_template` counts subjects with `size(Fs, 1)`, so a row cell array
+   silently uses one subject; and `acos(trace(Q Q_mu))` is taken without a
+   clip, which rounding above 1 turns complex in MATLAB.
+10. The shipped scripts do not run: `README.md`, `simulation.m` and
+    `real_data_registration.m` construct the abstract `Concon`;
+    `random_diffeomorphism.m` calls a `compose_warp` that does not exist;
+    `simulation.m` copies `lh_warp` where it means `rh_warp`.
+11. Kernels, frames and the adjacency are `single`; `build_adjacency.cpp`
+    accumulates a million outer products in float32.
+
+### The gradient, measured
+
+`tests/reference/conseal_gradient_probe.py` differentiates the *actual* cost --
+move every endpoint along a field, relocate, re-smooth, compare -- by central
+differences and sets it against the analytic coefficients `dE/dbeta_k` of the
+port and of the reference (`strict_upstream`). The kernel derivatives
+themselves are checked in `tests/test_conseal.py`: the port's matches a
+finite difference of `K~(i, x)` in the evaluation point to 1e-5, the strict
+one matches a finite difference of the reference's own definition to 1e-5,
+and the connectome derivative `D_e1` matches a finite difference of `F(x, c)`
+in `x` to 2e-4 of its range.
+
+Along each method's own descent direction, `dE/dt` by finite differences over
+the port's first-order prediction:
+
+| Grid, settings | port's direction | reference's direction | cosine between the two gradient fields (lh, rh) |
+| --- | --- | --- | --- |
+| ico2, sigma 0.05, degree 12, order 3, 3,000 streamlines | 0.955 | 0.961 | 0.964, 0.851 |
+| ico3, same, 20,000 streamlines | 1.083 | 1.077 | 0.861, 0.939 |
+| ico4, sigma 0.005, degree 30, order 15, 100,000 streamlines (the paper's) | 0.873 | 0.794 | 0.833, 0.747 |
+
+Both directions descend; the port's prediction of its own descent rate is
+within 13% on the paper's settings. Per coefficient the reference is
+unreliable: on ico4 its coefficients for the eight sampled basis fields are off
+by factors of 0.28 to 2.7 with two sign flips, against 0.25 to 2.1 for the port
+on the same fields (the transported-density model behind both is itself only
+first order on a mesh). The definitive measurement is the exact gradient of the
+discrete cost, all 510 left-hemisphere coefficients by finite differences:
+
+| Quantity | port | reference |
+| --- | --- | --- |
+| cosine with the exact gradient, all 510 coefficients | **0.931** | 0.678 |
+| cosine on the 20 largest exact coefficients | 0.996 | 0.941 |
+| norm, relative to the exact gradient | 1.050 | 0.753 |
+| descent efficiency: first-order decrease per unit step, as a fraction of the exact gradient's | 0.931 | 0.678 |
+
+(ico4, sigma 0.005, degree 30, order 15, 100,000 streamlines per subject;
+1,020 cost evaluations, 83 minutes on 8 cores.) The port's gradient is the
+gradient of the cost up to the transported-density approximation and the
+mesh; the reference's points 47 degrees away from it and buys two thirds of
+the decrease per step. Both descend, which is why the reference works at all:
+its large components are right (cosine 0.94 on the twenty largest) and its
+errors live in the smaller ones.
+
+### On ico4, real data
+
+`tests/reference/conseal_adni_ico4.py` aligns three ADNI subjects
+(`sub-168S6561`, `sub-068S0473`, `sub-002S0413`: 1,001,877, 1,034,758 and
+937,465 streamlines) from their `mesh_intersections_ico4.mat` at the public
+defaults, on 8 cores:
+
+| | sub-168S6561 | sub-068S0473 | sub-002S0413 |
+| --- | --- | --- | --- |
+| cost, initial to final | 0.07128 to 0.05616 (-21.2%) | 0.05210 to 0.04193 (-19.5%) | 0.07049 to 0.05548 (-21.3%) |
+| iterations to the 1e-4 threshold | 29 | 20 | 27 |
+| refused steps | 0 | 0 | 0 |
+| cost trace monotone | yes | yes | yes |
+| Jacobian range | 0.37 to 2.06 | 0.56 to 1.78 | 0.49 to 1.77 |
+| distance to the template, before to after | 0.268 to 0.238 | 0.229 to 0.205 | 0.266 to 0.236 |
+
+Pairwise distances between the subjects' square-root densities fall from
+0.433, 0.453 and 0.432 to 0.380, 0.400 and 0.385; endpoint-overlap
+coefficients at a density threshold of 1e-4 rise from 0.761, 0.775 and 0.798
+to 0.777, 0.786 and 0.802. The heat kernel at the published bandwidth has 89
+nonzeros per row (cutoff 21.5 degrees); loading and locating three million
+endpoints took 16 s and the template plus three registrations 1,616 s
+together, about 21 s per iteration for a million streamlines. Every Jacobian
+is positive and no step was refused, so the fold check never fired. The warps
+and the aligned endpoints are in `/work/users/x/y/xya/conseal-ref/`.
+
+### How to run it
+
+```python
+import sbci
+subjects = [sbci.load(p) for p in paths]           # files that carry endpoints with positions
+result = sbci.endpoints_align(subjects)             # the public code's defaults
+result.warps[0].save("sub-001_conseal_warp.npz")
+aligned = result.aligned_endpoints(0)               # an Endpoints object, ready to re-smooth
+```
+
+`strict_upstream=True` reproduces the reference to the digits above;
+`init_rotation=True` adds the multi-shell rigid search (its schedule is
+regenerated from `create_search_schedule.m`, 80/20/20/20/16 rotations, and the
+60 symmetries are found on any icosphere orientation rather than assumed).
+On ico4 an iteration costs a few seconds per 100,000 streamlines: the kernel
+has 89 nonzeros per row at the published bandwidth (cutoff 21.5 degrees), so
+`K' A K` is a sparse sandwich, and relocating the endpoints is a k-d-tree
+query.
+
+### Still open
+
+- The port follows the public code. Reproducing the paper's experiments
+  exactly would need the fork's finite-difference derivative and direct warp
+  composition, which are ENCORE's machinery (`alignment.py`) driving endpoint
+  transport; wiring that combination is a small job if it is wanted.
+- The rigid search's cost surface is interpolated on the grid; on ico2 it
+  lands a few degrees from a known rotation (test tolerance 0.12 rad). On ico4
+  this is a fraction of a degree but has not been measured against a known
+  rotation on real data.
+- Bandwidth cross-validation is ported in both forms and untested against
+  MATLAB, since the paper does not use it.
 
 ## Suggested order
 
