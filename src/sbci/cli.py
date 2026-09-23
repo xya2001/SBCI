@@ -64,6 +64,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         path = connectome.save(args.out or f"sub-example_{args.modality}.h5")
         print(f"wrote {path}")
         print("  synthetic connectivity on the real ico4 grid -- not measured data")
+        if connectome.has_endpoints:
+            print(
+                f"  carries {connectome.endpoints.n_streamlines:,} synthetic streamline "
+                "endpoints, so smooth() and endpoints_align() run on it"
+            )
         return 0
 
     if args.command == "atlases":

@@ -76,7 +76,72 @@ def test_it_passes_the_validator(modality, tmp_path):
 def test_the_metadata_says_it_is_synthetic(sc):
     """Someone must never mistake this for measured data."""
     assert "synthetic" in sc.metadata.fields["pipeline_version"]
-    assert sc.metadata.fields["streamline_count"] == 0
+    assert sc.metadata.fields["streamline_count"] == sbci.examples.N_STREAMLINES
+    assert "drawn at random" in sc.metadata.fields["streamline_weighting"]
+    assert sc.metadata.fields["kernel"] == "shk" and sc.metadata.fields["bandwidth"] == 0.005
+
+
+def test_sc_carries_synthetic_endpoints_that_end_in_cortex(sc):
+    """Every endpoint has a continuous position, none of them on the medial wall."""
+    endpoints = sc.endpoints
+    assert sc.has_endpoints and endpoints.has_positions
+    assert endpoints.n_streamlines == sbci.examples.N_STREAMLINES
+    for vertex in (endpoints.global_vertex_in, endpoints.global_vertex_out):
+        assert sc.mask[vertex].all()
+    half = sc.n_vertices // 2
+    np.testing.assert_array_equal(endpoints.surf_in, endpoints.global_vertex_in >= half)
+    np.testing.assert_array_equal(endpoints.surf_out, endpoints.global_vertex_out >= half)
+    crossing = np.mean(endpoints.surf_in != endpoints.surf_out)
+    assert 0.15 < crossing < 0.25  # about a fifth of the streamlines cross hemispheres
+
+
+def test_re_smoothing_the_endpoints_gives_the_file_back(sc):
+    """The density *is* the default kernel applied to the endpoints, so smooth() reproduces it."""
+    again = sc.smooth(kernel="shk", mask_medial_wall=True)
+    np.testing.assert_array_equal(again.data, sc.data)
+    assert again.metadata.fields["bandwidth"] == sc.metadata.fields["bandwidth"]
+
+
+def test_the_endpoints_survive_the_file(sc, tmp_path):
+    """The file stores barycentric weights as float32; the example is built from float32 weights."""
+    path = tmp_path / "sub-example_sc.h5"
+    sc.save(path)
+    back = sbci.load(path)
+    assert back.has_endpoints and back.endpoints.n_streamlines == sc.endpoints.n_streamlines
+    np.testing.assert_array_equal(back.endpoints.bary_in, sc.endpoints.bary_in)
+    np.testing.assert_array_equal(back.endpoints.global_vertex_out, sc.endpoints.global_vertex_out)
+    np.testing.assert_array_equal(back.smooth(kernel="shk", mask_medial_wall=True).data, sc.data)
+
+
+def test_fc_carries_no_endpoints(fc):
+    assert not fc.has_endpoints
+
+
+def test_the_streamline_count_is_a_parameter():
+    cc = sbci.example(n_streamlines=500)
+    assert cc.endpoints.n_streamlines == 500 and cc.metadata.fields["streamline_count"] == 500
+    with pytest.raises(ValueError, match="n_streamlines"):
+        sbci.example(n_streamlines=0)
+
+
+def test_repeated_calls_hand_out_independent_copies():
+    first, second = sbci.example(seed=5, n_streamlines=200), sbci.example(seed=5, n_streamlines=200)
+    np.testing.assert_array_equal(first.data, second.data)
+    first.data[0] = 1.0
+    first.endpoints.vtx_in[0] = -1
+    assert second.data[0] != 1.0 and second.endpoints.vtx_in[0] != -1
+
+
+def test_two_examples_can_be_aligned_by_their_endpoints():
+    """The ConSEAL line of the README runs on the synthetic subjects."""
+    subjects = [sbci.example(seed=s, n_streamlines=2000) for s in (0, 1)]
+    result = sbci.endpoints_align(subjects, template=0, max_iterations=1)
+    assert len(result.warps) == 2 and result.template.shape == (sc_vertices(), sc_vertices())
+    assert result.costs[1][-1] <= result.costs[1][0]
+
+
+def sc_vertices():
+    return sbci.spec.N_VERTICES
 
 
 def test_an_unknown_modality_is_refused():

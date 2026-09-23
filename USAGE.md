@@ -201,6 +201,9 @@ all the reference itself carries. Takes 4.4 s for both hemispheres.
 A structural file can carry the streamline endpoints it was built from, in an
 optional `/endpoints` group. Without them a connectome is a finished product;
 with them it can be re-smoothed at another bandwidth or with another kernel.
+`sbci.example()` carries 20,000 synthetic ones, so
+`sbci.example().smooth(kernel="shk", mask_medial_wall=True)` runs anywhere and
+gives the example back; the rest of this section is about real files.
 
 ```python
 from sbci import ContinuousConnectome
@@ -395,6 +398,9 @@ result.costs[0]                               # the cost trace of subject 1
 result.warps[0].save("sub-001_conseal_warp.npz")
 aligned = result.aligned_endpoints(0)         # an Endpoints object: re-smooth it, count it
 ```
+Without lab data, two synthetic subjects will do:
+`sbci.endpoints_align([sbci.example(seed=0), sbci.example(seed=1)], max_iterations=5)`
+takes about a minute on four cores, and both costs fall at every step.
 **This is a batch job too**, though a lighter one: the heat kernel at the
 published bandwidth has 89 nonzeros per row on ico4, so an iteration costs
 seconds per 100,000 streamlines rather than minutes. Three things to know:

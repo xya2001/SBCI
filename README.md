@@ -60,7 +60,7 @@ the data release exists.
 | `sbci.align(cc_list, method="encore")` | implemented; geometry and template match MATLAB to float64 rounding, the registration to r = 0.99999979 (PORTING.md item 4) |
 | `sbci.endpoints_align(cc_list)` | implemented; ConSEAL, which warps the streamline endpoints themselves. Every stage matches the public MATLAB to the single precision it carries; four errors in that reference are corrected by default and reproducible with `strict_upstream=True` (PORTING.md item 7) |
 | `sbci.stats.local_test(scores, design)` | implemented; **no reference exists**, so verified against `scipy.stats` and against the procedures' own guarantees (PORTING.md item 5) |
-| `sbci.example(modality="sc"\|"fc")` | implemented; synthetic connectivity on the real grid, passes `sbci validate` |
+| `sbci.example(modality="sc"\|"fc")` | implemented; synthetic connectivity on the real grid, smoothed from 20,000 synthetic streamline endpoints it carries, so `smooth()` and `endpoints_align()` run on it; passes `sbci validate` |
 | `sbci info <file>` | implemented; what a file holds, without opening Python |
 | `sbci example --out <file>` | implemented; writes a file to try the package on |
 | `sbci atlases [--match ...]` | implemented; lists the bundled atlases and their region counts |
@@ -74,14 +74,20 @@ import sbci
 cc = sbci.example()                  # synthetic, on the real ico4 grid
 cc.to_atlas("Schaefer200").shape     # (200, 200)
 cc.plot(cc.seed(vertex=1234))
+cc.smooth(kernel="shk", mask_medial_wall=True)     # re-smooths its 20,000 endpoints: gives cc back
+sbci.endpoints_align([cc, sbci.example(seed=1)], max_iterations=5)   # ConSEAL on two synthetic subjects
 ```
 
 The grid, the vertex areas, the medial-wall mask and the file format are real;
-the connectivity is generated from smooth bumps on the sphere. A file written
-this way passes every `sbci validate` check, so it is a faithful subject for
-learning the API, writing tests and checking a plotting stack -- and never a
-basis for a claim about brains. Its metadata records `pipeline_version` as
-`synthetic-example` and `streamline_count` as zero.
+the connectivity is generated: 20,000 streamline endpoints drawn at random
+around smooth bumps on the sphere, kept only where they land in cortex, and
+smoothed with the default kernel exactly as `smooth()` does it. The example
+carries those endpoints, so re-smoothing and ConSEAL have something to work on
+without lab data. A file written this way passes every `sbci validate` check,
+so it is a faithful subject for learning the API, writing tests and checking a
+plotting stack -- and never a basis for a claim about brains. Its metadata
+records `pipeline_version` as `synthetic-example` and says the endpoints were
+drawn, not tracked.
 
 ## Getting around the package
 

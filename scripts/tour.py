@@ -130,14 +130,22 @@ for label, call in (
     ("load_surface('nonesuch')", lambda: load_surface("nonesuch")),
     ("sc.seed()", lambda: sc.seed()),
     ("sc.coupling(sc)", lambda: sc.coupling(sc)),
-    ("sc.smooth(kernel='rdk')", lambda: sc.smooth(kernel="rdk")),
+    ("sc.smooth(kernel='nonesuch')", lambda: sc.smooth(kernel="nonesuch")),
 ):
     try:
         call()
     except (sbci.SbciError, ValueError) as exc:
         first = str(exc).split(".")[0]
-        print(f"  {label:26s} {type(exc).__name__}")
-        print(f"  {'':26s} {first[:78]}...")
+        print(f"  {label:28s} {type(exc).__name__}")
+        print(f"  {'':28s} {first[:78]}...")
+
+if sc.has_endpoints:
+    # The example carries synthetic endpoints, so the default kernel has
+    # something to re-smooth; the file it gives back is the one we loaded.
+    again = sc.smooth(kernel="shk", mask_medial_wall=True)
+    gap = np.abs(again.data - sc.data).max()
+    print("\n  sc.smooth(kernel='shk', mask_medial_wall=True) reproduces the file:")
+    print(f"  {sc.endpoints.n_streamlines:,} endpoints, max |difference| {gap:.3g}")
 
 heading("10. THE KERNEL MATHS, USABLE DIRECTLY")
 from sbci.smoothing import kappa_candidates, load_eigenpairs

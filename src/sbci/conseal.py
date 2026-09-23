@@ -381,13 +381,17 @@ class EndpointConnectome:
         ``build_adjacency.cpp`` followed by ``(A + A') / (2N)``, accumulated in
         float64 rather than the reference's float32.
         """
+        return self._sparse_adjacency().toarray()
+
+    def _sparse_adjacency(self):
+        """:meth:`adjacency` as a CSR matrix: 18 entries per streamline at most."""
         from scipy import sparse
 
         n = self.n_vertices
         rows = np.repeat(self.index_in, 3, axis=1).ravel()
         cols = np.tile(self.index_out, (1, 3)).ravel()
         vals = (self.weights_in[:, :, None] * self.weights_out[:, None, :]).reshape(-1)
-        adjacency = sparse.coo_matrix((vals, (rows, cols)), shape=(n, n)).toarray()
+        adjacency = sparse.coo_matrix((vals, (rows, cols)), shape=(n, n)).tocsr()
         return (adjacency + adjacency.T) / (2.0 * max(self.n_streamlines, 1))
 
     def evaluate(self, kernel, derivative=None, strict_upstream: bool = False):
@@ -402,15 +406,28 @@ class EndpointConnectome:
         ``compute(..., strict_upstream=True)`` as well.
         """
         kernel = _as_sparse(kernel)
-        adjacency = self.adjacency()
-        ak = np.asarray((kernel.T @ adjacency).T)  # A K, since A is symmetric
-        connectome = np.asarray(kernel.T @ ak)
+        adjacency = self._sparse_adjacency()
+        n = self.n_vertices
+        # A has at most 18 entries per streamline, so with few streamlines A K
+        # stays sparse and two sparse products beat four passes of the kernel
+        # over a dense n x n matrix; with a subject's million streamlines A is
+        # dense and the dense route is the cheaper one.
+        few = not strict_upstream and adjacency.nnz * kernel.nnz < SPARSE_PRODUCT_FRACTION * n**3
+        if few:
+            ak = (adjacency @ kernel).tocsc()  # A K, since A is symmetric
+            connectome = (kernel.T @ ak).toarray()
+        else:
+            dense = adjacency.toarray()
+            # (K^T A)^T is A K but Fortran-ordered; make it contiguous once
+            # rather than letting each sparse product copy it.
+            ak = np.ascontiguousarray((kernel.T @ dense).T)
+            connectome = np.asarray(kernel.T @ ak)
         np.maximum(connectome, 0.0, out=connectome)
         if derivative is None:
             return connectome
 
         if strict_upstream:
-            akt = np.asarray((kernel @ adjacency).T)  # A K^T
+            akt = np.asarray((kernel @ dense).T)  # A K^T
             parts = []
             for d in (derivative.x, derivative.y, derivative.z):
                 part = np.asarray(d @ akt)
@@ -427,6 +444,8 @@ class EndpointConnectome:
         axes = (derivative.x, derivative.y, derivative.z)
         m1 = sum(d @ sparse.diags(e) for d, e in zip(axes, self.e1.T, strict=True))
         m2 = sum(d @ sparse.diags(e) for d, e in zip(axes, self.e2.T, strict=True))
+        if few:
+            return connectome, (m1.T @ ak).toarray(), (m2.T @ ak).toarray()
         return connectome, np.asarray(m1.T @ ak), np.asarray(m2.T @ ak)
 
     def q_transform(self, kernel, derivative=None, strict_upstream: bool = False):
@@ -444,8 +463,12 @@ class EndpointConnectome:
         if strict_upstream:
             scale = 1.0 / (2.0 * np.maximum(q, 1e-15))
         else:
-            scale = np.where(connectome > 0, 0.5 / np.maximum(q, 1e-300), 0.0)
-        return q, scale * d_e1, scale * d_e2
+            scale = np.divide(0.5, q, out=np.zeros_like(q), where=q > 0)
+        # d_e1 and d_e2 are fresh arrays from evaluate(): scale them in place
+        # rather than allocating two more n x n matrices.
+        d_e1 *= scale
+        d_e2 *= scale
+        return q, d_e1, d_e2
 
     # -- warping -------------------------------------------------------------------
 
@@ -996,6 +1019,13 @@ def mesh_symmetries(vertices, faces, tolerance: float = 1e-3):
         permutations.append(np.argsort(image))  # perm[j] = the vertex that lands on j
     return rotations, np.stack(permutations)
 
+
+#: :meth:`EndpointConnectome.evaluate` keeps the adjacency sparse while
+#: ``nnz(A) * nnz(K) / n``, an upper bound on the entries of ``A K``, is below
+#: this fraction of ``n^2``. On ico4 at the published bandwidth that is about
+#: 5,000 streamlines; a subject's million make ``A K`` dense, and the dense
+#: route is then the faster one.
+SPARSE_PRODUCT_FRACTION = 0.3
 
 _SHELLS: list | None = None
 

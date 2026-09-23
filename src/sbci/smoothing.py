@@ -816,6 +816,16 @@ class Endpoints:
         """Whether continuous positions are available, not only vertices."""
         return self.bary_in is not None and self.bary_out is not None
 
+    def copy(self) -> Endpoints:
+        """An independent copy of every array."""
+        from dataclasses import fields as dataclass_fields
+
+        values = {}
+        for item in dataclass_fields(self):
+            value = getattr(self, item.name)
+            values[item.name] = value.copy() if isinstance(value, np.ndarray) else value
+        return Endpoints(**values)
+
     @property
     def global_vertex_in(self) -> np.ndarray:
         """Endpoint vertices as indices into the whole 5124-vertex grid.
