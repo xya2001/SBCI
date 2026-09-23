@@ -582,7 +582,8 @@ the normalization by streamline count was applied correctly. Correlation is
 
 The port kept 0.09% more pairs than `c3_main` until `apply_final_threshold`
 reproduced `--final_thold 1e-9`, the per-streamline value below which the
-reference writes nothing; 0.08% remain, at that threshold's boundary.
+reference writes nothing; what remains (+0.071%) sits on the kernel's cutoff
+boundary -- *Shipping it*, below.
 
 ### Shipping it
 

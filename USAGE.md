@@ -262,8 +262,8 @@ the heat kernel its name suggests: `concon` compounds a `(2l+1)` weight with a
 normalized spherical harmonic, giving `(2l+1)^(3/2)`, and it has compact
 support at about `2.9*sqrt(sigma)` radians. The 0.14% amplitude offset the
 closed form carried was the binary's lookup-table quantization, and the tables
-are now reproduced; what remains is 0.08% more non-zero pairs at the boundary
-of `--final_thold` (1e-9 per streamline), identical across subjects. A full subject takes about a
+are now reproduced; what remains is 0.071% more non-zero pairs, where one ULP
+in a dot product moves a vertex across the kernel cutoff (PORTING.md item 6). A full subject takes about a
 minute. See PORTING.md item 6.
 
 A re-smoothed density can carry mass on the medial wall, exactly as both

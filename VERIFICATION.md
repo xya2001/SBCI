@@ -233,8 +233,8 @@ streamline so that its output is the kernel: `tests/reference/concon_probe.py`
 regenerates that measurement, and `tests/test_smoothing.py` pins the kernel to
 the binary's own numbers at rms 0.0005.
 
-One residual remains, reproducible across subjects: 0.08% more non-zero pairs,
-at the boundary of the binary's `--final_thold` (1e-9 per streamline). The 0.14%
+One residual remains: 0.071% more non-zero pairs, where one ULP in a dot
+product moves a vertex across the kernel cutoff (PORTING.md item 6). The 0.14%
 amplitude offset an earlier version carried was the binary's lookup-table quantization
 and is reproduced. A reviewer can re-run the five-subject comparison from
 PORTING.md item 6; it needs the lab data and about a minute per subject.
