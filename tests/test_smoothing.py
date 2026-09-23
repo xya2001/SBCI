@@ -739,3 +739,135 @@ def test_resmoothing_leaves_the_medial_wall_as_the_reference_does():
     assert float(connectome.area @ result.astype(np.float64) @ connectome.area) == pytest.approx(
         1.0, rel=1e-6
     )
+
+
+def test_the_quantized_kernel_reproduces_the_binarys_peak_entry_exactly():
+    """c3_main reads the kernel through two truncation-indexed lookup tables.
+
+    On a single streamline its peak entry is K(dot_1) * K(dot_2) with one dot
+    rounding into the exact x = 1.0 bucket and the other one truncation step
+    below. The measured peaks were 270.1035 at sigma 0.005 and 1005.4661 at
+    0.00125; the geometric mean of the two buckets has to give them back. The
+    exact series cannot: it is 0.06% high at the peak, which is the 0.14%
+    amplitude offset the densities used to carry.
+    """
+    from sbci.smoothing import concon_kernel_table
+
+    for sigma, measured in ((0.005, 270.1035), (0.00125, 1005.4661), (0.02, 48.3245)):
+        table = concon_kernel_table(sigma)
+        peak = float(np.sqrt(table(1.0) * table(1.0 - 1e-12)))
+        assert peak == pytest.approx(measured, rel=2e-5), (sigma, peak, measured)
+
+
+def test_quantized_and_exact_kernels_differ_only_by_the_table_bias():
+    from sbci.smoothing import spherical_heat_kernel
+
+    cosine = np.cos(np.radians(np.linspace(0.0, 11.5, 50)))
+    quantized = spherical_heat_kernel(cosine, 0.005)
+    exact = spherical_heat_kernel(cosine, 0.005, quantized=False)
+    ratio = quantized / exact
+    assert np.all(ratio <= 1.0 + 1e-12), "truncation only ever rounds the kernel down"
+    assert ratio.min() > 0.995, "and by well under one percent"
+
+
+def test_quantized_and_exact_share_the_cutoff():
+    from sbci.smoothing import concon_kernel_table, kernel_cutoff
+
+    for sigma in (0.0025, 0.005, 0.01):
+        assert concon_kernel_table(sigma).cutoff == pytest.approx(kernel_cutoff(sigma), abs=2e-4)
+
+
+def test_sparse_density_matches_dense():
+    """The KD-tree path has to give the dense evaluation's answer, not an approximation."""
+    from sbci.grid import hemisphere_labels
+    from sbci.smoothing import endpoint_density
+    from sbci.surface import load_surface
+
+    sphere = load_surface("sphere")
+    vertices = np.asarray(sphere.vertices, float)
+    vertices /= np.linalg.norm(vertices, axis=1, keepdims=True)
+    hemi = hemisphere_labels(vertices.shape[0])
+    rng = np.random.default_rng(0)
+    count = 600
+    p_in = rng.normal(size=(count, 3))
+    p_in /= np.linalg.norm(p_in, axis=1, keepdims=True)
+    p_out = rng.normal(size=(count, 3))
+    p_out /= np.linalg.norm(p_out, axis=1, keepdims=True)
+    h_in = rng.integers(0, 2, count)
+    h_out = rng.integers(0, 2, count)
+
+    dense = endpoint_density(
+        vertices, p_in, p_out, h_in, h_out, hemi, 0.005, method="dense", block=256
+    )
+    sparse = endpoint_density(
+        vertices, p_in, p_out, h_in, h_out, hemi, 0.005, method="sparse", block=256
+    )
+    assert dense.max() > 0
+    np.testing.assert_allclose(sparse, dense, rtol=0, atol=1e-9 * dense.max())
+
+
+def test_progress_callback_reports_every_block():
+    from sbci.grid import hemisphere_labels
+    from sbci.smoothing import endpoint_density
+    from sbci.surface import load_surface
+
+    sphere = load_surface("sphere")
+    vertices = np.asarray(sphere.vertices, float)
+    vertices /= np.linalg.norm(vertices, axis=1, keepdims=True)
+    hemi = hemisphere_labels(vertices.shape[0])
+    rng = np.random.default_rng(1)
+    pts = rng.normal(size=(100, 3))
+    pts /= np.linalg.norm(pts, axis=1, keepdims=True)
+    seen = []
+    endpoint_density(
+        vertices,
+        pts,
+        pts[::-1],
+        np.zeros(100, int),
+        np.zeros(100, int),
+        hemi,
+        0.005,
+        block=30,
+        progress=lambda done, total: seen.append((done, total)),
+    )
+    assert seen == [(30, 100), (60, 100), (90, 100), (100, 100)]
+
+
+def test_mask_medial_wall_option_zeroes_the_wall_and_keeps_unit_mass():
+    """The caller can choose the format's side of SPEC_QUESTIONS item 14."""
+    from sbci.grid import to_dense
+    from sbci.smoothing import _finish
+
+    n = 8
+    rng = np.random.default_rng(0)
+    dense = rng.random((n, n))
+    dense = dense + dense.T
+    mask = np.ones(n, dtype=bool)
+    mask[[2, 5]] = False
+
+    class Fake:
+        def __init__(self, data, area, mask, metadata, coords, endpoints):
+            self.data, self.area, self.mask = data, area, mask
+            self.metadata, self.coords, self.endpoints = metadata, coords, endpoints
+
+    connectome = Fake(None, np.full(n, 1.0 / n), mask, metadata_template("sc"), None, None)
+    out = to_dense(_finish(connectome, dense.copy(), "shk", 0.005, mask_medial_wall=True).data, n)
+    assert float(np.abs(out[~mask]).sum()) == 0.0 and float(np.abs(out[:, ~mask]).sum()) == 0.0
+    assert float(connectome.area @ out.astype(np.float64) @ connectome.area) == pytest.approx(
+        1.0, rel=1e-6
+    )
+
+
+def test_final_threshold_matches_compute_kernel_cpp():
+    """`if(temp > final_thold)` on the per-streamline scale, nothing else."""
+    from sbci.smoothing import FINAL_THRESHOLD, apply_final_threshold
+
+    assert FINAL_THRESHOLD == 1e-9, "--final_thold 0.000000001"
+    n = 1_000_000
+    density = np.array(
+        [[0.0, 2e-9 * n, 1e-9 * n], [2e-9 * n, 0.0, 0.5e-9 * n], [1e-9 * n, 0.5e-9 * n, 0.0]]
+    )
+    out = apply_final_threshold(density.copy(), n)
+    assert out[0, 1] == 2e-9 * n, "above the threshold survives"
+    assert out[0, 2] == 0.0, "exactly at the threshold is dropped: the test is strictly greater"
+    assert out[1, 2] == 0.0, "below is dropped"

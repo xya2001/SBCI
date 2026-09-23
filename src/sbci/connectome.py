@@ -240,8 +240,12 @@ class ContinuousConnectome:
         kernel: str = "shk",
         bandwidth: float | None = None,
         eigenpairs: Any = None,
+        **kwargs: Any,
     ):
         """Re-smooth from the stored endpoints, in congruence form ``K A K^T``.
+
+        Extra keyword arguments -- ``mask_medial_wall``, ``progress`` -- pass
+        through to :func:`sbci.smoothing.smooth`.
 
         Returns a new :class:`ContinuousConnectome` carrying the same endpoints
         and metadata, with ``kernel`` and ``bandwidth`` updated to what was
@@ -270,7 +274,7 @@ class ContinuousConnectome:
         """
         from .smoothing import smooth as _smooth
 
-        return _smooth(self, kernel=kernel, bandwidth=bandwidth, eigenpairs=eigenpairs)
+        return _smooth(self, kernel=kernel, bandwidth=bandwidth, eigenpairs=eigenpairs, **kwargs)
 
     def reduce(self, rank: int, **kwargs):
         """Rank-``rank`` separable approximation of this one connectome.

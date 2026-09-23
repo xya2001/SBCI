@@ -599,13 +599,42 @@ caught, because none of its tests had barycentric endpoints:
    triangles, and every index resolved about 85 degrees from where it should.
    This was latent in the format handling long before the kernel was touched.
 
-Two residuals remain against `c3_main`, both reproducible to five digits
-across all five subjects, so both are conventions rather than noise: a
-**0.142% amplitude offset** -- the kernel's peak is 0.06% high and the density
-is a product of two kernels -- and **0.08% more non-zero pairs**, at the cutoff
-boundary. Neither is the float-rounding agreement the MATLAB ports reach, and
-they cannot be, since this compares against a C++ binary with its own harmonic
-library rather than against MATLAB running the same algorithm.
+**The 0.142% amplitude offset is explained and removed.** `c3_main` never
+evaluates the series at a point. `compute_kernel.cpp` reads
+`kern_lookup_table[(int)(dot * M + M)]`, a table of `2M+1` values with
+`M = 10^6` (`subject.cpp`: `num_kern_samps = pow(10, exp_num_kern_samps)`),
+and that table was filled by reading `harm_lookup_table[l][(int)(x * L + L)]`
+with `L = 10^5`. Both reads truncate toward the sample at or below the true
+cosine -- a slightly larger angle, a slightly smaller kernel -- and the bias
+grows with `l(l+1)`, which is exactly the bandwidth trend the exact series
+showed (0.99877 at sigma 0.00125 rising to 0.99985 at 0.02). Reproducing the
+tables reproduces the binary: on a single streamline its peak entry is
+`K(1.0) * K(1 - 1e-12) = 270.2668 * 269.9403`, whose square root is the
+measured 270.1035 to six digits, and likewise at all five bandwidths.
+:class:`sbci.smoothing.KernelTable` is that emulation and is the default;
+`quantized=False` gives the closed-form series the tables approximate.
+
+At full scale, all 1,001,877 endpoints of `sub-168S6561` against the matrix
+`c3_main` wrote, the two paths side by side:
+
+| | tables (default) | closed form |
+| --- | --- | --- |
+| correlation | **1.00000000** | 1.00000000 |
+| best scale | **1.000000** | 0.998584 |
+| relative error, nothing rescaled | **0.000021** | 0.001420 |
+| pairs equal to 1e-6 relative | **2,100,505** | 32 |
+| ratio by distance band | 1.00000 throughout | 0.9985 throughout |
+
+The residual is 2e-5 relative, at the level of the binary's own arithmetic:
+the dot products are formed in a different order, and one ULP moves a
+truncation bucket.
+
+The **excess of non-zero pairs** is mostly `--final_thold`: `compute_kernel.cpp`
+writes a pair only `if(temp > final_thold)` after dividing by the streamline
+count, and `smooth()` now applies the same rule on the same scale. At full
+scale that takes the tables' 7,676,193 pairs to 7,670,250 against the
+released 7,664,821 -- **+0.071%**. What remains sits on the cutoff boundary,
+where one ULP in a dot product moves a vertex across `dot >= cutoff_distance`.
 
 ### Speed
 
@@ -614,12 +643,16 @@ allocating a fresh 168 MB array per term over a `(5124, 4096)` block, a few
 hundred times per subject. Reusing three buffers made it **5.8x faster**
 (28.98s to 5.02s per block) and changed nothing beyond float reordering, 2.3e-12.
 
-It is still slower than it should be. The kernel is zero beyond 12.2 degrees,
-so only about 31 of 5,124 vertices per endpoint are non-zero, and this port
-evaluates all of them: roughly 99.4% of the arithmetic computes zeros.
-`concon` avoids that with a quad-tree over the mesh -- `helper_construct_QT`
-is in its symbols. A sparse neighbourhood lookup is the obvious next
-optimization and should be worth one to two orders of magnitude.
+`endpoint_density(method="sparse")`, now the default, finds each endpoint's
+neighbourhood with a KD-tree over the grid (per hemisphere, so the hemisphere
+rule is enforced by construction) and evaluates the kernel only there -- about
+31 of 5,124 vertices per endpoint, since the kernel is zero past 12.2 degrees.
+With the kernel itself a table lookup, the evaluation is a gather. The dense
+path is kept as `method="dense"` and `test_sparse_density_matches_dense`
+holds the two to 1e-9 of the peak. A `progress(done, total)` callback reports
+each block. Full scale on `sub-168S6561`: **53 s** for the density, and
+`cc.smooth(kernel="shk")` end to end in **54 s**, against 3,184 s for the dense
+exact path and 6,114 s before the in-place recurrence -- about 110x.
 
 ### What this cost, and what it bought
 

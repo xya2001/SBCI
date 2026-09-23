@@ -95,13 +95,29 @@ Two checks need more than one subject.
 **Alignment must make subjects more alike.** A registration can run, reduce its
 own cost, and leave the cohort no more similar than before — which would make it
 useless. `scripts/align_hcp_cohort.py` measures mean pairwise correlation
-between subjects before and after. On eight HCP subjects from the lab's
-`sbci_sc_tensor_1.mat`:
+between subjects before and after. **Note the grid:** the lab's HCP
+test-retest tensors exist only on the retired 4121-vertex `0.94` grid, so that
+script is not an ico4 result and should not be read as one. The ico4 check is
+`tests/reference/align_adni_ico4.py`, on the five ADNI subjects the pipeline
+produced on ico4; its result is recorded below the HCP one. On eight HCP
+subjects from `sbci_sc_tensor_1.mat` (4121-vertex grid):
 
 ```
 before 0.831207   after 0.854531   change +0.023323
 warps: every Jacobian strictly positive, vertices moved 0.67-2.23 deg on average
 ```
+
+On the five ADNI subjects on **ico4** (`tests/reference/align_adni_ico4.py`):
+
+```
+before 0.737617   after 0.781972   change +0.044354   (min pair 0.682 -> 0.720)
+costs 0.142, 0.126, 0.042, 0.112, 0.185
+Jacobians: every one strictly positive, smallest 0.6146;
+           per subject lh in [0.61, 1.38], rh in [0.63, 1.46]
+```
+
+Both criteria hold on the package's own grid: the cohort gets more alike, and
+no warp folds.
 
 Re-run it on a different cohort. **The correlation must go up and every
 Jacobian must stay positive**; a negative Jacobian means the warp has folded and

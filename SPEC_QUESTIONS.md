@@ -384,5 +384,6 @@ where `src/sbci/spec.py` currently carries a **provisional** value, marked
     **What WP1 owes:** a decision on where masking belongs. The options are to
     apply it on write (which makes a saved file diverge from what was computed),
     to apply it at import from the legacy `.mat` (where `tools/import_legacy.py`
-    already could), or to relax the validator for re-smoothed files. Until then, a
-    caller who needs a file that validates has to mask it themselves.
+    already could), or to relax the validator for re-smoothed files. Until then,
+    `smooth(..., mask_medial_wall=True)` is the caller's explicit way to take the
+    format's side; the default stays faithful to the references.

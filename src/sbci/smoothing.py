@@ -149,6 +149,11 @@ reproducing the released cohorts.
 DEFAULT_SIGMA = 0.005
 """Bandwidth the released cohorts use, from ``--sigma 0.005``."""
 
+FINAL_THRESHOLD = 1e-9
+"""``--final_thold 0.000000001``: after dividing by the streamline count,
+``compute_kernel.cpp`` writes a pair only ``if(temp > final_thold)``. Applied
+by :func:`smooth` on the same scale, before the unit-mass normalization."""
+
 KERNEL_EPSILON = 0.001
 """Where ``concon`` cuts the kernel off, from ``--epsilon``.
 
@@ -223,16 +228,139 @@ def _legendre_series(cosine: np.ndarray, sigma: float, harmonics: int) -> np.nda
     return total.reshape(shape)
 
 
+HARMONIC_SAMPLES_EXPONENT = 5
+"""``--OPT_VAL_exp_num_harm_samps 5``: ``concon`` tabulates each spherical
+harmonic at ``10**5`` cosine samples per unit (``subject.cpp``:
+``num_harm_samps = pow(10, exp_num_harm_samps)``)."""
+
+KERNEL_SAMPLES_EXPONENT = 6
+"""``--OPT_VAL_exp_num_kern_samps 6``: the kernel itself is tabulated at
+``10**6`` cosine samples per unit and read back by integer truncation."""
+
+
+@dataclass(frozen=True)
+class KernelTable:
+    """``concon``'s kernel exactly as ``c3_main`` evaluates it: a lookup table.
+
+    ``compute_kernel.cpp`` never evaluates the series at a point. It reads
+    ``kern_lookup_table[(int)(dot * M + M)]``, a table of ``2M + 1`` values over
+    the cosine in ``[-1, 1]``, and that table was itself filled from a harmonic
+    table read the same way, ``harm_lookup_table[l][(int)(x * L + L)]``. Both
+    reads truncate, so every lookup lands on the sample at or below the true
+    cosine -- a slightly larger angle, a slightly smaller kernel -- and the
+    bias grows with ``l(l+1)``. That is the 0.14% amplitude offset the exact
+    series left against the released files, and reproducing the tables removes
+    it: on a single streamline the binary's peak entry is
+    ``K(1.0) * K(1 - 1e-12) = 270.2668 * 269.9403``, whose square root is the
+    measured 270.1035, at all five bandwidths tested.
+
+    Attributes
+    ----------
+    values
+        The ``2M + 1`` tabulated kernel values.
+    samples
+        ``M``.
+    cutoff_cosine
+        Vertices with ``dot < cutoff_cosine`` receive nothing, found by the
+        binary's own scan: ``x`` from 1.0 down in steps of 1e-4 until
+        ``K(x) * K(1) < epsilon``.
+    """
+
+    values: np.ndarray
+    samples: int
+    cutoff_cosine: float
+
+    @property
+    def cutoff(self) -> float:
+        """Cutoff angle in radians."""
+        return float(np.arccos(np.clip(self.cutoff_cosine, -1.0, 1.0)))
+
+    def __call__(self, cosine) -> np.ndarray:
+        """Kernel values by truncation lookup, zero beyond the cutoff."""
+        # No `out=` anywhere here: a scalar argument is a 0-d array, which
+        # numpy refuses as an output buffer.
+        cosine = np.clip(np.asarray(cosine, dtype=np.float64), -1.0, 1.0)
+        index = np.clip(
+            (cosine * self.samples + self.samples).astype(np.int64), 0, 2 * self.samples
+        )
+        return np.where(cosine < self.cutoff_cosine, 0.0, self.values[index])
+
+
+@lru_cache(maxsize=8)
+def concon_kernel_table(
+    sigma: float,
+    harmonics: int = NUM_HARMONICS,
+    epsilon: float = KERNEL_EPSILON,
+    harmonic_exponent: int = HARMONIC_SAMPLES_EXPONENT,
+    kernel_exponent: int = KERNEL_SAMPLES_EXPONENT,
+) -> KernelTable:
+    """Build the two lookup tables ``c3_main`` builds, and the cutoff it scans.
+
+    Examples
+    --------
+    >>> table = concon_kernel_table(0.005)
+    >>> round(float(np.sqrt(table(1.0) * table(1.0 - 1e-12))), 4)   # the binary's peak entry
+    270.1035
+    >>> round(float(np.degrees(table.cutoff)), 3)
+    12.231
+    """
+    degree = np.arange(harmonics)
+    big_l = 10**harmonic_exponent
+    big_m = 10**kernel_exponent
+
+    # harm_lookup_table[l][j + L] = EvalSH(l, 0, 0, acos(j / L)): the normalized
+    # harmonic Y_l^0, which carries sqrt((2l+1)/4pi).
+    x_h = np.arange(-big_l, big_l + 1, dtype=np.float64) / big_l
+    harmonic = (
+        _legendre_polynomials(x_h, harmonics) * np.sqrt((2 * degree + 1) / (4 * np.pi))[:, None]
+    )
+
+    # kern_lookup_table[i + M] = sum_l exp(-sigma l(l+1)) (2l+1) harm[l][(int)(x_i L + L)]
+    x_k = np.arange(-big_m, big_m + 1, dtype=np.float64) / big_m
+    index = (x_k * big_l + big_l).astype(np.int64)
+    np.clip(index, 0, 2 * big_l, out=index)
+    weight = np.exp(-sigma * degree * (degree + 1)) * (2.0 * degree + 1.0)
+    values = np.zeros(x_k.size, dtype=np.float64)
+    for order in range(harmonics):
+        values += weight[order] * harmonic[order][index]
+    np.maximum(values, 1e-20, out=values)  # fmax(ret_val, 1e-20)
+
+    # The cutoff scan in compute_kernel.cpp, on the table.
+    scan = 1.0 - 1e-4 * np.arange(0, int(2.0 / 1e-4) + 1)
+    scan_index = np.clip((scan * big_m + big_m).astype(np.int64), 0, 2 * big_m)
+    product = values[scan_index] * values[2 * big_m]
+    below = np.nonzero(product < epsilon)[0]
+    cutoff_cosine = float(scan[below[0]]) if below.size else -1.0
+    return KernelTable(values=values, samples=big_m, cutoff_cosine=cutoff_cosine)
+
+
+def _legendre_polynomials(x: np.ndarray, terms: int) -> np.ndarray:
+    """``P_l(x)`` for ``l = 0 .. terms-1`` as rows, by the standard recurrence."""
+    out = np.empty((terms, x.size), dtype=np.float64)
+    out[0] = 1.0
+    if terms > 1:
+        out[1] = x
+    for k in range(1, terms - 1):
+        out[k + 1] = ((2 * k + 1) * x * out[k] - k * out[k - 1]) / (k + 1)
+    return out
+
+
 def spherical_heat_kernel(
-    cosine, sigma: float, harmonics: int = NUM_HARMONICS, epsilon: float | None = KERNEL_EPSILON
+    cosine,
+    sigma: float,
+    harmonics: int = NUM_HARMONICS,
+    epsilon: float | None = KERNEL_EPSILON,
+    quantized: bool = True,
 ):
     r"""The kernel ``concon`` applies, on the unit sphere.
 
     .. math::
-        K_\sigma(\cos\gamma) = \sum_{l=0}^{31}
+        K_\sigma(\cos\gamma) = \sum_{l=0}^{32}
             \frac{(2l+1)^{3/2}}{\sqrt{4\pi}}\, e^{-l(l+1)\sigma}\, P_l(\cos\gamma)
 
-    zero beyond :func:`kernel_cutoff`.
+    zero beyond the cutoff, and -- by default -- read through the same two
+    truncation-indexed lookup tables ``c3_main`` reads it through
+    (:class:`KernelTable`), which is what the released cohorts carry.
 
     **This is not the heat kernel**, whose weight is :math:`(2l+1)/4\pi`.
     ``sigma_opt.cpp`` sums ``exp(-sigma*l*(l+1)) * (2l+1) * harm_lookup[l]``,
@@ -248,25 +376,27 @@ def spherical_heat_kernel(
     Parameters
     ----------
     cosine
-        Cosines of the angle between points, any shape. Clipped to
-        ``[-1, 1]``, so unit vectors a rounding step too long are safe.
+        Cosines of the angle between points, any shape. Clipped to ``[-1, 1]``.
     sigma
         Bandwidth. The released cohorts use 0.005.
     harmonics
         Number of terms. ``concon`` hardcodes 33 -- see :data:`NUM_HARMONICS`.
     epsilon
-        Cutoff threshold; ``None`` leaves the series untruncated in angle,
+        Cutoff threshold. ``None`` leaves the series untruncated in angle,
         which is useful for studying it but is not what the pipeline did.
+    quantized
+        ``True`` reproduces the binary's lookup tables exactly and is the
+        default. ``False`` evaluates the series in closed form: the kernel the
+        tables approximate, about 0.06% higher at the peak.
 
     Notes
     -----
-    Verified against ``c3_main`` itself, by running it on a single streamline
-    so its output is the kernel: at sigma 0.005 this matches the binary to
-    **rms 0.0002** across the ico4 ring distances, against 0.090 for the heat
-    kernel. The predicted cutoffs reproduce the binary's support exactly at
-    sigma 0.0025, 0.005 and 0.01, and K(0) agrees to 0.06% there and to 0.1%
-    across bandwidths from 0.00125 to 0.02.
-    ``tests/reference/concon_probe.py`` regenerates the measurement.
+    Verified against ``c3_main`` itself, run on a single streamline so its
+    output is the kernel: the quantized form reproduces the binary's peak entry
+    to six digits at five bandwidths, and its ring values at sigma 0.005 to rms
+    0.0005; against the released matrices of five ADNI subjects the density
+    correlates at 1.000000. ``tests/reference/concon_probe.py`` regenerates the
+    measurement.
 
     Examples
     --------
@@ -278,6 +408,8 @@ def spherical_heat_kernel(
     >>> float(spherical_heat_kernel(np.cos(np.radians(20.0)), 0.005))  # past the cutoff
     0.0
     """
+    if quantized and epsilon is not None:
+        return concon_kernel_table(sigma, harmonics, epsilon)(cosine)
     cosine = np.clip(np.asarray(cosine, dtype=np.float64), -1.0, 1.0)
     total = _legendre_series(cosine, sigma, harmonics)
     if epsilon is not None:
@@ -296,6 +428,9 @@ def endpoint_density(
     harmonics: int = NUM_HARMONICS,
     normalize: str | None = None,
     block: int = 4096,
+    method: str = "sparse",
+    progress=None,
+    quantized: bool = True,
 ):
     """Smooth streamline endpoints into a density with the spherical kernel.
 
@@ -311,7 +446,7 @@ def endpoint_density(
         ``(s, 3)`` continuous endpoint positions on the unit sphere.
     hemisphere_in, hemisphere_out, vertex_hemisphere
         Which hemisphere each endpoint and each vertex belongs to.
-    sigma, harmonics
+    sigma, harmonics, quantized
         Passed to :func:`spherical_heat_kernel`.
     normalize
         ``None``, the default, leaves each endpoint's kernel unscaled, which is
@@ -320,7 +455,15 @@ def endpoint_density(
         over the grid; it was a workaround for a scale mismatch that turned out
         to be the kernel's weight, and is kept only for comparison.
     block
-        Endpoints processed at a time; the intermediate is ``(n, block)``.
+        Endpoints processed at a time.
+    method
+        ``"sparse"``, the default, finds each endpoint's neighbourhood with a
+        KD-tree and evaluates the kernel only there: the kernel is zero past
+        about 12 degrees, so only ~31 of the 5124 vertices matter per endpoint
+        and the dense evaluation was 99.4% zeros. ``"dense"`` evaluates every
+        vertex and is kept as the check the sparse path is tested against.
+    progress
+        Optional callable ``progress(done, total)`` invoked after each block.
 
     Returns
     -------
@@ -333,29 +476,99 @@ def endpoint_density(
         raise ValueError(f"endpoints disagree: {points_in.shape} in, {points_out.shape} out")
     if normalize not in ("sum", None):
         raise ValueError(f"normalize must be 'sum' or None, got {normalize!r}")
+    if method not in ("sparse", "dense"):
+        raise ValueError(f"method must be 'sparse' or 'dense', got {method!r}")
 
     vertex_hemisphere = np.asarray(vertex_hemisphere)
     hemisphere_in = np.asarray(hemisphere_in)
     hemisphere_out = np.asarray(hemisphere_out)
     n = vertices.shape[0]
+    total = points_in.shape[0]
 
-    def columns(points, hemisphere):
-        values = spherical_heat_kernel(vertices @ points.T, sigma, harmonics)
-        values[vertex_hemisphere[:, None] != hemisphere[None, :]] = 0.0
-        np.maximum(values, 0.0, out=values)
+    def kernel(cosine):
+        return spherical_heat_kernel(cosine, sigma, harmonics, quantized=quantized)
+
+    if method == "dense":
+
+        def columns(points, hemisphere):
+            values = np.asarray(kernel(vertices @ points.T), dtype=np.float64)
+            values[vertex_hemisphere[:, None] != hemisphere[None, :]] = 0.0
+            np.maximum(values, 0.0, out=values)
+            if normalize == "sum":
+                colsum = values.sum(axis=0)
+                colsum[colsum == 0] = 1.0
+                values = values / colsum
+            return values
+
+        density = np.zeros((n, n), dtype=np.float64)
+        for start in range(0, total, block):
+            stop = min(start + block, total)
+            density += (
+                columns(points_in[start:stop], hemisphere_in[start:stop])
+                @ columns(points_out[start:stop], hemisphere_out[start:stop]).T
+            )
+            if progress is not None:
+                progress(stop, total)
+        return density + density.T
+
+    from scipy.sparse import csr_matrix
+    from scipy.spatial import cKDTree
+
+    cutoff = (
+        concon_kernel_table(sigma, harmonics).cutoff
+        if quantized
+        else kernel_cutoff(sigma, KERNEL_EPSILON, harmonics)
+    )
+    # Chord length of the cutoff angle, with slack: the kernel itself decides
+    # membership (it is zero past the cutoff), the tree only has to over-cover.
+    radius = float(np.sqrt(max(0.0, 2.0 - 2.0 * np.cos(cutoff)))) * (1.0 + 1e-6) + 1e-9
+    sides = np.unique(vertex_hemisphere)
+    trees = {int(h): cKDTree(vertices[vertex_hemisphere == h]) for h in sides}
+    members = {int(h): np.nonzero(vertex_hemisphere == h)[0] for h in sides}
+
+    def sparse_columns(points, hemisphere):
+        rows, cols, vals = [], [], []
+        for h in sides:
+            chosen = np.nonzero(hemisphere == h)[0]
+            if chosen.size == 0:
+                continue
+            neighbours = trees[int(h)].query_ball_point(points[chosen], radius)
+            counts = np.fromiter(
+                (len(a) for a in neighbours), dtype=np.int64, count=len(neighbours)
+            )
+            if counts.sum() == 0:
+                continue
+            local = np.concatenate([np.asarray(a, dtype=np.int64) for a in neighbours])
+            col = np.repeat(chosen, counts)
+            row = members[int(h)][local]
+            cosine = np.einsum("ij,ij->i", vertices[row], points[col])
+            value = np.asarray(kernel(cosine), dtype=np.float64)
+            keep = value > 0.0
+            rows.append(row[keep])
+            cols.append(col[keep])
+            vals.append(value[keep])
+        if not rows:
+            return csr_matrix((n, points.shape[0]), dtype=np.float64)
+        matrix = csr_matrix(
+            (np.concatenate(vals), (np.concatenate(rows), np.concatenate(cols))),
+            shape=(n, points.shape[0]),
+        )
         if normalize == "sum":
-            total = values.sum(axis=0)
-            total[total == 0] = 1.0
-            values = values / total
-        return values.astype(np.float32)
+            colsum = np.asarray(matrix.sum(axis=0)).ravel()
+            colsum[colsum == 0] = 1.0
+            matrix = matrix @ csr_matrix(np.diag(1.0 / colsum))
+        return matrix
 
     density = np.zeros((n, n), dtype=np.float64)
-    for start in range(0, points_in.shape[0], block):
-        stop = min(start + block, points_in.shape[0])
-        density += (
-            columns(points_in[start:stop], hemisphere_in[start:stop])
-            @ columns(points_out[start:stop], hemisphere_out[start:stop]).T
+    for start in range(0, total, block):
+        stop = min(start + block, total)
+        product = (
+            sparse_columns(points_in[start:stop], hemisphere_in[start:stop])
+            @ sparse_columns(points_out[start:stop], hemisphere_out[start:stop]).T
         )
+        density += product.toarray()
+        if progress is not None:
+            progress(stop, total)
     return density + density.T
 
 
@@ -778,7 +991,14 @@ def _resolve_eigenpairs(eigenpairs):
     )
 
 
-def smooth(connectome, kernel: str = "shk", bandwidth: float | None = None, eigenpairs=None):
+def smooth(
+    connectome,
+    kernel: str = "shk",
+    bandwidth: float | None = None,
+    eigenpairs=None,
+    mask_medial_wall: bool = False,
+    progress=None,
+):
     """Re-smooth a connectome from its stored endpoints.
 
     Returns a new connectome of the same type, carrying the same endpoints,
@@ -803,6 +1023,14 @@ def smooth(connectome, kernel: str = "shk", bandwidth: float | None = None, eige
     eigenpairs
         Directory holding the Laplace-Beltrami basis, or a pair of
         ``(eigenvalues, eigenvectors)`` tuples.
+    mask_medial_wall
+        ``False``, the default, leaves whatever mass the kernel put on the
+        medial wall, as both references do. ``True`` zeroes it before the
+        unit-mass normalization so the result satisfies the format's mask rule
+        and ``sbci validate`` -- SPEC_QUESTIONS.md item 14.
+    progress
+        Optional ``progress(done, total)`` callable, called after each block of
+        endpoints for the ``shk`` kernel.
     """
     if kernel not in KERNELS:
         raise ValueError(f"kernel must be one of {KERNELS}, got {kernel!r}")
@@ -822,8 +1050,10 @@ def smooth(connectome, kernel: str = "shk", bandwidth: float | None = None, eige
             connectome.endpoints.surf_out,
             hemisphere_labels(connectome.n_vertices),
             sigma=sigma,
+            progress=progress,
         )
-        return _finish(connectome, density, kernel, sigma)
+        apply_final_threshold(density, points_in.shape[0])
+        return _finish(connectome, density, kernel, sigma, mask_medial_wall)
 
     if eigenpairs is None:
         eigenpairs = find_basis()
@@ -846,7 +1076,30 @@ def smooth(connectome, kernel: str = "shk", bandwidth: float | None = None, eige
         build(lam_right, vec_right, bandwidth),
     )
 
-    return _finish(connectome, density, kernel, bandwidth)
+    return _finish(connectome, density, kernel, bandwidth, mask_medial_wall)
+
+
+def apply_final_threshold(
+    density: np.ndarray, n_streamlines: int, threshold: float = FINAL_THRESHOLD
+) -> np.ndarray:
+    """Drop pairs ``c3_main`` would not have written, in place.
+
+    Its output is the accumulated kernel product divided by the streamline
+    count, written only where that exceeds ``--final_thold``. The density here
+    is the undivided sum, so the rule is applied on the divided scale.
+
+    Examples
+    --------
+    >>> d = np.array([[0.0, 3e-9], [3e-9, 0.0]]) * 1000
+    >>> apply_final_threshold(d, 1000)            # 3e-9 per streamline survives
+    array([[0.e+00, 3.e-06],
+           [3.e-06, 0.e+00]])
+    >>> apply_final_threshold(d, 10**7)           # 3e-13 per streamline does not
+    array([[0., 0.],
+           [0., 0.]])
+    """
+    density[density / n_streamlines <= threshold] = 0.0
+    return density
 
 
 def _grid_vertices(connectome) -> np.ndarray:
@@ -860,18 +1113,24 @@ def _grid_vertices(connectome) -> np.ndarray:
     return vertices / np.linalg.norm(vertices, axis=1, keepdims=True)
 
 
-def _finish(connectome, density: np.ndarray, kernel: str, bandwidth: float):
+def _finish(
+    connectome, density: np.ndarray, kernel: str, bandwidth: float, mask_medial_wall: bool = False
+):
     """Normalize a re-smoothed density and wrap it back into a connectome."""
     from .grid import to_condensed
     from .metadata import Metadata
 
-    # The medial wall is deliberately NOT zeroed here. Neither reference masks:
-    # c3_main's own released output puts 0.87% of its mass on the wall, and the
-    # MATLAB rdk density does too. Masking would make this method diverge from
-    # both, and `test_smooth_method_matches_matlab` would stop holding. It does
-    # mean a re-smoothed density can fail the validator's mask check, which is
-    # a genuine conflict between the format and the reference -- see
-    # SPEC_QUESTIONS.md item 14.
+    # The medial wall is NOT zeroed by default. Neither reference masks: c3_main's
+    # own released output puts 0.87% of its mass on the wall, and the MATLAB rdk
+    # density does too, so masking by default would make this method diverge from
+    # both and `test_smooth_method_matches_matlab` would stop holding. It does
+    # mean a re-smoothed density can fail the validator's mask check -- a genuine
+    # conflict between the format and the reference, SPEC_QUESTIONS.md item 14.
+    # `mask_medial_wall=True` is the caller's way to choose the format's side.
+    if mask_medial_wall:
+        wall = ~np.asarray(connectome.mask, dtype=bool)
+        density[wall, :] = 0.0
+        density[:, wall] = 0.0
 
     # The storage convention is the strict upper triangle, so self-connectivity
     # is dropped (SPEC_QUESTIONS.md item 2). Normalize after dropping it, or

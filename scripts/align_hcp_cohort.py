@@ -1,7 +1,10 @@
 """sbci.align on real multi-subject HCP data.
 
 The connectomes are the lab's SBCI-processed HCP test-retest tensors, on the
-4121-vertex alignment grid that ConCon_Alignment itself uses. Read only.
+**retired 4121-vertex 0.94 grid** that ConCon_Alignment itself uses -- not
+ico4. This is therefore a check of the algorithm on a foreign grid, not of the
+package on its own; the ico4 check is tests/reference/align_adni_ico4.py.
+Read only.
 
 The question is not whether the code runs -- that is already established -- but
 whether alignment does what it is for: subjects should look more like each

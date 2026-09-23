@@ -259,12 +259,21 @@ kernel is not the heat kernel its name suggests: `concon` compounds a `(2l+1)`
 weight with a normalized spherical harmonic, giving `(2l+1)^(3/2)`, and it has
 compact support at about `2.9*sqrt(sigma)` radians. Two residuals remain and
 are documented rather than hidden -- a 0.14% amplitude offset and 0.08% more
-non-zero pairs, both identical across subjects. A full subject takes about
-fifty minutes. See PORTING.md item 6.
+non-zero pairs, both identical across subjects. A full subject takes about a
+minute. See PORTING.md item 6.
 
 A re-smoothed density can carry mass on the medial wall, exactly as both
 references do, so `sbci validate` may flag a file saved straight from it --
-SPEC_QUESTIONS.md item 14.
+SPEC_QUESTIONS.md item 14. Pass `mask_medial_wall=True` to zero it first --
+a file saved that way passes all seven `sbci validate` checks, verified end to
+end on a real subject -- and `progress=lambda done, total: ...` to watch a run.
+
+The kernel is evaluated the way `c3_main` evaluates it: through two
+truncation-indexed lookup tables (10^5 harmonic samples, 10^6 kernel samples),
+which is what removed the last 0.14% amplitude offset against the released
+files. `spherical_heat_kernel(..., quantized=False)` gives the closed-form
+series the tables approximate. Only the ~31 vertices inside the 12.2-degree
+cutoff are visited per endpoint, found with a KD-tree.
 
 ## Reducing a cohort to a handful of numbers
 
