@@ -147,3 +147,22 @@ def test_to_atlas_on_the_full_grid(sc_metadata):
         metadata=sc_metadata,
     )
     assert cc.to_atlas(load_atlas("Schaefer200")).shape == (200, 200)
+
+
+def test_region_ids_follow_the_names_even_when_a_region_is_empty():
+    from sbci.atlas import Atlas
+
+    atlas = Atlas(name="gappy", labels=np.array([1, 1, 3, 3, 0]), names=("A", "B", "C"))
+    np.testing.assert_array_equal(atlas.region_ids, [1, 2, 3])
+    assert atlas.n_regions == 3
+    np.testing.assert_array_equal(atlas.region_mask("C"), atlas.labels == 3)
+    with pytest.raises(ValueError, match="names"):
+        Atlas(name="bad", labels=np.array([1, 4]), names=("A", "B"))
+
+
+def test_bundled_labels_are_read_only():
+    from sbci.atlas import load_atlas
+
+    atlas = load_atlas("Desikan")
+    with pytest.raises(ValueError):
+        atlas.labels[0] = 5

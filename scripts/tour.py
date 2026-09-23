@@ -12,6 +12,8 @@ import matplotlib
 matplotlib.use("Agg")  # no display on a cluster node
 import numpy as np
 
+import sbci
+
 D = "/work/users/x/y/xya/sbci-derivatives"
 
 
@@ -121,15 +123,18 @@ with tempfile.TemporaryDirectory() as tmp:
     print(f"  exit status {result.returncode} (0 means every check passed)")
 
 heading("9. WHAT RAISES, AND WHAT IT TELLS YOU")
+# Everything in the API table is implemented, so these are genuine misuses.
+# (to_cifti and reduce used to sit here as "not yet"; both now run, and both
+# are batch jobs on the full grid, so they are deliberately not called.)
 for label, call in (
-    ("sc.to_cifti(...)", lambda: sc.to_cifti("/tmp/x.dconn.nii")),
-    ("sc.smooth()", lambda: sc.smooth(kernel="rdk")),
-    ("sc.reduce(rank=5)", lambda: sc.reduce(rank=5)),
-    ("load_surface('inflated')", lambda: load_surface("inflated")),
+    ("load_surface('nonesuch')", lambda: load_surface("nonesuch")),
+    ("sc.seed()", lambda: sc.seed()),
+    ("sc.coupling(sc)", lambda: sc.coupling(sc)),
+    ("sc.smooth(kernel='rdk')", lambda: sc.smooth(kernel="rdk")),
 ):
     try:
         call()
-    except (NotImplementedError, ValueError) as exc:
+    except (sbci.SbciError, ValueError) as exc:
         first = str(exc).split(".")[0]
         print(f"  {label:26s} {type(exc).__name__}")
         print(f"  {'':26s} {first[:78]}...")
@@ -141,5 +146,5 @@ REF = "/work/users/x/y/xya/sbci-reference/SBCI_Toolkit/concon_estimate"
 lam, U = load_eigenpairs(f"{REF}/EV_LBO_ds_ico4_L.mat", "L")
 print(f"  load_eigenpairs(...)  -> {lam.size} eigenvalues, U {U.shape}")
 print(f"  kappa_candidates(lam) -> {np.array2string(kappa_candidates(lam)[:4], precision=3)} ...")
-print("  diffusion_kernel / matern_kernel / smooth_endpoints work today;")
-print("  only cc.smooth() is blocked, because the format stores no endpoints.")
+print("  diffusion_kernel / matern_kernel / smooth_endpoints work directly;")
+print("  cc.smooth() runs on any file that carries endpoints (kernel='shk' by default).")

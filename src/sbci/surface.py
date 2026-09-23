@@ -1,8 +1,8 @@
 """Cortical surface meshes on the ico4 computational grid.
 
-The three geometries the toolkit ships at ico4 resolution are bundled with the
-package (about 290 KB), so plotting needs no VTK library, no FreeSurfer, and no
-network. They are generated once by ``tools/convert_surfaces.py``.
+Four geometries at ico4 resolution are bundled with the package (about 376 KB),
+so plotting needs no VTK library, no FreeSurfer, and no network. They are
+generated once by ``tools/build_surfaces.py`` from FreeSurfer's fsaverage.
 
 Each mesh covers both hemispheres on the 5124-vertex grid, left first, in the
 same vertex order as a :class:`~sbci.ContinuousConnectome`. A surface map can
@@ -135,4 +135,9 @@ def load_surface(name: str = "inflated") -> Surface:
 
     if vertices.shape[0] != spec.N_VERTICES:
         raise ValueError(f"{name}: {vertices.shape[0]} vertices, expected {spec.N_VERTICES}")
+    if faces.shape != (spec.N_FACES, 3) or faces.min() < 0 or faces.max() >= spec.N_VERTICES:
+        raise ValueError(f"{name}: faces are {faces.shape}, expected {(spec.N_FACES, 3)} in range")
+    # The cached arrays are shared by every caller: freeze them.
+    vertices.setflags(write=False)
+    faces.setflags(write=False)
     return Surface(name=name, vertices=vertices, faces=faces)

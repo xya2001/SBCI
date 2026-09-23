@@ -14,8 +14,14 @@ venv/
 # Test / coverage
 .pytest_cache/
 .coverage
+coverage.xml
 htmlcov/
 .ruff_cache/
+
+# Generated figures, reports and logs
+*.png
+*.pdf
+*.log
 
 # Docs
 _build/
@@ -38,7 +44,6 @@ slurm-*.out
 *.trk
 *.nii
 *.nii.gz
-!tests/data/*.h5
 
 # gprof output: c3_main is built with profiling and drops this
 # wherever it is run from.

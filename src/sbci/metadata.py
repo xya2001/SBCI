@@ -42,14 +42,27 @@ class Metadata:
         """Parse the JSON metadata string stored alongside the connectivity."""
         if isinstance(text, bytes):
             text = text.decode("utf-8")
-        loaded = json.loads(text)
+        try:
+            loaded = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise MetadataError(f"metadata is not valid JSON: {exc}") from exc
         if not isinstance(loaded, dict):
             raise MetadataError("metadata must be a JSON object")
         return cls(loaded)
 
     def to_json(self, indent: int | None = None) -> str:
-        """Serialize back to the stored JSON string."""
-        return json.dumps(self.fields, indent=indent, sort_keys=True)
+        """Serialize back to the stored JSON string.
+
+        NumPy scalars are written as the numbers they are, and a NaN or
+        infinity is refused rather than written as the non-JSON token
+        ``json.dumps`` would otherwise produce.
+        """
+        try:
+            return json.dumps(
+                self.fields, indent=indent, sort_keys=True, default=_plain, allow_nan=False
+            )
+        except (TypeError, ValueError) as exc:
+            raise MetadataError(f"metadata cannot be serialized: {exc}") from exc
 
     def missing_keys(self) -> list[str]:
         """Required keys absent from this metadata, in specification order.
@@ -108,6 +121,31 @@ class Metadata:
         order = tuple(self.fields["hemisphere_order"])
         if order != spec.HEMISPHERE_ORDER:
             raise MetadataError(f"hemisphere_order must be {spec.HEMISPHERE_ORDER}, got {order}")
+
+        convention = self.fields["storage_convention"]
+        expected = f"{spec.TRIANGLE}-triangular-{spec.DTYPE}"
+        if convention != expected:
+            raise MetadataError(
+                f"storage_convention {convention!r} is not {expected!r}; a differently "
+                "stored vector would be read into the wrong matrix entries"
+            )
+
+        version = str(self.fields["spec_version"])
+        if version.split(".")[:2] != spec.SPEC_VERSION.split(".")[:2]:
+            raise MetadataError(
+                f"spec_version {version!r} is not compatible with {spec.SPEC_VERSION!r}"
+            )
+
+
+def _plain(value: Any) -> Any:
+    """JSON-encode what the standard encoder refuses: NumPy scalars and arrays."""
+    import numpy as np
+
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    raise TypeError(f"{type(value).__name__} is not JSON serializable")
 
 
 def template(modality: str, **overrides: Any) -> Metadata:

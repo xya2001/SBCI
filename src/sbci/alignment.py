@@ -319,6 +319,48 @@ def barycentric_coordinates(point, a, b, c):
     return np.stack([1.0 - second - third, second, third], axis=-1)
 
 
+def _closest_on_triangles(p, a, b, c):
+    """Closest point on triangle ``(a, b, c)`` to ``p``; the arrays broadcast to ``(..., 3)``.
+
+    Ericson's algorithm in the same case order as
+    :func:`_closest_point_on_triangles`, for per-point candidate sets.
+    """
+    ab, ac, ap = b - a, c - a, p - a
+    d1 = (ab * ap).sum(-1)
+    d2 = (ac * ap).sum(-1)
+    bp = p - b
+    d3 = (ab * bp).sum(-1)
+    d4 = (ac * bp).sum(-1)
+    cp = p - c
+    d5 = (ab * cp).sum(-1)
+    d6 = (ac * cp).sum(-1)
+
+    vc = d1 * d4 - d3 * d2
+    vb = d5 * d2 - d1 * d6
+    va = d3 * d6 - d5 * d4
+    total = va + vb + vc
+    scale = 1.0 / np.where(total == 0, 1.0, total)
+    closest = a + (vb * scale)[..., None] * ab + (vc * scale)[..., None] * ac
+    closest = np.array(np.broadcast_to(closest, np.broadcast(p, a).shape))
+
+    def put(mask, value):
+        np.copyto(closest, np.broadcast_to(value, closest.shape), where=mask[..., None])
+
+    denom_ab = np.where(d1 - d3 == 0, 1.0, d1 - d3)
+    denom_ac = np.where(d2 - d6 == 0, 1.0, d2 - d6)
+    denom_bc = np.where((d4 - d3) + (d5 - d6) == 0, 1.0, (d4 - d3) + (d5 - d6))
+    put(
+        (va <= 0) & ((d4 - d3) >= 0) & ((d5 - d6) >= 0),
+        b + ((d4 - d3) / denom_bc)[..., None] * (c - b),
+    )
+    put((vb <= 0) & (d2 >= 0) & (d6 <= 0), a + (d2 / denom_ac)[..., None] * ac)
+    put((vc <= 0) & (d1 >= 0) & (d3 <= 0), a + (d1 / denom_ab)[..., None] * ab)
+    put((d6 >= 0) & (d5 <= d6), c)
+    put((d3 >= 0) & (d4 <= d3), b)
+    put((d1 <= 0) & (d2 <= 0), a)
+    return closest
+
+
 class MeshQuery:
     """Closest-point queries against a triangle mesh.
 
@@ -327,35 +369,86 @@ class MeshQuery:
     the query onto that face's plane, which is what the reference's libigl
     build returns -- a point just outside a triangle keeps a slightly negative
     weight rather than being snapped to the edge.
+
+    The search is narrowed to the ``candidates`` faces whose centroids lie
+    nearest each point, found with a k-d tree, so a query costs time in
+    proportion to the number of points rather than points times faces. On an
+    icosphere the closest face is always among the first few candidates
+    (checked against the exhaustive search on the bundled grid). A point that
+    ends up farther from its best candidate than a point on the unit sphere can
+    be from its own face is re-queried against every face, so an irregular
+    mesh stays exact, only slower. Ties -- a closest point at a shared vertex,
+    which every face around it carries bit for bit -- go to the lowest face
+    index, as the exhaustive search does (and as libigl did on every point of
+    the ENCORE reference).
     """
 
-    def __init__(self, vertices, faces, block: int = 256):
+    def __init__(self, vertices, faces, candidates: int = 12, block: int = 32768):
+        from scipy.spatial import cKDTree
+
         self.vertices = np.asarray(vertices, dtype=np.float64)
         self.faces = np.asarray(faces, dtype=np.int64)
-        self.block = block
+        self.candidates = int(min(candidates, self.faces.shape[0]))
+        self.block = int(block)
         self._a = self.vertices[self.faces[:, 0]]
         self._b = self.vertices[self.faces[:, 1]]
         self._c = self.vertices[self.faces[:, 2]]
+        centroids = (self._a + self._b + self._c) / 3.0
+        self._tree = cKDTree(centroids)
+        # A point of the unit sphere lies at most one sagitta above its own flat
+        # face; anything farther than a few sagittas means the candidates missed.
+        sagitta = float(np.abs(1.0 - np.linalg.norm(centroids, axis=1)).max())
+        self._tolerance = 4.0 * sagitta + 1e-9
 
     def query(self, points):
         """``(weights, vertex_indices)``, both ``(n, 3)``."""
+        weights, indices, _ = self.query_faces(points)
+        return weights, indices
+
+    def query_faces(self, points):
+        """``(weights, vertex_indices, face_indices)`` for each point."""
         points = np.asarray(points, dtype=np.float64)
-        weights = np.empty((points.shape[0], 3))
-        indices = np.empty((points.shape[0], 3), dtype=np.int64)
-
-        for start in range(0, points.shape[0], self.block):
+        n = points.shape[0]
+        weights = np.empty((n, 3))
+        indices = np.empty((n, 3), dtype=np.int64)
+        face_of = np.empty(n, dtype=np.int64)
+        for start in range(0, n, self.block):
             chunk = points[start : start + self.block]
-            closest = _closest_point_on_triangles(chunk, self._a, self._b, self._c)
-            best = np.argmin(((closest - chunk[:, None, :]) ** 2).sum(-1), axis=1)
+            m = chunk.shape[0]
+            _, near = self._tree.query(chunk, k=self.candidates)
+            near = near.reshape(m, self.candidates)
+            near.sort(axis=1)  # argmin's first minimum is then the lowest face index
+            closest = _closest_on_triangles(
+                chunk[:, None, :], self._a[near], self._b[near], self._c[near]
+            )
+            distance = ((closest - chunk[:, None, :]) ** 2).sum(-1)
+            best = np.argmin(distance, axis=1)
+            rows = np.arange(m)
+            face = near[rows, best]
+            far = np.sqrt(distance[rows, best]) > self._tolerance
+            if far.any():
+                face[far] = self._exact_faces(chunk[far])
 
-            a, b, c = self._a[best], self._b[best], self._c[best]
+            a, b, c = self._a[face], self._b[face], self._c[face]
             normal = np.cross(b - a, c - a)
             normal /= np.linalg.norm(normal, axis=1, keepdims=True)
             projected = chunk - ((chunk - a) * normal).sum(axis=1, keepdims=True) * normal
 
-            indices[start : start + self.block] = self.faces[best]
+            face_of[start : start + self.block] = face
+            indices[start : start + self.block] = self.faces[face]
             weights[start : start + self.block] = barycentric_coordinates(projected, a, b, c)
-        return weights, indices
+        return weights, indices, face_of
+
+    def _exact_faces(self, points):
+        """The closest face by testing every face, for the points the tree may have missed."""
+        out = np.empty(points.shape[0], dtype=np.int64)
+        for start in range(0, points.shape[0], 256):
+            chunk = points[start : start + 256]
+            closest = _closest_point_on_triangles(chunk, self._a, self._b, self._c)
+            out[start : start + 256] = np.argmin(
+                ((closest - chunk[:, None, :]) ** 2).sum(-1), axis=1
+            )
+        return out
 
 
 def interpolation_operator(weights, indices, n_vertices):
@@ -726,12 +819,20 @@ class Warp:
 
 @dataclass
 class Alignment:
-    """What :func:`align` returns."""
+    """What :func:`align` returns.
+
+    ``grid_rotations`` are the rotations applied to the left and right
+    hemispheres of the bundled sphere before alignment (see
+    :func:`rotate_off_poles`); the vertices in each :class:`Warp` live in that
+    rotated frame, and ``warp.lh_vertices @ grid_rotations[0]`` maps them back
+    to the file's sphere. Both are identities when ``grids`` were supplied.
+    """
 
     template: np.ndarray
     warps: list = field(default_factory=list)
     aligned: list = field(default_factory=list)
     costs: list = field(default_factory=list)
+    grid_rotations: tuple = (np.eye(3), np.eye(3))
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
         return f"<Alignment of {len(self.warps)} subjects on {self.template.shape[0]} vertices>"
@@ -772,7 +873,9 @@ class Encore:
         current = roots[int(np.argmin(distances))].copy()
 
         for _ in range(iterations):
-            directions = np.zeros_like(roots)
+            # Summed as they are computed: a second cohort-sized array would cost
+            # another 210 MB per subject on the ico4 grid.
+            directions = np.zeros_like(current)
             distance = np.zeros(roots.shape[0])
             for i, root in enumerate(roots):
                 inner = (root * current * self.area_product).sum()
@@ -780,13 +883,15 @@ class Encore:
                     inner = np.sign(inner)
                 distance[i] = np.arccos(np.clip(inner, -1.0, 1.0))
                 if distance[i] > 0:
-                    directions[i] = (root - np.cos(distance[i]) * current) / np.sin(distance[i])
+                    directions += (root - np.cos(distance[i]) * current) / np.sin(distance[i])
 
             moving = distance > 0
             if not moving.any():
                 break
-            mean_direction = directions.sum(axis=0) / (1.0 / distance[moving]).sum()
+            mean_direction = directions / (1.0 / distance[moving]).sum()
             size = np.sqrt((mean_direction**2 * self.area_product).sum())
+            if size == 0:
+                break
             current = np.cos(0.2 * size) * current + np.sin(0.2 * size) * (mean_direction / size)
             current = current / np.sqrt((current**2 * self.area_product).sum())
             if size < 0.005:
@@ -818,7 +923,7 @@ class Encore:
             new = []
             for grid, warp, lo, hi in (
                 (self.lh_grid, lh_warp, 0, n),
-                (self.rh_grid, rh_warp, n, 2 * n),
+                (self.rh_grid, rh_warp, n, n + self.rh_grid.n_vertices),
             ):
                 gradient = 2 * (
                     a[lo:hi] @ grid.basis[:, :, 0]
@@ -848,6 +953,22 @@ class Encore:
         return result, lh_warp, rh_warp, cost
 
 
+def pole_rotation(vertices, tolerance: float = 1e-3) -> np.ndarray:
+    """The rotation :func:`rotate_off_poles` applies, as a ``3 x 3`` matrix.
+
+    ``rotate_off_poles(v) == v @ pole_rotation(v).T``, so ``rotated @ R`` maps
+    points back into the mesh's original frame.
+    """
+    vertices = np.asarray(vertices, dtype=np.float64)
+    for angle in (0.0, 0.3, 0.7, 1.1, 1.7):
+        cos, sin = np.cos(angle), np.sin(angle)
+        rotation = np.array([[cos, 0.0, sin], [0.0, 1.0, 0.0], [-sin, 0.0, cos]])
+        candidate = vertices @ rotation.T
+        if np.sin(np.arccos(np.clip(candidate[:, 2], -1.0, 1.0))).min() > tolerance:
+            return rotation
+    raise RuntimeError("could not rotate the mesh clear of the coordinate poles")
+
+
 def rotate_off_poles(vertices, tolerance: float = 1e-3):
     """Rotate a spherical mesh so that no vertex lies on the coordinate axis.
 
@@ -859,20 +980,15 @@ def rotate_off_poles(vertices, tolerance: float = 1e-3):
     symmetry, so none of them can bring a vertex back onto the axis.
     """
     vertices = np.asarray(vertices, dtype=np.float64)
-    for angle in (0.0, 0.3, 0.7, 1.1, 1.7):
-        if angle == 0.0:
-            candidate = vertices
-        else:
-            cos, sin = np.cos(angle), np.sin(angle)
-            rotation = np.array([[cos, 0.0, sin], [0.0, 1.0, 0.0], [-sin, 0.0, cos]])
-            candidate = vertices @ rotation.T
-        if np.sin(np.arccos(np.clip(candidate[:, 2], -1.0, 1.0))).min() > tolerance:
-            return candidate
-    raise RuntimeError("could not rotate the mesh clear of the coordinate poles")
+    return vertices @ pole_rotation(vertices, tolerance).T
 
 
-def _hemisphere_grids(order, rotate: bool = True):
-    """The bundled ico4 sphere, split into two hemispheres."""
+def _hemisphere_grids(order, rotate: bool = True, return_rotations: bool = False):
+    """The bundled ico4 sphere, split into two hemispheres.
+
+    With ``return_rotations`` the pair of ``3 x 3`` rotations applied to the two
+    hemispheres comes back as well (identities when ``rotate`` is false).
+    """
     from .spec import N_VERTICES_PER_HEMI
     from .surface import load_surface
 
@@ -884,13 +1000,15 @@ def _hemisphere_grids(order, rotate: bool = True):
     left = faces[(faces < n).all(axis=1)]
     right = faces[(faces >= n).all(axis=1)] - n
     lh_vertices, rh_vertices = vertices[:n], vertices[n:]
+    lh_rotation, rh_rotation = np.eye(3), np.eye(3)
     if rotate:
-        lh_vertices = rotate_off_poles(lh_vertices)
-        rh_vertices = rotate_off_poles(rh_vertices)
-    return (
-        SphericalGrid(lh_vertices, left, order),
-        SphericalGrid(rh_vertices, right, order),
-    )
+        lh_rotation, rh_rotation = pole_rotation(lh_vertices), pole_rotation(rh_vertices)
+        lh_vertices = lh_vertices @ lh_rotation.T
+        rh_vertices = rh_vertices @ rh_rotation.T
+    grids = (SphericalGrid(lh_vertices, left, order), SphericalGrid(rh_vertices, right, order))
+    if return_rotations:
+        return grids, (lh_rotation, rh_rotation)
+    return grids
 
 
 def align(
@@ -923,7 +1041,9 @@ def align(
     delta
         Central-difference step; see the conditioning note in this module.
     template
-        Supply a template to register against instead of estimating one.
+        Supply a template to register against instead of estimating one: a
+        **square-root** density of unit mass in the area inner product, as
+        :attr:`Alignment.template` is -- not a connectome.
     grids
         ``(lh_grid, rh_grid)`` to align on, as :class:`SphericalGrid`. Defaults
         to the bundled ico4 sphere, split at the hemisphere boundary.
@@ -953,8 +1073,15 @@ def align(
     shapes = {d.shape for d in densities}
     if len(shapes) != 1:
         raise ValueError(f"connectomes are on different grids: {sorted(shapes)}")
+    for index, density in enumerate(densities):
+        if not np.isfinite(density).all() or density.min() < 0 or density.sum() <= 0:
+            raise ValueError(f"connectome {index} is not a nonnegative density with positive mass")
 
-    lh_grid, rh_grid = _hemisphere_grids(order) if grids is None else grids
+    if grids is None:
+        (lh_grid, rh_grid), rotations = _hemisphere_grids(order, return_rotations=True)
+    else:
+        lh_grid, rh_grid = grids
+        rotations = (np.eye(3), np.eye(3))
     for name, grid in (("left", lh_grid), ("right", rh_grid)):
         poles = grid.pole_vertices()
         if poles.size:
@@ -982,8 +1109,12 @@ def align(
     if template is None:
         template = encore.template(densities, iterations=template_iterations)
     template = np.asarray(template, dtype=np.float64)
+    if template.shape != (expected, expected):
+        raise ValueError(
+            f"template is {template.shape}, expected a {expected} x {expected} square-root density"
+        )
 
-    result = Alignment(template=template)
+    result = Alignment(template=template, grid_rotations=rotations)
     for index, density in enumerate(densities):
         if verbose:
             print(f"registering subject {index + 1} of {len(densities)}")

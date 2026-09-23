@@ -92,8 +92,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--streamline-count",
         type=int,
-        default=None,
-        help="streamlines used; recorded in the metadata",
+        default=0,
+        help="streamlines used; recorded in the metadata (0 when unknown, as the example writes)",
+    )
+    parser.add_argument(
+        "--kernel",
+        default="shk",
+        choices=("shk", "rdk", "matern"),
+        help="kernel the legacy SC was smoothed with; every released "
+        "smoothed_sc_avg_*.mat came from the spherical kernel (SPEC_QUESTIONS.md item 10)",
     )
     args = parser.parse_args(argv)
 
@@ -136,9 +143,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"    normalized to unit mass (was {total:.6g})")
             extra = {
                 "normalization": "unit-mass",
-                "kernel": "rdk",
+                "kernel": args.kernel,
                 "bandwidth": args.bandwidth,
-                "streamline_count": args.streamline_count or "unrecorded",
+                "streamline_count": args.streamline_count,
                 "streamline_weighting": "unrecorded",
             }
         else:

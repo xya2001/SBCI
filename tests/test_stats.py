@@ -200,3 +200,87 @@ def test_the_result_reports_what_it_found():
     assert 2 in result.significant(0.05)
     assert result.method == "fdr"
     assert result.coefficients.shape == (5, 2)
+
+
+def test_an_intercept_in_any_column_is_recognized():
+    """A constant column anywhere in the design is the intercept; none is added."""
+    from sbci.stats import _design_matrix
+
+    rng = np.random.default_rng(5)
+    covariate = rng.standard_normal(30)
+    first = _design_matrix(np.column_stack([np.ones(30), covariate]), add_intercept=True)
+    second = _design_matrix(np.column_stack([covariate, np.ones(30)]), add_intercept=True)
+    assert first.shape == (30, 2) and second.shape == (30, 2)
+    scores = 0.5 * covariate + rng.standard_normal(30)
+    a = local_test(scores, np.column_stack([np.ones(30), covariate]), terms=[1])
+    b = local_test(scores, np.column_stack([covariate, np.ones(30)]), terms=[0])
+    assert a.statistic[0] == pytest.approx(b.statistic[0], rel=1e-9)
+    assert a.residual_dof == b.residual_dof == 28
+
+
+def test_degrees_of_freedom_follow_the_rank_of_the_design():
+    rng = np.random.default_rng(11)
+    n = 40
+    covariate = rng.standard_normal(n)
+    scores = 0.4 * covariate + rng.standard_normal(n)
+    plain = local_test(scores, covariate)
+    duplicated = local_test(scores, np.column_stack([covariate, 2.0 * covariate]))
+    assert duplicated.residual_dof == plain.residual_dof == n - 2
+    assert duplicated.numerator_dof == plain.numerator_dof == 1
+    assert duplicated.statistic[0] == pytest.approx(plain.statistic[0], rel=1e-8)
+    with pytest.raises(ValueError, match="collinear"):  # the duplicate column alone
+        local_test(scores, np.column_stack([covariate, 2.0 * covariate]), terms=[2])
+
+
+def test_an_untestable_component_gets_nan_not_a_significant_zero():
+    rng = np.random.default_rng(12)
+    n = 30
+    covariate = rng.standard_normal(n)
+    scores = np.column_stack([rng.standard_normal(n), np.ones(n), np.full(n, np.nan)])
+    result = local_test(scores, covariate)
+    assert np.isfinite(result.pvalue[0])
+    assert np.isnan(result.statistic[1]) and np.isnan(result.pvalue[1])
+    assert np.isnan(result.statistic[2]) and np.isnan(result.adjusted[2])
+    assert result.significant(0.05).size <= 1
+
+
+def test_the_effect_map_describes_the_tested_covariate_not_the_intercept():
+    from sbci.reduction import Reduction
+
+    rng = np.random.default_rng(14)
+    n, k, p = 40, 3, 6
+    covariate = rng.standard_normal(n) + 5.0  # a far-from-zero mean makes the intercept large
+    scores = rng.standard_normal((n, k))
+    scores[:, 0] += 2.0 * covariate
+    basis = np.linalg.qr(rng.standard_normal((p, p)))[0][:, :k]
+    reduction = Reduction(
+        basis=basis,
+        scores=scores,
+        scales=np.array([3.0, 2.0, 1.0]),
+        explained=np.zeros(k),
+        objective=np.zeros((k, 1)),
+    )
+    result = local_test(scores, covariate)
+    assert result.terms == (1,)
+    weights = result.coefficients[:, 1] * reduction.scales
+    expected = (basis * weights) @ basis.sum(axis=0)
+    np.testing.assert_allclose(result.effect_map(reduction), expected)
+    assert not np.allclose(result.effect_map(reduction), result.effect_map(reduction, term=0))
+
+
+def test_permutation_pvalues_are_uniform_under_the_null_with_a_correlated_nuisance():
+    """Freedman-Lane keeps the null exact when the covariate correlates with a nuisance term."""
+    rng = np.random.default_rng(15)
+    n = 30
+    pvalues = []
+    for _ in range(120):
+        nuisance = rng.standard_normal(n)
+        covariate = 0.8 * nuisance + 0.6 * rng.standard_normal(n)
+        scores = 1.0 * nuisance + rng.standard_normal(n)  # depends on the nuisance only
+        result = local_test(
+            scores, np.column_stack([nuisance, covariate]), terms=[2], permutations=99, seed=1
+        )
+        pvalues.append(result.pvalue[0])
+    pvalues = np.asarray(pvalues)
+    assert 0.35 < pvalues.mean() < 0.65
+    assert (pvalues <= 0.05).mean() < 0.15

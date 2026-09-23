@@ -50,22 +50,42 @@ fix to the reference, which is recorded in PORTING.md item 5.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 
 import numpy as np
+
+from . import spec
 
 DEFAULT_ALPHA = 1e-10
 """Roughness penalty. The reference's default, effectively off."""
 
 
-def power_iteration(matrix, start, max_iter: int = 30, tol: float = 1e-3):
-    """Leading eigenvector by power iteration, as ``power_iterations.m``."""
+def _as_operator(matrix):
+    """A function applying ``matrix`` to a vector.
+
+    ``matrix`` may be a square array, which is symmetrized as the reference does,
+    or something that is already an operator: a callable, or a SciPy
+    ``LinearOperator``. The iterations below only ever multiply, so they never
+    need the matrix itself -- and on the ico4 grid forming it is what costs.
+    """
+    if callable(matrix):
+        return matrix
     matrix = np.asarray(matrix, dtype=np.float64)
     if not np.allclose(matrix, matrix.T):
         matrix = (matrix + matrix.T) / 2
+    return lambda vector: matrix @ vector
+
+
+def power_iteration(matrix, start, max_iter: int = 30, tol: float = 1e-3):
+    """Leading eigenvector by power iteration, as ``power_iterations.m``.
+
+    ``matrix`` may be an array or an operator; see :func:`_as_operator`.
+    """
+    apply = _as_operator(matrix)
     current = np.asarray(start, dtype=np.float64).ravel()
     for _ in range(max_iter - 1):
-        nxt = matrix @ current
+        nxt = apply(current)
         norm = np.linalg.norm(nxt)
         if norm == 0:
             break
@@ -83,16 +103,15 @@ def sparse_power_iteration(
     """Leading eigenvector with a hard support constraint.
 
     Port of ``generalized_power.m``: keep the ``support`` largest components,
-    zero the rest, and normalize in the ``gram`` inner product.
+    zero the rest, and normalize in the ``gram`` inner product. ``matrix`` may
+    be an array or an operator; see :func:`_as_operator`.
     """
-    matrix = np.asarray(matrix, dtype=np.float64)
-    if not np.allclose(matrix, matrix.T):
-        matrix = (matrix + matrix.T) / 2
+    apply = _as_operator(matrix)
     gram = np.asarray(gram, dtype=np.float64)
     current = np.asarray(start, dtype=np.float64).ravel()
 
     for _ in range(max_iter - 1):
-        nxt = matrix @ current
+        nxt = apply(current)
         if support < nxt.size:
             keep = np.argsort(np.abs(nxt))[::-1][:support]
             mask = np.zeros(nxt.size, dtype=bool)
@@ -120,21 +139,95 @@ def _leading_eigenvector(matrix, start=None):
     wanted; on the ico4 grid it would make a fit take hours. Above
     :data:`ARPACK_THRESHOLD` this uses ARPACK, which is the library MATLAB's
     ``eigs`` calls, so the large case is if anything closer to the reference
-    than the small one.
+    than the small one. ``matrix`` is a dense array below the threshold and a
+    SciPy ``LinearOperator`` above it (see :meth:`_Deflation.sandwich`), so the
+    ``n x n`` operator is never formed on a large grid.
     """
-    matrix = (matrix + matrix.T) / 2
-    if matrix.shape[0] <= ARPACK_THRESHOLD:
-        values, vectors = np.linalg.eigh(matrix)
-        return vectors[:, int(np.argmax(np.abs(values)))]
+    from scipy.sparse.linalg import ArpackNoConvergence, LinearOperator, eigsh
 
-    from scipy.sparse.linalg import ArpackNoConvergence, eigsh
+    if not isinstance(matrix, LinearOperator):
+        matrix = (matrix + matrix.T) / 2
+        if matrix.shape[0] <= ARPACK_THRESHOLD:
+            values, vectors = np.linalg.eigh(matrix)
+            return vectors[:, int(np.argmax(np.abs(values)))]
 
     try:
         _, vectors = eigsh(matrix, k=1, which="LM", v0=start, tol=0)
         return vectors[:, 0]
     except ArpackNoConvergence:  # pragma: no cover - rare, and recoverable
-        values, vectors = np.linalg.eigh(matrix)
+        dense = matrix @ np.eye(matrix.shape[0]) if isinstance(matrix, LinearOperator) else matrix
+        values, vectors = np.linalg.eigh((dense + dense.T) / 2)
         return vectors[:, int(np.argmax(np.abs(values)))]
+
+
+class _Deflation:
+    """The projector onto the complement of the components already taken.
+
+    ``P = I - K (K' G K)^-1 K' G`` for the kept components ``K`` and the inner
+    product ``G``. The reference forms ``P`` and then ``P M P'`` explicitly, two
+    ``n^3`` products per outer iteration -- about half a minute each on the
+    ico4 grid. ``P`` is a rank-``k`` update of the identity, so applying it is
+    ``O(n k)`` plus one product with ``G``; this class applies it and never
+    forms it, except for the small case where a dense diagonalization is used.
+    """
+
+    def __init__(self, kept, gram):
+        self.kept = kept
+        self.gram = gram
+        self.inverse = (
+            None if kept is None or kept.shape[1] == 0 else np.linalg.inv(kept.T @ gram @ kept)
+        )
+
+    def apply(self, vector):
+        """``P v``."""
+        if self.inverse is None:
+            return vector
+        return vector - self.kept @ (self.inverse @ (self.kept.T @ (self.gram @ vector)))
+
+    def apply_transposed(self, vector):
+        """``P' v``."""
+        if self.inverse is None:
+            return vector
+        return vector - self.gram.T @ (self.kept @ (self.inverse.T @ (self.kept.T @ vector)))
+
+    def quadratic(self, matrix, vector):
+        """``v' P M P' v``."""
+        projected = self.apply_transposed(vector)
+        return float(projected @ matrix @ projected)
+
+    def sandwich(self, matrix):
+        """``P M P'``: dense below :data:`ARPACK_THRESHOLD`, otherwise an operator."""
+        n = matrix.shape[0]
+        if n <= ARPACK_THRESHOLD:
+            if self.inverse is None:
+                return matrix
+            projector = np.eye(n) - self.kept @ self.inverse @ self.kept.T @ self.gram
+            return projector @ matrix @ projector.T
+
+        from scipy.sparse.linalg import LinearOperator
+
+        return LinearOperator(
+            (n, n),
+            matvec=lambda v: self.apply(matrix @ self.apply_transposed(v)),
+            dtype=np.float64,
+        )
+
+
+def _mode1_gram(residual):
+    """The mode-1 Gram matrix ``sum_s R_s R_s'`` of the cohort, as an operator.
+
+    The reference forms it from the mode-1 unfolding: an ``(n, n S)`` copy of
+    the whole cohort followed by an ``n^2 S`` product, which on the ico4 grid
+    is eight gigabytes and five trillion flops per component, all to seed a
+    power iteration that only ever applies the matrix. Applying it directly
+    costs ``2 n^2 S`` per vector and no copy.
+    """
+
+    def apply(vector):
+        halfway = vector @ residual  # row s is R_s' v
+        return (residual @ halfway[:, :, None])[:, :, 0].sum(axis=0)
+
+    return apply
 
 
 @dataclass
@@ -157,6 +250,13 @@ class Reduction:
     """``(rank,)``; fraction of the cohort's norm captured up to component k."""
     objective: np.ndarray
     """``(rank, iterations)``; the objective at each outer iteration."""
+    mean: np.ndarray | None = None
+    """``(n, n)`` cohort mean the fit was centred on, or ``None`` if uncentred.
+
+    :func:`reduce` centres a cohort of two or more subjects and records the
+    mean here, so :func:`project` can centre new subjects the same way and
+    :meth:`reconstruct` can put it back.
+    """
 
     @property
     def rank(self) -> int:
@@ -164,9 +264,10 @@ class Reduction:
         return int(self.basis.shape[1])
 
     def reconstruct(self, index: int) -> np.ndarray:
-        """Rebuild one subject's connectome from its scores."""
+        """Rebuild one subject's connectome from its scores, mean included."""
         weights = self.scores[index] * self.scales
-        return (self.basis * weights) @ self.basis.T
+        rebuilt = (self.basis * weights) @ self.basis.T
+        return rebuilt if self.mean is None else rebuilt + self.mean
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
         return (
@@ -220,7 +321,9 @@ def fit_basis(
     gram = np.asarray(gram, dtype=np.float64)
     if gram.shape != (n, n):
         raise ValueError(f"gram is {gram.shape}, expected {(n, n)}")
-    penalty = np.zeros((n, n)) if roughness is None else np.asarray(roughness, dtype=np.float64)
+    penalty = None if roughness is None else np.asarray(roughness, dtype=np.float64)
+    if penalty is not None and penalty.shape != (n, n):
+        raise ValueError(f"roughness is {penalty.shape}, expected {(n, n)}")
 
     rng = np.random.default_rng(seed)
     starts = None if start is None else np.asarray(start, dtype=np.float64)
@@ -235,22 +338,18 @@ def fit_basis(
     scales = np.zeros(rank)
     explained = np.zeros(rank)
     objective = np.zeros((rank, max_outer))
+    inverted_warning_given = False
 
     for k in range(rank):
-        if k == 0:
-            projector = np.eye(n)
-        else:
-            kept = components[:, :k]
-            projector = np.eye(n) - kept @ np.linalg.inv(kept.T @ gram @ kept) @ kept.T @ gram
+        deflation = _Deflation(components[:, :k] if k else None, gram)
 
         # Initialise from the leading eigenvector of the mode-1 Gram matrix.
-        unfolded = np.moveaxis(residual, 0, -1).reshape(n, n * n_subjects, order="F")
         if starts is not None:
             guess = starts[:, k]
         else:
             guess = rng.standard_normal(n)
             guess /= np.linalg.norm(guess)
-        vector = power_iteration(unfolded @ unfolded.T, guess, max_inner, tol_inner)
+        vector = power_iteration(_mode1_gram(residual), guess, max_inner, tol_inner)
         vector = vector / np.linalg.norm(vector)
 
         weights = np.einsum("nij,i,j->n", residual, vector, vector)
@@ -258,7 +357,9 @@ def fit_basis(
         score = weights / norm if norm else weights
 
         contracted = np.einsum("nij,n->ij", residual, score)
-        objective[k, 0] = vector @ projector @ (contracted - alpha * penalty) @ projector.T @ vector
+        regularized = contracted if penalty is None else contracted - alpha * penalty
+        regularized = (regularized + regularized.T) / 2
+        objective[k, 0] = deflation.quadratic(regularized, vector)
 
         change = np.inf
         step = 0
@@ -268,7 +369,9 @@ def fit_basis(
             score = weights / norm if norm else weights
 
             contracted = np.einsum("nij,n->ij", residual, score)
-            operator = projector @ (contracted - alpha * penalty) @ projector.T
+            regularized = contracted if penalty is None else contracted - alpha * penalty
+            regularized = (regularized + regularized.T) / 2
+            operator = deflation.sandwich(regularized)
             if support is None:
                 vector = _leading_eigenvector(operator, start=vector)
             else:
@@ -277,20 +380,35 @@ def fit_basis(
                 )
                 vector = vector / np.linalg.norm(vector)
 
-            objective[k, step + 1] = (
-                vector @ projector @ (contracted - alpha * penalty) @ projector.T @ vector
-            )
+            objective[k, step + 1] = deflation.quadratic(regularized, vector)
+            if objective[k, step + 1] < 0 and not inverted_warning_given:
+                # The trap described in the module docstring: the penalty (or a
+                # dominant negative mode) has taken over and the component is
+                # the roughest direction, not the smoothest.
+                warnings.warn(
+                    f"component {k}: the selected eigenvalue is negative, so the fit "
+                    "is returning the roughest direction; lower alpha",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                inverted_warning_given = True
             if objective[k, 0] != 0:
                 change = abs((objective[k, step + 1] - objective[k, step]) / objective[k, 0])
             step += 1
 
         scale = float(vector @ contracted @ vector)
-        residual = residual - scale * np.einsum("i,j,n->nij", vector, vector, score)
+        # Deflate subject by subject: one n x n temporary instead of a whole
+        # cohort-sized one, which on the ico4 grid is the difference between
+        # 210 MB and 8 GB per component.
+        outer = np.outer(vector, vector)
+        for index in range(n_subjects):
+            residual[index] -= (scale * score[index]) * outer
 
         components[:, k] = vector
         score_matrix[:, k] = score
         scales[k] = scale
-        explained[k] = np.linalg.norm(matrices - residual) / total_norm
+        captured = sum(float(((m - r) ** 2).sum()) for m, r in zip(matrices, residual, strict=True))
+        explained[k] = np.sqrt(captured) / total_norm
 
     return Reduction(
         basis=components,
@@ -301,27 +419,41 @@ def fit_basis(
     )
 
 
-def project(reduction: Reduction, matrices, gram=None) -> np.ndarray:
+def project(reduction: Reduction, matrices) -> np.ndarray:
     """Score new connectomes against an existing basis.
 
     Port of ``ConConSmooth.smooth``: least squares of each subject's matrix
-    against the separable products ``psi_k psi_k'``, over the lower triangle.
+    against the separable products ``psi_k psi_k'`` over the lower triangle,
+    diagonal included. Subjects are first centred on :attr:`Reduction.mean`
+    when the basis was fitted to a centred cohort, and the result is in the
+    units of :attr:`Reduction.scores` -- the fitted coefficient divided by the
+    component's scale -- so it is directly comparable with them.
+
+    For symmetric input the normal equations have a closed form,
+    ``(X'X)_kl = ((psi_k . psi_l)^2 + sum_i psi_k(i)^2 psi_l(i)^2) / 2`` and
+    ``(X'y)_k = (psi_k' Y psi_k + sum_i psi_k(i)^2 Y_ii) / 2``, which is what is
+    solved here: ``O(n^2 K)`` per subject, and no thirteen-million-row design.
     """
     matrices = np.asarray(matrices, dtype=np.float64)
     if matrices.ndim == 2:
         matrices = matrices[None]
-    n = reduction.basis.shape[0]
-    lower = np.tril_indices(n)
+    basis = np.asarray(reduction.basis, dtype=np.float64)
+    n = basis.shape[0]
+    if matrices.shape[1:] != (n, n):
+        raise ValueError(f"matrices are {matrices.shape[1:]}, the basis is on {n} vertices")
 
-    design = np.empty((lower[0].size, reduction.rank))
-    for k in range(reduction.rank):
-        column = np.outer(reduction.basis[:, k], reduction.basis[:, k])
-        design[:, k] = column[lower]
-
+    squares = basis**2
+    normal = 0.5 * ((basis.T @ basis) ** 2 + squares.T @ squares)
     out = np.empty((matrices.shape[0], reduction.rank))
     for i, matrix in enumerate(matrices):
-        out[i], *_ = np.linalg.lstsq(design, matrix[lower], rcond=None)
-    return out
+        centred = matrix if reduction.mean is None else matrix - reduction.mean
+        quadratic = (basis * (centred @ basis)).sum(axis=0)
+        right = 0.5 * (quadratic + squares.T @ np.diagonal(centred))
+        out[i], *_ = np.linalg.lstsq(normal, right, rcond=None)
+
+    scales = np.asarray(reduction.scales, dtype=np.float64)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.where(scales != 0, out / scales, 0.0)
 
 
 def _grid_gram_and_roughness(area, coordinates=None):
@@ -389,13 +521,20 @@ def reduce(cc_list, rank: int = 10, **kwargs) -> Reduction:
         raise ValueError(f"connectomes are on different grids: {sorted(shapes)}")
 
     matrices = np.stack(densities)
+    densities.clear()  # the stack owns the only copy now
+    mean = None
     if matrices.shape[0] > 1:
-        matrices = matrices - matrices.mean(axis=0, keepdims=True)
+        mean = matrices.mean(axis=0)
+        matrices -= mean[None]
 
     n = matrices.shape[1]
-    if area is not None and area.size == n:
+    if area is not None and area.size == n == spec.N_VERTICES:
+        # The mesh inner product and roughness are those of the bundled ico4
+        # grid, so they only apply on it; any other grid gets the plain ones.
         gram, roughness = _grid_gram_and_roughness(area)
     else:
         gram, roughness = np.eye(n), None
 
-    return fit_basis(matrices, gram, roughness, rank=rank, **kwargs)
+    result = fit_basis(matrices, gram, roughness, rank=rank, **kwargs)
+    result.mean = mean
+    return result

@@ -56,7 +56,7 @@ else
     record FAIL "sbci imports" "$OUT"
 fi
 
-if OUT=$(python -m pytest tests/ -q 2>&1 | tail -1); then
+if OUT=$(python -m pytest -q 2>&1 | tail -1); then
     record PASS "unit tests" "$OUT"
 else
     record FAIL "unit tests" "$OUT"
@@ -86,7 +86,11 @@ rm -rf "$TMPW"
 echo
 echo "--- tier 2: the documented API on real data ---"
 DERIV=${SBCI_DERIVATIVES:-/work/users/x/y/xya/sbci-derivatives}
-if [ -f "$DERIV/sub-example_sc.h5" ]; then
+if [ -z "${SLURM_JOB_ID:-}" ]; then
+    # The audit smooths, reduces and aligns on the full grid: hours of CPU
+    # and gigabytes of memory, which belong on a compute node, never the login node.
+    record SKIP "API audit (every README row)" "heavy compute: run inside sbatch/srun"
+elif [ -f "$DERIV/sub-example_sc.h5" ]; then
     if OUT=$(python scripts/audit_api.py 2>&1 | tail -1); then
         record PASS "API audit (every README row)" "$OUT"
     else

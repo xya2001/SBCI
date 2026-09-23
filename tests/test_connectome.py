@@ -120,3 +120,80 @@ def test_coupling_validates_before_failing(connectome):
     """Argument checks run first, so a misuse is reported as a misuse."""
     with pytest.raises(ValueError, match="structural connectome"):
         connectome.coupling(connectome)
+
+
+def _functional_toy(connectome):
+    """The toy connectome's layout with correlations in it."""
+    from sbci.connectome import ContinuousConnectome
+    from sbci.grid import to_condensed
+    from sbci.metadata import template
+
+    correlations = np.array(
+        [
+            [0.0, 0.8, 0.3, -0.2, 0.0],
+            [0.8, 0.0, 0.5, 0.1, 0.0],
+            [0.3, 0.5, 0.0, 0.6, 0.0],
+            [-0.2, 0.1, 0.6, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0, 0.0],
+        ]
+    )
+    metadata = template(
+        "fc",
+        normalization="none",
+        registration_reference="fsaverage",
+        pipeline_version="0.0.1.dev0",
+        container_version="sbci.sif@sha256:0",
+        fc_nuisance_model="36p",
+    )
+    return ContinuousConnectome(
+        data=to_condensed(correlations).astype(np.float32),
+        area=connectome.area,
+        mask=connectome.mask,
+        metadata=metadata,
+    ), correlations
+
+
+def test_functional_connectomes_are_aggregated_as_fisher_z_means(connectome, atlas):
+    """The default for FC is a Fisher-z average; a mass of correlations is refused."""
+    from sbci.parcellation import parcellate
+
+    fc, correlations = _functional_toy(connectome)
+    matrix = fc.to_atlas(atlas)
+    area = np.where(fc.mask, fc.area, 0.0)
+    expected = parcellate(correlations, atlas, area, how="mean", fisher_z=True)
+    np.testing.assert_allclose(matrix, expected)
+    assert np.abs(matrix).max() < 1.0  # not saturated
+    with pytest.raises(ValueError, match="no mass"):
+        fc.to_atlas(atlas, how="mass")
+
+
+def test_to_atlas_leaves_masked_vertices_out_of_the_region_areas(connectome):
+    """Vertex 4 is medial wall; put it in a cortical region and it must not dilute that mean."""
+    from sbci.atlas import Atlas
+    from sbci.parcellation import parcellate
+
+    atlas = Atlas(name="toy2", labels=np.array([1, 1, 2, 2, 2]), names=("A", "B"))
+    with_mask = connectome.to_atlas(atlas, how="mean")
+    dense = connectome.dense()
+    without = parcellate(dense, atlas, connectome.area, how="mean")
+    masked_area = np.where(connectome.mask, connectome.area, 0.0)
+    expected = parcellate(dense, atlas, masked_area, how="mean")
+    np.testing.assert_allclose(with_mask, expected)
+    assert not np.allclose(with_mask, without)
+
+
+def test_seed_region_matches_the_dense_computation(connectome, atlas):
+    member = atlas.region_mask("A")
+    weights = np.where(member, connectome.area, 0.0)
+    expected = (connectome.dense().astype(np.float64) @ weights) / weights.sum()
+    np.testing.assert_allclose(connectome.seed(region=member), expected)
+
+
+def test_exchange_files_are_refused_by_load_with_an_explanation(tmp_path):
+    from sbci.connectome import ContinuousConnectome
+    from sbci.errors import InvalidFileError
+
+    path = tmp_path / "sub-x.dconn.nii"
+    path.write_bytes(b"")
+    with pytest.raises(InvalidFileError, match="write"):
+        ContinuousConnectome.load(path)

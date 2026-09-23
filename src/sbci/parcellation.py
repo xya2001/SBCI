@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .atlas import Atlas
+from .atlas import Atlas, load_atlas
 
 HOW = ("mass", "mean")
 
@@ -36,7 +36,7 @@ def region_weights(atlas: Atlas, area: np.ndarray) -> tuple[np.ndarray, np.ndarr
 
 def parcellate(
     dense: np.ndarray,
-    atlas: Atlas,
+    atlas: Atlas | str,
     area: np.ndarray,
     how: str = "mass",
     fisher_z: bool = False,
@@ -48,9 +48,9 @@ def parcellate(
     dense
         Symmetric ``n_vertices x n_vertices`` connectivity with a zero diagonal.
     atlas
-        Parcellation on the same grid.
+        Parcellation on the same grid, or the name of a bundled one.
     area
-        Per-vertex area weight.
+        Per-vertex area weight; zero for vertices that should not count.
     how
         ``"mass"`` sums the area-weighted connectivity crossing each region
         pair, so the total over all pairs is preserved. ``"mean"`` divides that
@@ -59,7 +59,8 @@ def parcellate(
         ``parcellate_sc.m``.
     fisher_z
         Aggregate through ``arctanh`` and map back with ``tanh``. Required for
-        FC, where averaging correlations directly is biased.
+        FC, where averaging correlations directly is biased. Only meaningful
+        with ``how="mean"``: the ``tanh`` of a *sum* of z-values saturates.
 
     Notes
     -----
@@ -70,13 +71,23 @@ def parcellate(
     """
     if how not in HOW:
         raise ValueError(f"how must be one of {HOW}, got {how!r}")
+    if fisher_z and how != "mean":
+        raise ValueError("fisher_z aggregation is an average of correlations; use how='mean'")
+    if isinstance(atlas, str):
+        atlas = load_atlas(atlas)
 
     dense = np.asarray(dense, dtype=np.float64)
     if fisher_z:
         dense = np.arctanh(np.clip(dense, -0.999999, 0.999999))
 
     weights, _ = region_weights(atlas, area)
-    mass = weights.T @ dense @ weights
+    # The weight matrix is one-hot: a sparse product is O(n^2) where the dense
+    # one is O(n^2 K), which for a 1000-region atlas is the difference between
+    # tens of milliseconds and a second.
+    from scipy import sparse
+
+    sparse_weights = sparse.csr_matrix(weights)
+    mass = np.asarray((sparse_weights.T @ dense) @ sparse_weights)
 
     if how == "mean":
         totals = weights.sum(axis=0)

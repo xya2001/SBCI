@@ -52,10 +52,11 @@ item 10.
 ``shk``
     The spherical kernel ``concon`` applies (Moyer et al., MICCAI 2016), the
     default, and the one that produced every released ``smoothed_sc_avg_*.mat``.
-    Its bandwidth is ``sigma``. Reproduces ``c3_main`` at r = 1.000000 across
-    five ADNI subjects, with a 0.14% amplitude offset that is a convention
-    rather than noise -- see PORTING.md item 6. Not the heat kernel, despite
-    the name: :func:`spherical_heat_kernel` explains the weight.
+    Its bandwidth is ``sigma``. Reproduces ``c3_main`` at r = 1.000000 and
+    scale 1.000000 across five ADNI subjects; the 0.14% amplitude offset an
+    earlier version carried was the binary's lookup-table quantization, which
+    :class:`KernelTable` reproduces -- see PORTING.md item 6. Not the heat
+    kernel, despite the name: :func:`spherical_heat_kernel` explains the weight.
 ``rdk``
     Riemannian diffusion kernel (bioRxiv 2025.09.08.674789), built from
     Laplace-Beltrami eigenfunctions on the cortical surface itself. Bandwidth
@@ -158,10 +159,22 @@ KERNEL_EPSILON = 0.001
 """Where ``concon`` cuts the kernel off, from ``--epsilon``.
 
 ``compute_kernel.cpp`` scans ``x = cos(theta)`` down from 1.0 in steps of
-1e-4 and stops at the first ``x`` where the kernel falls below this; vertices
-beyond that angle get nothing. The kernel's descent there is steep enough that
-anything from 1e-6 to 0.1 gives the same cutoff to three decimals, which is why
-sweeping the flag against the binary appeared to do nothing.
+1e-4 and stops at the first ``x`` where the product ``K(x) K(1)`` falls below
+this; vertices beyond that angle get nothing. The truncated series plunges
+through zero there, so anything from 1e-6 to 0.1 gives the same cutoff to
+three decimals, which is why sweeping the flag against the binary appeared to
+do nothing.
+"""
+
+DENSE_BLOCK = 4096
+"""Endpoints per block on the dense path: a ``(5124, 4096)`` kernel block is 168 MB."""
+
+SPARSE_BLOCK = 65536
+"""Endpoints per block on the sparse path.
+
+Each block ends in a ``5124 x 5124`` densification, so small blocks cost far
+more memory traffic than they save: 4096 meant 245 such passes per million
+endpoints, 65536 means 16.
 """
 
 
@@ -171,8 +184,10 @@ def kernel_cutoff(
 ) -> float:
     """Angle in radians beyond which the kernel is zero.
 
-    Reproduces ``compute_kernel.cpp``'s scan exactly, including its 1e-4 step
-    in the cosine, so the cutoff lands on the same grid vertices.
+    Reproduces ``compute_kernel.cpp``'s scan exactly -- the product
+    ``K(x) K(1)`` against ``epsilon``, in steps of 1e-4 in the cosine -- on the
+    exact series rather than the binary's tables, so the cutoff lands on the
+    same grid vertices as :attr:`KernelTable.cutoff` wherever the two agree.
 
     Examples
     --------
@@ -184,17 +199,17 @@ def kernel_cutoff(
     """
     cosines = np.arange(1.0, -1.0, -0.0001)
     values = _legendre_series(cosines, sigma, harmonics)
-    below = np.nonzero(values < epsilon)[0]
+    below = np.nonzero(values * values[0] < epsilon)[0]
     return float(np.arccos(np.clip(cosines[below[0]], -1.0, 1.0))) if below.size else np.pi
 
 
 def _legendre_series(cosine: np.ndarray, sigma: float, harmonics: int) -> np.ndarray:
-    """The untruncated sum, shared by the kernel and its cutoff scan.
+    """The untruncated sum, shared by the closed-form kernel and its cutoff scan.
 
-    The recurrence runs in place. Smoothing one subject evaluates this over a
-    ``(5124, 4096)`` block a few hundred times, and allocating a fresh array
-    per term costs 168 MB each time; reusing three buffers instead made
-    ``smooth(kernel="shk")`` about three times faster end to end.
+    The recurrence runs in place. With ``quantized=False`` this runs over a
+    ``(5124, 4096)`` block per batch of endpoints, and allocating a fresh array
+    per term would cost 168 MB each time; reusing three buffers made that path
+    about three times faster end to end. The default path reads the tables.
     """
     degree = np.arange(harmonics)
     weight = (2 * degree + 1) ** 1.5 / np.sqrt(4 * np.pi) * np.exp(-degree * (degree + 1) * sigma)
@@ -275,15 +290,18 @@ class KernelTable:
         """Cutoff angle in radians."""
         return float(np.arccos(np.clip(self.cutoff_cosine, -1.0, 1.0)))
 
-    def __call__(self, cosine) -> np.ndarray:
-        """Kernel values by truncation lookup, zero beyond the cutoff."""
+    def __call__(self, cosine, truncate: bool = True) -> np.ndarray:
+        """Kernel values by truncation lookup, zero beyond the cutoff unless ``truncate`` is off."""
         # No `out=` anywhere here: a scalar argument is a 0-d array, which
         # numpy refuses as an output buffer.
         cosine = np.clip(np.asarray(cosine, dtype=np.float64), -1.0, 1.0)
         index = np.clip(
             (cosine * self.samples + self.samples).astype(np.int64), 0, 2 * self.samples
         )
-        return np.where(cosine < self.cutoff_cosine, 0.0, self.values[index])
+        values = self.values[index]
+        if not truncate:
+            return values
+        return np.where(cosine < self.cutoff_cosine, 0.0, values)
 
 
 @lru_cache(maxsize=8)
@@ -320,9 +338,13 @@ def concon_kernel_table(
     index = (x_k * big_l + big_l).astype(np.int64)
     np.clip(index, 0, 2 * big_l, out=index)
     weight = np.exp(-sigma * degree * (degree + 1)) * (2.0 * degree + 1.0)
-    values = np.zeros(x_k.size, dtype=np.float64)
+    # Sum on the 200,001-point harmonic table, then gather once: every entry of
+    # the kernel table is the same sum in the same order, so this is bit for
+    # bit the binary's loop over the 2,000,001 entries at a tenth of the work.
+    summed = np.zeros(x_h.size, dtype=np.float64)
     for order in range(harmonics):
-        values += weight[order] * harmonic[order][index]
+        summed += weight[order] * harmonic[order]
+    values = summed[index]
     np.maximum(values, 1e-20, out=values)  # fmax(ret_val, 1e-20)
 
     # The cutoff scan in compute_kernel.cpp, on the table.
@@ -382,12 +404,15 @@ def spherical_heat_kernel(
     harmonics
         Number of terms. ``concon`` hardcodes 33 -- see :data:`NUM_HARMONICS`.
     epsilon
-        Cutoff threshold. ``None`` leaves the series untruncated in angle,
-        which is useful for studying it but is not what the pipeline did.
+        Cutoff threshold. ``None`` leaves the series untruncated in angle and
+        evaluates it in closed form, which is useful for studying it but is not
+        what the pipeline did: the binary's tables clamp the negative lobes
+        beyond the cutoff to 1e-20, so past it they hold a floor, not the kernel.
     quantized
         ``True`` reproduces the binary's lookup tables exactly and is the
         default. ``False`` evaluates the series in closed form: the kernel the
-        tables approximate, about 0.06% higher at the peak.
+        tables approximate, about 0.06% higher at the peak. Ignored when
+        ``epsilon`` is ``None``.
 
     Notes
     -----
@@ -408,13 +433,13 @@ def spherical_heat_kernel(
     >>> float(spherical_heat_kernel(np.cos(np.radians(20.0)), 0.005))  # past the cutoff
     0.0
     """
-    if quantized and epsilon is not None:
-        return concon_kernel_table(sigma, harmonics, epsilon)(cosine)
     cosine = np.clip(np.asarray(cosine, dtype=np.float64), -1.0, 1.0)
+    if epsilon is None:
+        return _legendre_series(cosine, sigma, harmonics)
+    if quantized:
+        return concon_kernel_table(sigma, harmonics, epsilon)(cosine)
     total = _legendre_series(cosine, sigma, harmonics)
-    if epsilon is not None:
-        total = np.where(cosine < np.cos(kernel_cutoff(sigma, epsilon, harmonics)), 0.0, total)
-    return total
+    return np.where(cosine < np.cos(kernel_cutoff(sigma, epsilon, harmonics)), 0.0, total)
 
 
 def endpoint_density(
@@ -427,7 +452,7 @@ def endpoint_density(
     sigma: float,
     harmonics: int = NUM_HARMONICS,
     normalize: str | None = None,
-    block: int = 4096,
+    block: int | None = None,
     method: str = "sparse",
     progress=None,
     quantized: bool = True,
@@ -455,7 +480,8 @@ def endpoint_density(
         over the grid; it was a workaround for a scale mismatch that turned out
         to be the kernel's weight, and is kept only for comparison.
     block
-        Endpoints processed at a time.
+        Endpoints processed at a time; defaults to :data:`SPARSE_BLOCK` or
+        :data:`DENSE_BLOCK` according to ``method``.
     method
         ``"sparse"``, the default, finds each endpoint's neighbourhood with a
         KD-tree and evaluates the kernel only there: the kernel is zero past
@@ -484,6 +510,26 @@ def endpoint_density(
     hemisphere_out = np.asarray(hemisphere_out)
     n = vertices.shape[0]
     total = points_in.shape[0]
+    if block is None:
+        block = DENSE_BLOCK if method == "dense" else SPARSE_BLOCK
+    if (
+        vertices.ndim != 2
+        or vertices.shape[1] != 3
+        or points_in.ndim != 2
+        or points_in.shape[1] != 3
+    ):
+        raise ValueError("vertices and endpoints must be (n, 3) unit vectors")
+    if hemisphere_in.shape != (total,) or hemisphere_out.shape != (total,):
+        raise ValueError(f"hemisphere flags must have one entry per streamline ({total})")
+    if vertex_hemisphere.shape != (n,):
+        raise ValueError(f"vertex_hemisphere has {vertex_hemisphere.size} entries for {n} vertices")
+    for name, array in (
+        ("vertices", vertices),
+        ("points_in", points_in),
+        ("points_out", points_out),
+    ):
+        if array.size and np.abs(np.linalg.norm(array, axis=1) - 1.0).max() > 1e-6:
+            raise ValueError(f"{name} must lie on the unit sphere")
 
     def kernel(cosine):
         return spherical_heat_kernel(cosine, sigma, harmonics, quantized=quantized)
@@ -511,11 +557,12 @@ def endpoint_density(
                 progress(stop, total)
         return density + density.T
 
+    from scipy import sparse
     from scipy.sparse import csr_matrix
     from scipy.spatial import cKDTree
 
     cutoff = (
-        concon_kernel_table(sigma, harmonics).cutoff
+        concon_kernel_table(sigma, harmonics, KERNEL_EPSILON).cutoff
         if quantized
         else kernel_cutoff(sigma, KERNEL_EPSILON, harmonics)
     )
@@ -532,15 +579,15 @@ def endpoint_density(
             chosen = np.nonzero(hemisphere == h)[0]
             if chosen.size == 0:
                 continue
-            neighbours = trees[int(h)].query_ball_point(points[chosen], radius)
-            counts = np.fromiter(
-                (len(a) for a in neighbours), dtype=np.int64, count=len(neighbours)
+            # Every (vertex, endpoint) pair within the cutoff, found tree against
+            # tree in C rather than as a Python list per endpoint.
+            pairs = trees[int(h)].sparse_distance_matrix(
+                cKDTree(points[chosen]), radius, output_type="ndarray"
             )
-            if counts.sum() == 0:
+            if pairs.size == 0:
                 continue
-            local = np.concatenate([np.asarray(a, dtype=np.int64) for a in neighbours])
-            col = np.repeat(chosen, counts)
-            row = members[int(h)][local]
+            row = members[int(h)][pairs["i"]]
+            col = chosen[pairs["j"]]
             cosine = np.einsum("ij,ij->i", vertices[row], points[col])
             value = np.asarray(kernel(cosine), dtype=np.float64)
             keep = value > 0.0
@@ -556,7 +603,7 @@ def endpoint_density(
         if normalize == "sum":
             colsum = np.asarray(matrix.sum(axis=0)).ravel()
             colsum[colsum == 0] = 1.0
-            matrix = matrix @ csr_matrix(np.diag(1.0 / colsum))
+            matrix = (matrix @ sparse.diags(1.0 / colsum)).tocsr()
         return matrix
 
     density = np.zeros((n, n), dtype=np.float64)
@@ -697,6 +744,39 @@ class Endpoints:
     bary_in: np.ndarray | None = None
     bary_out: np.ndarray | None = None
 
+    def __post_init__(self) -> None:
+        """Coerce the fields to arrays and check they describe the same streamlines."""
+        for name in ("surf_in", "surf_out"):
+            setattr(self, name, np.asarray(getattr(self, name)).astype(np.int8).ravel())
+        for name in ("vtx_in", "vtx_out"):
+            setattr(self, name, np.asarray(getattr(self, name), dtype=np.int64).ravel())
+        count = self.vtx_in.size
+        for name in ("surf_in", "surf_out", "vtx_out"):
+            if getattr(self, name).size != count:
+                raise ValueError(
+                    f"{name} has {getattr(self, name).size} entries for {count} streamlines"
+                )
+        for name in ("surf_in", "surf_out"):
+            flags = getattr(self, name)
+            if flags.size and not np.isin(flags, (0, 1)).all():
+                raise ValueError(f"{name} must be 0 (left) or 1 (right)")
+        optional = (self.tri_in, self.tri_out, self.bary_in, self.bary_out)
+        if any(item is not None for item in optional):
+            if any(item is None for item in optional):
+                raise ValueError("positions need all of tri_in, tri_out, bary_in and bary_out")
+            self.tri_in = np.asarray(self.tri_in, dtype=np.int64).ravel()
+            self.tri_out = np.asarray(self.tri_out, dtype=np.int64).ravel()
+            self.bary_in = np.asarray(self.bary_in, dtype=np.float64)
+            self.bary_out = np.asarray(self.bary_out, dtype=np.float64)
+            for name, expected in (
+                ("tri_in", (count,)),
+                ("tri_out", (count,)),
+                ("bary_in", (count, 3)),
+                ("bary_out", (count, 3)),
+            ):
+                if getattr(self, name).shape != expected:
+                    raise ValueError(f"{name} is {getattr(self, name).shape}, expected {expected}")
+
     @property
     def n_streamlines(self) -> int:
         """How many streamlines these endpoints describe."""
@@ -773,8 +853,9 @@ class Endpoints:
     ) -> Endpoints:
         """Build from whole-grid indices, as the HDF5 file stores them.
 
-        The hemisphere is read off the index rather than carried separately, so
-        the two cannot disagree.
+        The hemisphere is read off the vertex index rather than carried
+        separately, and the triangle index has to put its endpoint in the same
+        hemisphere, so the stored indices cannot disagree with each other.
         """
         vertex_in = np.asarray(vertex_in, dtype=np.int64)
         vertex_out = np.asarray(vertex_out, dtype=np.int64)
@@ -785,9 +866,33 @@ class Endpoints:
                     f"[{vertex.min()}, {vertex.max()}]"
                 )
         optional: dict[str, np.ndarray] = {}
-        if triangle_in is not None:
+        given = (triangle_in, triangle_out, barycentric_in, barycentric_out)
+        if any(item is not None for item in given):
+            if any(item is None for item in given):
+                raise ValueError(
+                    "positions need all of triangle_in, triangle_out, "
+                    "barycentric_in and barycentric_out"
+                )
             triangle_in = np.asarray(triangle_in, dtype=np.int64)
             triangle_out = np.asarray(triangle_out, dtype=np.int64)
+            for name, triangle, vertex in (
+                ("triangle_in", triangle_in, vertex_in),
+                ("triangle_out", triangle_out, vertex_out),
+            ):
+                if triangle.shape != vertex.shape:
+                    raise ValueError(
+                        f"{name} has {triangle.size} entries for {vertex.size} streamlines"
+                    )
+                if triangle.size and (triangle.min() < 0 or triangle.max() >= 2 * n_faces_per_hemi):
+                    raise ValueError(
+                        f"{name} out of range for a {2 * n_faces_per_hemi}-face grid: "
+                        f"[{triangle.min()}, {triangle.max()}]"
+                    )
+                # Two indices are stored per endpoint; they must agree on the hemisphere.
+                if np.any(triangle // n_faces_per_hemi != vertex // n_per_hemi):
+                    raise ValueError(
+                        f"{name} puts a triangle in the other hemisphere from its vertex"
+                    )
             optional = {
                 "tri_in": triangle_in % n_faces_per_hemi,
                 "tri_out": triangle_out % n_faces_per_hemi,
@@ -819,9 +924,10 @@ class Endpoints:
                 )
 
         def counts(rows, cols, shape):
-            out = np.zeros(shape, dtype=np.float64)
-            np.add.at(out, (rows, cols), 1.0)
-            return out
+            # bincount over the flattened pair index: exact, and an order of
+            # magnitude faster than np.add.at on a million endpoints.
+            flat = np.bincount(rows * shape[1] + cols, minlength=shape[0] * shape[1])
+            return flat.reshape(shape).astype(np.float64)
 
         left_left = (self.surf_in == 0) & (self.surf_out == 0)
         a11 = counts(self.vtx_in[left_left], self.vtx_out[left_left], (n, n))
@@ -1018,7 +1124,8 @@ def smooth(
     kernel
         One of :data:`KERNELS`.
     bandwidth
-        Kernel bandwidth ``kappa``. Defaults to the value the reference
+        ``sigma`` for ``shk``, defaulting to :data:`DEFAULT_SIGMA`; ``kappa``
+        for ``rdk`` and ``matern``, defaulting to the value the reference
         selection formula picks, ``kappa_candidates(eigenvalues)[3]``.
     eigenpairs
         Directory holding the Laplace-Beltrami basis, or a pair of
@@ -1098,18 +1205,29 @@ def apply_final_threshold(
     array([[0., 0.],
            [0., 0.]])
     """
+    if n_streamlines <= 0:
+        raise ValueError("the threshold is per streamline; there are none")
     density[density / n_streamlines <= threshold] = 0.0
     return density
 
 
 def _grid_vertices(connectome) -> np.ndarray:
-    """Unit-sphere grid vertices: the file's own if it carries them."""
-    if getattr(connectome, "coords", None) is not None:
-        vertices = np.asarray(connectome.coords, dtype=np.float64)
-    else:
-        from .surface import load_surface
+    """The unit sphere the endpoints were located on: the bundled ico4 grid.
 
-        vertices = np.asarray(load_surface("sphere").vertices, dtype=np.float64)
+    The file's ``/coordinates`` are not used. The format fixes no frame for
+    them -- they may hold any geometry -- whereas the endpoints' barycentric
+    positions refer to the pipeline's ico4 sphere, which the bundled mesh
+    reproduces to 6e-12 (PORTING.md item 6).
+    """
+    from . import spec
+    from .surface import load_surface
+
+    if connectome.n_vertices != spec.N_VERTICES:
+        raise ValueError(
+            f"shk smoothing needs the {spec.N_VERTICES}-vertex ico4 grid, "
+            f"not {connectome.n_vertices} vertices"
+        )
+    vertices = np.asarray(load_surface("sphere").vertices, dtype=np.float64)
     return vertices / np.linalg.norm(vertices, axis=1, keepdims=True)
 
 

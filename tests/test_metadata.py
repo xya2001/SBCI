@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from sbci.metadata import Metadata, MetadataError, template
@@ -66,3 +67,35 @@ def test_from_json_rejects_a_bare_array():
 def test_template_rejects_unknown_modality():
     with pytest.raises(ValueError, match="modality must be one of"):
         template("dti")
+
+
+def test_the_storage_convention_and_spec_version_are_checked():
+    from sbci.metadata import MetadataError, template
+
+    good = template(
+        "fc",
+        normalization="none",
+        registration_reference="fsaverage",
+        pipeline_version="x",
+        container_version="y",
+        fc_nuisance_model="36p",
+    )
+    good.validate()
+    bad = template("fc", **{**good.fields, "storage_convention": "lower-triangular-float64"})
+    with pytest.raises(MetadataError, match="storage_convention"):
+        bad.validate()
+    old = template("fc", **{**good.fields, "spec_version": "9.0.0"})
+    with pytest.raises(MetadataError, match="spec_version"):
+        old.validate()
+
+
+def test_json_round_trip_handles_numpy_scalars_and_refuses_nan():
+    from sbci.metadata import Metadata, MetadataError
+
+    text = Metadata({"bandwidth": np.float32(0.005), "count": np.int64(3)}).to_json()
+    back = Metadata.from_json(text)
+    assert back["count"] == 3 and abs(back["bandwidth"] - 0.005) < 1e-6
+    with pytest.raises(MetadataError, match="serialized"):
+        Metadata({"bandwidth": float("nan")}).to_json()
+    with pytest.raises(MetadataError, match="JSON"):
+        Metadata.from_json("{not json")

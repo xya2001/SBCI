@@ -82,6 +82,17 @@ first four are corrected. PORTING.md item 7 has the measurements.
     and ``simulation.m`` copies ``lh_warp`` where it means ``rh_warp``.
 11. Kernels, frames and the adjacency accumulate in single precision. This
     port is float64 throughout.
+12. **The cotangent Laplacian weights each edge with an adjacent angle.**
+    ``cot_matrix`` puts the cotangent of the angle at ``i2`` on the edge
+    ``(i2, i3)``; the cotangent formula weights an edge by the angle *opposite*
+    it. The result is still a symmetric graph Laplacian that annihilates
+    constants, so the 5% smoothing still smooths -- with the weights around the
+    twelve five-valent vertices swapped (0.33 for 0.73).
+13. **The square root's chain rule divides by a floor where the density was
+    clamped.** ``Q_transform`` scales the derivative by ``1 / (2 max(Q, 1e-15))``;
+    where ``F`` was negative -- the unclamped barycentric weights allow that --
+    and clamped to zero, the derivative of ``sqrt(max(F, 0))`` is zero but the
+    reference multiplies a nonzero ``dF`` by ``5e14``.
 """
 
 from __future__ import annotations
@@ -93,8 +104,8 @@ from pathlib import Path
 import numpy as np
 
 from .alignment import (
+    MeshQuery,
     SphericalGrid,
-    barycentric_coordinates,
     normalize_rows,
     sphere_exp_map,
     sphere_log_map,
@@ -131,102 +142,20 @@ KERNEL_EPSILON = 1e-3
 """Where the heat kernel is cut off, on the product ``K(x) K(1)``."""
 
 
-# --- closest-triangle queries in linear time --------------------------------
+# --- closest-triangle queries ---------------------------------------------------
 
 
-def _closest_on_triangles(p, a, b, c):
-    """Closest point on triangle ``(a, b, c)`` to ``p``; the arrays broadcast to ``(..., 3)``.
+class FastMeshQuery(MeshQuery):
+    """:class:`sbci.alignment.MeshQuery` whose ``query`` also returns the face index.
 
-    Ericson's algorithm, in the same case order as
-    :func:`sbci.alignment._closest_point_on_triangles`, which matches libigl.
+    The k-d-tree search itself now lives in :class:`~sbci.alignment.MeshQuery`,
+    shared with ENCORE; this subclass only keeps the three-value ``query`` that
+    the endpoint code and the tests were written against.
     """
-    ab, ac, ap = b - a, c - a, p - a
-    d1 = (ab * ap).sum(-1)
-    d2 = (ac * ap).sum(-1)
-    bp = p - b
-    d3 = (ab * bp).sum(-1)
-    d4 = (ac * bp).sum(-1)
-    cp = p - c
-    d5 = (ab * cp).sum(-1)
-    d6 = (ac * cp).sum(-1)
-
-    vc = d1 * d4 - d3 * d2
-    vb = d5 * d2 - d1 * d6
-    va = d3 * d6 - d5 * d4
-    total = va + vb + vc
-    scale = 1.0 / np.where(total == 0, 1.0, total)
-    closest = a + (vb * scale)[..., None] * ab + (vc * scale)[..., None] * ac
-    closest = np.array(np.broadcast_to(closest, np.broadcast(p, a).shape))
-
-    def put(mask, value):
-        np.copyto(closest, np.broadcast_to(value, closest.shape), where=mask[..., None])
-
-    denom_ab = np.where(d1 - d3 == 0, 1.0, d1 - d3)
-    denom_ac = np.where(d2 - d6 == 0, 1.0, d2 - d6)
-    denom_bc = np.where((d4 - d3) + (d5 - d6) == 0, 1.0, (d4 - d3) + (d5 - d6))
-    put(
-        (va <= 0) & ((d4 - d3) >= 0) & ((d5 - d6) >= 0),
-        b + ((d4 - d3) / denom_bc)[..., None] * (c - b),
-    )
-    put((vb <= 0) & (d2 >= 0) & (d6 <= 0), a + (d2 / denom_ac)[..., None] * ac)
-    put((vc <= 0) & (d1 >= 0) & (d3 <= 0), a + (d1 / denom_ab)[..., None] * ab)
-    put((d6 >= 0) & (d5 <= d6), c)
-    put((d3 >= 0) & (d4 <= d3), b)
-    put((d1 <= 0) & (d2 <= 0), a)
-    return closest
-
-
-class FastMeshQuery:
-    """Closest-triangle queries in time proportional to the number of points.
-
-    :class:`sbci.alignment.MeshQuery` tests every face for every point, which
-    is exact but costs ``points x faces``: a million endpoints against 5,120
-    faces per iteration would take hours. This narrows the search to the
-    faces whose centroids are nearest the point -- on a mesh as regular as an
-    icosphere the closest face is always among the first few -- and returns
-    the same unclamped barycentric weights the reference's libigl AABB tree
-    returns. ``candidates`` is how many centroids to try.
-    """
-
-    def __init__(self, vertices, faces, candidates: int = 12, block: int = 32768):
-        """Index the faces of a mesh for later queries."""
-        from scipy.spatial import cKDTree
-
-        self.vertices = np.asarray(vertices, dtype=np.float64)
-        self.faces = np.asarray(faces, dtype=np.int64)
-        self.candidates = int(min(candidates, self.faces.shape[0]))
-        self.block = int(block)
-        self._a = self.vertices[self.faces[:, 0]]
-        self._b = self.vertices[self.faces[:, 1]]
-        self._c = self.vertices[self.faces[:, 2]]
-        self._tree = cKDTree((self._a + self._b + self._c) / 3.0)
 
     def query(self, points):
         """``(weights, vertex_indices, face_indices)`` for each point."""
-        points = np.asarray(points, dtype=np.float64)
-        n = points.shape[0]
-        weights = np.empty((n, 3))
-        indices = np.empty((n, 3), dtype=np.int64)
-        face_of = np.empty(n, dtype=np.int64)
-        for start in range(0, n, self.block):
-            chunk = points[start : start + self.block]
-            _, near = self._tree.query(chunk, k=self.candidates)
-            near = near.reshape(chunk.shape[0], self.candidates)
-            closest = _closest_on_triangles(
-                chunk[:, None, :], self._a[near], self._b[near], self._c[near]
-            )
-            best = np.argmin(((closest - chunk[:, None, :]) ** 2).sum(-1), axis=1)
-            face = near[np.arange(chunk.shape[0]), best]
-
-            a, b, c = self._a[face], self._b[face], self._c[face]
-            normal = np.cross(b - a, c - a)
-            normal /= np.linalg.norm(normal, axis=1, keepdims=True)
-            projected = chunk - ((chunk - a) * normal).sum(axis=1, keepdims=True) * normal
-
-            face_of[start : start + self.block] = face
-            indices[start : start + self.block] = self.faces[face]
-            weights[start : start + self.block] = barycentric_coordinates(projected, a, b, c)
-        return weights, indices, face_of
+        return self.query_faces(points)
 
 
 # --- the endpoint connectome (SConcon) --------------------------------------
@@ -359,6 +288,8 @@ class EndpointConnectome:
         """The current locations as :class:`sbci.smoothing.Endpoints`, ready to re-smooth."""
         from .smoothing import Endpoints
 
+        if self.rh_grid.n_vertices != self.n_left:
+            raise ValueError("Endpoints assumes two hemispheres with the same vertex count")
         picks = np.arange(self.n_streamlines)
         vertex_in = self.index_in[picks, np.argmax(self.weights_in, axis=1)]
         vertex_out = self.index_out[picks, np.argmax(self.weights_out, axis=1)]
@@ -484,19 +415,36 @@ class EndpointConnectome:
             for d in (derivative.x, derivative.y, derivative.z):
                 part = np.asarray(d @ akt)
                 parts.append(part + part.T)
-        else:
-            parts = [np.asarray(d.T @ ak) for d in (derivative.x, derivative.y, derivative.z)]
-        d_e1 = sum(p * e[:, None] for p, e in zip(parts, self.e1.T, strict=True))
-        d_e2 = sum(p * e[:, None] for p, e in zip(parts, self.e2.T, strict=True))
-        return connectome, d_e1, d_e2
+            d_e1 = sum(p * e[:, None] for p, e in zip(parts, self.e1.T, strict=True))
+            d_e2 = sum(p * e[:, None] for p, e in zip(parts, self.e2.T, strict=True))
+            return connectome, d_e1, d_e2
+
+        # sum_axis e1_axis(a) (dK_axis^T A K)(a, c) = (M1^T A K)(a, c) with the frame
+        # folded into the sparse derivative: two sparse products instead of three,
+        # and no dense per-axis parts.
+        from scipy import sparse
+
+        axes = (derivative.x, derivative.y, derivative.z)
+        m1 = sum(d @ sparse.diags(e) for d, e in zip(axes, self.e1.T, strict=True))
+        m2 = sum(d @ sparse.diags(e) for d, e in zip(axes, self.e2.T, strict=True))
+        return connectome, np.asarray(m1.T @ ak), np.asarray(m2.T @ ak)
 
     def q_transform(self, kernel, derivative=None, strict_upstream: bool = False):
-        """The square-root density ``Q = sqrt(F)``, with derivatives by the chain rule."""
+        """The square-root density ``Q = sqrt(F)``, with derivatives by the chain rule.
+
+        ``F`` is clamped at zero, so its square root has derivative zero
+        wherever it was clamped. The reference divides by ``2 max(Q, 1e-15)``
+        there instead (module docstring, item 13); ``strict_upstream=True``
+        reproduces that.
+        """
         if derivative is None:
             return np.sqrt(self.evaluate(kernel))
         connectome, d_e1, d_e2 = self.evaluate(kernel, derivative, strict_upstream)
         q = np.sqrt(connectome)
-        scale = 1.0 / (2.0 * np.maximum(q, 1e-15))
+        if strict_upstream:
+            scale = 1.0 / (2.0 * np.maximum(q, 1e-15))
+        else:
+            scale = np.where(connectome > 0, 0.5 / np.maximum(q, 1e-300), 0.0)
         return q, scale * d_e1, scale * d_e2
 
     # -- warping -------------------------------------------------------------------
@@ -682,8 +630,9 @@ class HeatKernelBuilder:
         w_out, i_out = connectome.weights_out, connectome.index_out
         scores = np.zeros(sigmas.size)
         for s, sigma in enumerate(sigmas):
-            kernel = self.compute(sigma, derivative=False).toarray()
-            full = np.maximum(kernel.T @ adjacency @ kernel, 0.0)
+            sparse_kernel = self.compute(sigma, derivative=False)
+            full = np.maximum(np.asarray(sparse_kernel.T @ (sparse_kernel.T @ adjacency).T), 0.0)
+            kernel = sparse_kernel.toarray()  # dense only for the (m, 3, 3) gathers below
             block = full[i_in[:, :, None], i_out[:, None, :]]  # (m, 3, 3)
             k_in = kernel[i_in[:, :, None], i_in[:, None, :]]  # K(t_in, t_in)
             k_out = kernel[i_out[:, :, None], i_out[:, None, :]]
@@ -710,8 +659,13 @@ class HeatKernelBuilder:
 # --- the warp -------------------------------------------------------------------
 
 
-def cotangent_laplacian(vertices, faces):
-    """The reference's cotangent Laplacian ``L = D - W`` (``cot_matrix``), sparse."""
+def cotangent_laplacian(vertices, faces, reference_layout: bool = False):
+    """The cotangent Laplacian ``L = D - W`` of a mesh, sparse.
+
+    Each edge is weighted by half the cotangent of the angle opposite it. The
+    reference's ``cot_matrix`` weights it with an *adjacent* angle instead
+    (module docstring, item 12); ``reference_layout=True`` reproduces that.
+    """
     from scipy import sparse
 
     vertices = np.asarray(vertices, dtype=np.float64)
@@ -721,12 +675,17 @@ def cotangent_laplacian(vertices, faces):
     v2 = vertices[i3] - vertices[i1]
     v3 = vertices[i1] - vertices[i2]
     double_area = np.linalg.norm(np.cross(v1, -v3), axis=1)
-    cot12 = (v1 * -v3).sum(1) / double_area
-    cot23 = (v2 * -v1).sum(1) / double_area
-    cot31 = (v3 * -v2).sum(1) / double_area
-    rows = np.concatenate([i2, i3, i3, i1, i1, i2])
-    cols = np.concatenate([i3, i2, i1, i3, i2, i1])
-    vals = 0.5 * np.concatenate([cot12, cot12, cot23, cot23, cot31, cot31])
+    cot_at_2 = (v1 * -v3).sum(1) / double_area  # angle at i2
+    cot_at_3 = (v2 * -v1).sum(1) / double_area  # angle at i3
+    cot_at_1 = (v3 * -v2).sum(1) / double_area  # angle at i1
+    if reference_layout:
+        rows = np.concatenate([i2, i3, i3, i1, i1, i2])
+        cols = np.concatenate([i3, i2, i1, i3, i2, i1])
+    else:
+        # the angle at i1 is opposite edge (i2, i3), and so on around the triangle
+        rows = np.concatenate([i3, i1, i1, i2, i2, i3])
+        cols = np.concatenate([i1, i3, i2, i1, i3, i2])
+    vals = 0.5 * np.concatenate([cot_at_2, cot_at_2, cot_at_3, cot_at_3, cot_at_1, cot_at_1])
     n = vertices.shape[0]
     weights = sparse.csr_matrix((vals, (rows, cols)), shape=(n, n))
     degree = np.asarray(weights.sum(axis=1)).ravel()
@@ -764,13 +723,24 @@ class StationaryWarp:
     """
 
     def __init__(
-        self, grid: SphericalGrid, viscosity: float = VISCOSITY, squarings: int = SQUARINGS
+        self,
+        grid: SphericalGrid,
+        viscosity: float = VISCOSITY,
+        squarings: int = SQUARINGS,
+        strict_upstream: bool = False,
     ):
-        """The identity warp of ``grid``."""
+        """The identity warp of ``grid``.
+
+        ``strict_upstream`` selects the reference's cotangent weights (module
+        docstring, item 12). The faces must be oriented outward, since that is
+        what the fold test assumes; an inward mesh would refuse every step.
+        """
         self.grid = grid
         self.e1, self.e2 = grid.e1, grid.e2
         self.faces = grid.faces
         self.base = grid.vertices.copy()
+        if triangles_fold(self.base, self.faces):
+            raise ValueError("the mesh faces must be oriented outward (counter-clockwise)")
         self.vertices = grid.vertices.copy()
         self.velocity = np.zeros((grid.n_vertices, 2))
         self.viscosity = float(viscosity)
@@ -778,7 +748,9 @@ class StationaryWarp:
         self.rejected = 0
         self._base_areas = voronoi_areas(self.base, self.faces)
         self._query = FastMeshQuery(self.base, self.faces)
-        self._laplacian = cotangent_laplacian(self.base, self.faces)
+        self._laplacian = cotangent_laplacian(
+            self.base, self.faces, reference_layout=strict_upstream
+        )
 
     @property
     def n_vertices(self) -> int:
@@ -849,19 +821,12 @@ class StationaryWarp:
 
     def rotate(self, rotation) -> StationaryWarp:
         """Set the warp to a rigid rotation, as the flow of its rotational field (``rotate``)."""
-        rotation = np.asarray(rotation, dtype=np.float64)
-        angle = float(np.arccos(np.clip((np.trace(rotation) - 1.0) / 2.0, -1.0, 1.0)))
-        if abs(angle) < 1e-12:
-            omega = np.zeros(3)
-        else:
-            axis = np.array(
-                [
-                    rotation[2, 1] - rotation[1, 2],
-                    rotation[0, 2] - rotation[2, 0],
-                    rotation[1, 0] - rotation[0, 1],
-                ]
-            ) / (2.0 * np.sin(angle))
-            omega = axis * angle
+        from scipy.spatial.transform import Rotation
+
+        # The reference reads the axis off the skew part of R, which vanishes for
+        # a half turn and silently makes it the identity; the rotation vector
+        # from a proper decomposition does not.
+        omega = Rotation.from_matrix(np.asarray(rotation, dtype=np.float64)).as_rotvec()
         field = np.cross(np.broadcast_to(omega, self.base.shape), self.base)
         self.velocity = np.stack([(field * self.e1).sum(1), (field * self.e2).sum(1)], axis=1)
         self.vertices = self.exponential()
@@ -943,16 +908,21 @@ def icosphere(subdivisions: int):
     return vertices, faces
 
 
-def mesh_symmetries(vertices, faces):
-    """The 60 rotations that map an icosphere onto itself, ``(rotations, permutations)``.
+def icosahedral_rotations(vertices, faces):
+    """The 60 rotations of the icosahedral group fitted to a mesh, and how well they fit.
 
-    Replaces ``icosahedral_permutations``, which hard-codes the reference's
-    icosahedron orientation and errors on any other (FreeSurfer's, for one).
-    The twelve five-valent vertices are the icosahedron's corners; a rotation
-    of the group is fixed by where it sends one corner and one of that
-    corner's neighbours, and only the candidates that permute the whole vertex
-    set are kept. ``permutations[g]`` follows the reference's convention: the
-    function transported by rotation ``g`` is ``Q[perm][:, perm]``.
+    Returns ``(rotations, deviation)``: ``rotations`` is ``(60, 3, 3)`` and
+    ``deviation`` the largest distance, as a chord on the unit sphere (about
+    the angle in radians), from a rotated vertex to the nearest mesh vertex
+    over all 60 rotations. It is rounding error on an icosphere and 1.7e-4 (a
+    hundredth of a degree) on FreeSurfer's ico4 sphere, whose stored
+    coordinates carry only so many digits.
+
+    The twelve five-valent vertices are the icosahedron's corners; a group
+    element is fixed by where it sends one corner and one of that corner's
+    neighbours, which gives exactly 60 candidates, and each is snapped to the
+    nearest proper rotation (polar decomposition), since on an inexact mesh the
+    two corner frames are not related by a rotation.
     """
     from scipy.spatial import cKDTree
 
@@ -972,24 +942,59 @@ def mesh_symmetries(vertices, faces):
     first, second = corner_points[0], corner_points[neighbours[0, 0]]
     frame0 = np.stack([first, second, np.cross(first, second)])
     tree = cKDTree(vertices)
-    rotations, permutations, seen = [], [], set()
+    rotations, deviations, seen = [], [], set()
     for i in range(12):
         for j in neighbours[i]:
             a, b = corner_points[i], corner_points[j]
-            rotation = np.linalg.solve(frame0, np.stack([a, b, np.cross(a, b)])).T
-            proper = np.linalg.det(rotation) > 0
-            if not proper or not np.allclose(rotation @ rotation.T, np.eye(3), atol=1e-6):
+            candidate = np.linalg.solve(frame0, np.stack([a, b, np.cross(a, b)])).T
+            u, _, vt = np.linalg.svd(candidate)
+            rotation = u @ vt
+            if np.linalg.det(rotation) < 0:
                 continue
-            distance, image = tree.query(vertices @ rotation.T)
-            if distance.max() > 1e-6 or np.unique(image).size != n:
-                continue
-            key = tuple(np.round(rotation, 6).ravel())
+            key = tuple(np.round(rotation, 2).ravel())  # distinct elements differ by >= 72 degrees
             if key in seen:
                 continue
             seen.add(key)
+            distance, _ = tree.query(vertices @ rotation.T)
             rotations.append(rotation)
-            permutations.append(np.argsort(image))  # perm[j] = the vertex that lands on j
-    return np.stack(rotations), np.stack(permutations)
+            deviations.append(float(distance.max()))
+    if len(rotations) != 60:
+        raise ValueError(
+            f"an icosphere has 60 rotational symmetries; this mesh's corners give {len(rotations)}"
+        )
+    return np.stack(rotations), float(max(deviations))
+
+
+def mesh_symmetries(vertices, faces, tolerance: float = 1e-3):
+    """The 60 rotations that map an icosphere onto itself, ``(rotations, permutations)``.
+
+    Replaces ``icosahedral_permutations``, which hard-codes the reference's
+    icosahedron orientation and errors on any other. The rotations come from
+    :func:`icosahedral_rotations`; here each must permute the vertex set to
+    within ``tolerance``, a chord on the unit sphere. The default admits
+    FreeSurfer's ico4 sphere (1.7e-4 off an exact icosphere, a fortieth of its
+    edge length) and refuses a mesh jittered by more. ``permutations[g]``
+    follows the reference's convention: the function transported by rotation
+    ``g`` is ``Q[perm][:, perm]``.
+    """
+    from scipy.spatial import cKDTree
+
+    vertices = normalize_rows(np.asarray(vertices, dtype=np.float64))
+    rotations, deviation = icosahedral_rotations(vertices, faces)
+    if deviation > tolerance:
+        raise ValueError(
+            f"found 0 exact symmetries instead of 60: the mesh is not an icosphere to "
+            f"within {tolerance:g} (its icosahedral rotations move vertices by up to "
+            f"{deviation:.2g})"
+        )
+    tree = cKDTree(vertices)
+    permutations = []
+    for rotation in rotations:
+        _, image = tree.query(vertices @ rotation.T)
+        if np.unique(image).size != vertices.shape[0]:
+            raise ValueError("found fewer than 60 symmetries: a rotation is not a permutation")
+        permutations.append(np.argsort(image))  # perm[j] = the vertex that lands on j
+    return rotations, np.stack(permutations)
 
 
 _SHELLS: list | None = None
@@ -1122,8 +1127,8 @@ class ConSEAL:
     def new_warps(self):
         """A pair of identity warps with this engine's viscosity."""
         return (
-            StationaryWarp(self.lh_grid, self.viscosity),
-            StationaryWarp(self.rh_grid, self.viscosity),
+            StationaryWarp(self.lh_grid, self.viscosity, strict_upstream=self.strict_upstream),
+            StationaryWarp(self.rh_grid, self.viscosity, strict_upstream=self.strict_upstream),
         )
 
     # -- cost --------------------------------------------------------------------
@@ -1227,15 +1232,31 @@ class ConSEAL:
         for grid, rows, query in hemispheres:
             target = q1[rows, rows]
             block = q2[rows, rows]
-            group, permutations = mesh_symmetries(grid.vertices, grid.faces)
+            group, _ = icosahedral_rotations(grid.vertices, grid.faces)
 
-            # shell 1: every shell rotation combined with the 60 symmetries
+            # shell 1: every shell rotation combined with the 60 icosahedral
+            # rotations. Both sides are transported by barycentric pull-back: on
+            # an exact icosphere that is the reference's vertex permutation
+            # (weights 1, 0, 0), and on the bundled FreeSurfer sphere, which is
+            # 1.7e-4 off one, it is the rotated function rather than a gather.
+            # ||T.g - B.r||^2 expands into two norms and one inner product, so
+            # the 60 x 80 costs are a few matrix products; the rotations are
+            # chunked so that at most ~1 GB of transported blocks is held.
             rotations, keep = shells[0]
             costs = np.zeros((group.shape[0], rotations.shape[0]))
-            for s, rotation in enumerate(rotations):
-                rotated = self._pull_back(block, grid, query, rotation)
-                for g, perm in enumerate(permutations):
-                    costs[g, s] = ((target - rotated[np.ix_(perm, perm)]) ** 2).sum()
+            chunk = max(1, min(rotations.shape[0], int(1.2e8) // max(target.size, 1)))
+            for first in range(0, rotations.shape[0], chunk):
+                rotated = np.stack(
+                    [
+                        self._pull_back(block, grid, query, rotation).ravel()
+                        for rotation in rotations[first : first + chunk]
+                    ]
+                )
+                rotated_norm = (rotated**2).sum(axis=1)
+                for g, symmetry in enumerate(group):
+                    pulled = self._pull_back(target, grid, query, symmetry).ravel()
+                    cross = rotated @ pulled
+                    costs[g, first : first + chunk] = (pulled @ pulled) + rotated_norm - 2.0 * cross
             order = np.argsort(costs.ravel())[:keep]
             g_idx, s_idx = np.unravel_index(order, costs.shape)
             candidates = [rotations[s] @ group[g].T for g, s in zip(g_idx, s_idx, strict=True)]
@@ -1295,8 +1316,8 @@ class ConSEAL:
         else:
             lh_warp, rh_warp = self.new_warps()
 
-        rows_lh = np.arange(moving.n_left)
-        rows_rh = np.arange(moving.n_left, moving.n_vertices)
+        rows_lh = slice(0, moving.n_left)
+        rows_rh = slice(moving.n_left, moving.n_vertices)
         strict = self.strict_upstream
         q2, q2_e1, q2_e2 = moving.q_transform(kernel, derivative, strict)
         difference = q1 - q2
@@ -1410,7 +1431,10 @@ def endpoints_align(
         Velocity-basis order and gradient-descent settings; the defaults are
         the public code's (15, 0.05, 100, 1e-4, 0.2, 0.05).
     init_rotation
-        Search rotations per hemisphere before the diffeomorphic step.
+        Search rotations per hemisphere before the diffeomorphic step. The 60
+        icosahedral rotations are fitted to the grid rather than assumed, and
+        the densities are transported by interpolation, so the search runs on
+        the bundled FreeSurfer sphere, which is an icosphere to 1.7e-4.
     area_weighted, strict_upstream
         See :class:`ConSEAL`.
     grids
@@ -1462,6 +1486,11 @@ def endpoints_align(
         target = subjects[int(template)].q_transform(kernel)
     else:
         target = np.asarray(template, dtype=np.float64)
+    expected = lh_grid.n_vertices + rh_grid.n_vertices
+    if target.shape != (expected, expected):
+        raise ValueError(
+            f"template is {target.shape}, expected a {expected} x {expected} square-root density"
+        )
 
     result = EndpointAlignment(template=target)
     for i, subject in enumerate(subjects):

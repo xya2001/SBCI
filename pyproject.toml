@@ -32,18 +32,17 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-plotting = ["nilearn>=0.10", "pyvista>=0.43", "matplotlib>=3.7"]
+plotting = ["nilearn>=0.10", "matplotlib>=3.7"]
 test = ["pytest>=7.4", "pytest-cov>=4.1"]
-docs = ["jupyter-book>=1.0", "sphinx-autodoc2>=0.5"]
-dev = ["sbci[plotting,test,docs]", "ruff>=0.5"]
+dev = ["sbci[plotting,test]", "ruff>=0.5"]
 
 [project.scripts]
 sbci = "sbci.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/sbci-brain/sbci"
-Documentation = "https://sbci-brain.github.io/sbci"
-Issues = "https://github.com/sbci-brain/sbci/issues"
+Homepage = "https://github.com/xya2001/SBCI"
+Documentation = "https://github.com/xya2001/SBCI/blob/main/USAGE.md"
+Issues = "https://github.com/xya2001/SBCI/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/sbci"]

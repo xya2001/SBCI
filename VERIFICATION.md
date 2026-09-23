@@ -34,7 +34,7 @@ git clone <this repository> && cd sbci
 python -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
 
-python -m pytest tests/ -q          # expect: 435 passed, 1 skipped
+python -m pytest -q                 # expect: everything passes; ~24 skip without the lab data
 ruff check . && ruff format --check src tests
 python -m build --wheel
 ```
@@ -48,8 +48,9 @@ and the statistics in `stats.py`.
 **What it does not prove.** Nothing here compares against the original MATLAB.
 A port can be self-consistent and still wrong; that is what Tier 4 is for.
 
-The one skip is `tests/test_five_minute_start.py`, which needs the data release
-that does not exist yet (SPEC_QUESTIONS.md item 6). It should stay skipped.
+The skips are `tests/test_five_minute_start.py`, which needs the data release
+that does not exist yet (SPEC_QUESTIONS.md item 6), and the MATLAB comparisons
+in `tests/test_matlab_reference.py`, which need the Tier 4 reference dumps.
 
 ### Checks worth reading rather than just running
 
@@ -60,7 +61,7 @@ the ones most likely to catch a silent regression:
 | --- | --- |
 | `tests/test_surface_anatomy.py` | a scrambled mesh: it asserts the superior frontal gyrus is anterior to lateral occipital cortex, the cuneus medial, the medial wall facing the midline. An earlier build passed every self-consistency check and was still anatomically wrong |
 | `tests/test_alignment.py::test_the_gradient_of_a_linear_field_is_exact` | a derivative that is subtly not a derivative: `f(x) = x` must differentiate to exactly 1 |
-| `tests/test_cifti.py::test_every_ico4_vertex_distributes_exactly_its_own_mass` | the resampling bug that cost 99.3% of the connectivity mass while preserving a plausible-looking total |
+| `tests/test_cifti.py::test_area_weighted_mass_is_conserved_on_the_real_operator` | the resampling bug that cost 99.3% of the connectivity mass while preserving a plausible-looking total |
 
 ---
 
@@ -78,10 +79,12 @@ export SBCI_TOOLKIT=$PWD/SBCI_Toolkit
 python scripts/audit_api.py
 ```
 
-`scripts/audit_api.py` exercises **every row of the API table in README.md** on
+`scripts/audit_api.py` exercises fifteen rows of the API table in README.md on
 real data, in the order a user would: load, save, parcellate, seed, couple,
-plot, export, validate, smooth, reduce, test, align. It prints a value for each
-and exits non-zero if any fails. Expect `15 passed, 0 failed`.
+plot, export, validate, smooth, reduce, test, align (its data paths are set at
+the top of the script, for Longleaf). It prints a value for each and exits
+non-zero if any fails. Expect `15 passed, 0 failed`. It smooths, reduces and
+aligns on the full grid, so run it inside a batch job.
 
 **What this proves.** The documented API works end to end on a real subject,
 not only on fixtures.
@@ -162,6 +165,7 @@ python fpca_make_inputs.py                      # shared inputs for FPCA
 matlab -batch "run('fpca_reference.m')"        # ConConBasis.Fit
 
 export SBCI_MATLAB_REFERENCE=... SBCI_ENCORE_REFERENCE=... SBCI_FPCA_REFERENCE=...
+export SBCI_EXAMPLE_SC=... SBCI_DERIVATIVES=...
 python -m pytest tests/test_matlab_reference.py -v    # expect 23 passed
 ```
 
@@ -172,7 +176,9 @@ Expected agreement, and what to reject:
 | `to_atlas` | 1.9e-16, float64 rounding | worse than 1e-12 |
 | `seed` | float32 rounding | worse than 10 float32-eps |
 | `coupling` (3 forms) | 3.6 to 88.2 float64-eps | worse than 10 float32-eps |
-| `smooth` (rdk, matern) | 3.25 float32-eps | worse than 10 float32-eps |
+| `smooth` (rdk) | 3.25 float32-eps | worse than 10 float32-eps |
+| `smooth` (shk) | r = 1.00000000, scale 1.000000 against the released matrices | see PORTING.md item 6 |
+| `endpoints_align` (ConSEAL) | the single precision the MATLAB reference carries: kernel 4e-8, gradient 6e-7, six-iteration cost trace 1e-7 | see PORTING.md item 7 |
 | `reduce` | 2.1e-16 on the basis | worse than 1e-10 |
 | `align` geometry, basis, template | 1.6 to 44 float64-eps | worse than 1e-12 |
 | `align` registration | r = 0.99999979 | see the note below |
@@ -220,17 +226,18 @@ statistics. **Ask whoever specified the API to confirm the intent.**
 `kernel="shk"` is the default by the WP1 decision and it works. It reproduces
 `c3_main` at **r = 1.000000** across all five ADNI subjects under
 `/overflow/zzhanglab/ADNI/ADNI-bids/` that carry both the input `c3_main` was
-fed and the matrix it wrote, with the scale factor at 0.99858 and nothing
-fitted. The kernel was read from `concon`'s source -- public MIT code, named by
+fed and the matrix it wrote, with the scale factor at 1.000000 and nothing
+fitted (0.99858 for the closed-form series, `quantized=False`). The kernel was read from `concon`'s source -- public MIT code, named by
 the binary's debug info -- and confirmed by running `c3_main` on a single
 streamline so that its output is the kernel: `tests/reference/concon_probe.py`
 regenerates that measurement, and `tests/test_smoothing.py` pins the kernel to
 the binary's own numbers at rms 0.0005.
 
-Two residuals remain, both reproducible to five digits across subjects and so
-conventions rather than noise: a 0.14% amplitude offset and 0.08% more non-zero
-pairs. A reviewer can re-run the five-subject comparison from PORTING.md item
-6; it needs the lab data and about an hour per subject.
+One residual remains, reproducible across subjects: 0.08% more non-zero pairs,
+at the boundary of the binary's `--final_thold` (1e-9 per streamline). The 0.14%
+amplitude offset an earlier version carried was the binary's lookup-table quantization
+and is reproduced. A reviewer can re-run the five-subject comparison from
+PORTING.md item 6; it needs the lab data and about a minute per subject.
 
 
 **The format is a draft.** `SPEC_VERSION` is `0.1.0-draft` and
@@ -245,7 +252,7 @@ region matrix. Files written before they are settled may need rewriting.
 
 ## A reviewer's checklist
 
-- [ ] Tier 1 passes from a clean clone: 435 tests, lint, wheel
+- [ ] Tier 1 passes from a clean clone: tests, lint, wheel
 - [ ] `scripts/audit_api.py` reports 15 passed, 0 failed
 - [ ] Tier 4 reproduces the agreements in the table above
 - [ ] Alignment raises inter-subject correlation on a cohort of your choosing

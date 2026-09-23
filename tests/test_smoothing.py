@@ -784,8 +784,7 @@ def test_sparse_density_matches_dense():
     from sbci.surface import load_surface
 
     sphere = load_surface("sphere")
-    vertices = np.asarray(sphere.vertices, float)
-    vertices /= np.linalg.norm(vertices, axis=1, keepdims=True)
+    vertices = sphere.vertices / np.linalg.norm(sphere.vertices, axis=1, keepdims=True)
     hemi = hemisphere_labels(vertices.shape[0])
     rng = np.random.default_rng(0)
     count = 600
@@ -812,8 +811,7 @@ def test_progress_callback_reports_every_block():
     from sbci.surface import load_surface
 
     sphere = load_surface("sphere")
-    vertices = np.asarray(sphere.vertices, float)
-    vertices /= np.linalg.norm(vertices, axis=1, keepdims=True)
+    vertices = sphere.vertices / np.linalg.norm(sphere.vertices, axis=1, keepdims=True)
     hemi = hemisphere_labels(vertices.shape[0])
     rng = np.random.default_rng(1)
     pts = rng.normal(size=(100, 3))
@@ -871,3 +869,154 @@ def test_final_threshold_matches_compute_kernel_cpp():
     assert out[0, 1] == 2e-9 * n, "above the threshold survives"
     assert out[0, 2] == 0.0, "exactly at the threshold is dropped: the test is strictly greater"
     assert out[1, 2] == 0.0, "below is dropped"
+
+
+# --- validation and the default path, end to end -----------------------------
+
+
+def test_from_global_refuses_inconsistent_triangles():
+    from sbci.smoothing import Endpoints
+
+    vertex_in, vertex_out = np.array([1, 3000]), np.array([2, 3001])
+    good = Endpoints.from_global(
+        vertex_in,
+        vertex_out,
+        triangle_in=[5, 5125],
+        triangle_out=[6, 5126],
+        barycentric_in=np.full((2, 3), 1 / 3),
+        barycentric_out=np.full((2, 3), 1 / 3),
+    )
+    np.testing.assert_array_equal(good.tri_in, [5, 5])
+    with pytest.raises(ValueError, match="other hemisphere"):
+        Endpoints.from_global(
+            vertex_in,
+            vertex_out,
+            triangle_in=[5125, 5],
+            triangle_out=[6, 5126],
+            barycentric_in=np.full((2, 3), 1 / 3),
+            barycentric_out=np.full((2, 3), 1 / 3),
+        )
+    with pytest.raises(ValueError, match="out of range"):
+        Endpoints.from_global(
+            vertex_in,
+            vertex_out,
+            triangle_in=[5, 20000],
+            triangle_out=[6, 5126],
+            barycentric_in=np.full((2, 3), 1 / 3),
+            barycentric_out=np.full((2, 3), 1 / 3),
+        )
+    with pytest.raises(ValueError, match="positions need all"):
+        Endpoints.from_global(vertex_in, vertex_out, triangle_in=[5, 5125])
+
+
+def test_endpoints_check_their_own_consistency():
+    from sbci.smoothing import Endpoints
+
+    with pytest.raises(ValueError, match="entries"):
+        Endpoints(surf_in=[0, 0], surf_out=[0], vtx_in=[1, 2], vtx_out=[3, 4])
+    with pytest.raises(ValueError, match="0 .* or 1"):
+        Endpoints(surf_in=[0, 2], surf_out=[0, 0], vtx_in=[1, 2], vtx_out=[3, 4])
+    with pytest.raises(ValueError, match="positions need all"):
+        Endpoints(surf_in=[0], surf_out=[0], vtx_in=[1], vtx_out=[3], tri_in=[2])
+
+
+def test_endpoint_density_validates_its_inputs():
+    from sbci.smoothing import endpoint_density
+
+    vertices = np.eye(3)
+    points = np.array([[1.0, 0.0, 0.0]])
+    with pytest.raises(ValueError, match="one entry per streamline"):
+        endpoint_density(vertices, points, points, [0, 0], [0], [0, 0, 0], sigma=0.005)
+    with pytest.raises(ValueError, match="unit sphere"):
+        endpoint_density(2 * vertices, points, points, [0], [0], [0, 0, 0], sigma=0.005)
+
+
+def test_the_kernel_without_a_cutoff_is_the_closed_form_series():
+    """``epsilon=None`` studies the series itself; the table is only meaningful inside its cutoff.
+
+    Inside the cutoff the table tracks the series to a few tenths of a percent
+    (the truncation bias grows with the angle); beyond it the series goes
+    negative while the table holds the binary's 1e-20 floor.
+    """
+    from sbci.smoothing import concon_kernel_table, spherical_heat_kernel
+
+    cosines = np.cos(np.radians(np.array([0.0, 5.0, 11.0, 20.0, 40.0])))
+    table = concon_kernel_table(0.005)
+    truncated = spherical_heat_kernel(cosines, 0.005)
+    untruncated = spherical_heat_kernel(cosines, 0.005, epsilon=None)
+    assert truncated[-1] == 0.0 and untruncated[-1] != 0.0
+    # No cutoff means the closed-form series, not the table read past its cutoff:
+    # the table clamps the negative lobes to 1e-20, so it is a floor out there.
+    np.testing.assert_array_equal(
+        untruncated, spherical_heat_kernel(cosines, 0.005, epsilon=None, quantized=False)
+    )
+    assert untruncated[-1] < 0.0 < table(cosines, truncate=False)[-1] <= 1e-19
+    np.testing.assert_allclose(truncated[:3], untruncated[:3], rtol=3e-3)
+
+
+def test_smooth_shk_end_to_end_from_barycentric_endpoints():
+    """The default kernel's whole path on the real grid: locate, spread, threshold, finish."""
+    import sbci
+    from sbci.alignment import MeshQuery
+    from sbci.grid import to_dense
+    from sbci.smoothing import (
+        Endpoints,
+        apply_final_threshold,
+        endpoint_density,
+        endpoint_positions,
+    )
+    from sbci.surface import load_surface
+
+    rng = np.random.default_rng(21)
+    sphere = load_surface("sphere")
+    half, faces_per_hemi = sphere.n_vertices // 2, len(sphere.faces) // 2
+    n = 300
+    points = rng.normal(size=(2 * n, 3))
+    points /= np.linalg.norm(points, axis=1, keepdims=True)
+    hemispheres = np.r_[np.zeros(n, int), np.ones(n, int)]
+    vertex = np.empty(2 * n, dtype=np.int64)
+    triangle = np.empty(2 * n, dtype=np.int64)
+    bary = np.empty((2 * n, 3))
+    for side, name in ((0, "L"), (1, "R")):
+        part = sphere.hemisphere(name)
+        w, i, f = MeshQuery(part.vertices, part.faces).query_faces(points[hemispheres == side])
+        vertex[hemispheres == side] = i[np.arange(len(i)), np.argmax(w, axis=1)] + side * half
+        triangle[hemispheres == side] = f + side * faces_per_hemi
+        bary[hemispheres == side] = w
+    endpoints = Endpoints.from_global(
+        vertex[:n],
+        vertex[n:],
+        triangle_in=triangle[:n],
+        triangle_out=triangle[n:],
+        barycentric_in=bary[:n],
+        barycentric_out=bary[n:],
+    )
+
+    cc = sbci.example("sc")
+    cc.endpoints = endpoints
+    smoothed = cc.smooth(kernel="shk")
+    dense = smoothed.dense().astype(np.float64)
+    assert smoothed.metadata["kernel"] == "shk" and smoothed.metadata["bandwidth"] == 0.005
+    assert float(cc.area @ dense @ cc.area) == pytest.approx(1.0, rel=1e-6)
+    assert (dense >= 0).all() and np.allclose(dense, dense.T)
+
+    # the same density by the dense path, finished the same way
+    p_in, p_out = endpoint_positions(endpoints)
+    vertices = sphere.vertices / np.linalg.norm(sphere.vertices, axis=1, keepdims=True)
+    labels = np.r_[np.zeros(half, np.int8), np.ones(half, np.int8)]
+    check = endpoint_density(
+        vertices,
+        p_in,
+        p_out,
+        endpoints.surf_in,
+        endpoints.surf_out,
+        labels,
+        sigma=0.005,
+        method="dense",
+    )
+    apply_final_threshold(check, n)
+    np.fill_diagonal(check, 0.0)
+    check /= cc.area @ check @ cc.area
+    np.testing.assert_allclose(
+        to_dense(smoothed.data.astype(np.float64)), check, rtol=1e-5, atol=1e-12
+    )

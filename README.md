@@ -46,7 +46,7 @@ the data release exists.
 
 | Call | Status |
 | --- | --- |
-| `sbci.load(path)` | implemented; `.h5` and `.dconn.nii`, validated on read |
+| `sbci.load(path)` | implemented; the `.h5` computational file, validated on read. The `.dconn.nii` exchange file is write-only: its resampling to fsLR-32k is many-to-one |
 | `ContinuousConnectome.load(path)` | the same thing, if you prefer the class |
 | `.save(path)` | implemented |
 | `.to_atlas(atlas, how="mass"\|"mean")` | implemented; takes an `Atlas` or a name such as `"Schaefer200"`; matches `parcellate_sc.m` to float64 rounding |
@@ -55,7 +55,7 @@ the data release exists.
 | `.plot(values, surface=...)` | implemented; inflated, white, pial and sphere bundled |
 | `.to_cifti(path)` | implemented; fsLR-32k dense connectome, 16.9 GB |
 | `sbci validate <file>` | implemented |
-| `.smooth(kernel=..., bandwidth=..., eigenpairs=...)` | implemented for all three kernels. `shk` is the default and reproduces `concon` at r = 1.000000 across five subjects; `rdk` and `matern` match MATLAB to 3.25 float32-eps and find the Laplace-Beltrami basis via `$SBCI_LBO_DIR` (PORTING.md item 6) |
+| `.smooth(kernel=..., bandwidth=..., eigenpairs=...)` | implemented for all three kernels. `shk` is the default and reproduces `concon` at r = 1.000000 across five subjects; `rdk` matches MATLAB to 3.25 float32-eps, `matern` is checked against its closed form (no MATLAB reference exists), and both find the Laplace-Beltrami basis via `$SBCI_LBO_DIR` (PORTING.md items 1 and 6) |
 | `.reduce(rank=K)` / `sbci.reduce(cc_list, rank=K)` | implemented; matches the MATLAB reference to float64 rounding (PORTING.md item 5) |
 | `sbci.align(cc_list, method="encore")` | implemented; geometry and template match MATLAB to float64 rounding, the registration to r = 0.99999979 (PORTING.md item 4) |
 | `sbci.endpoints_align(cc_list)` | implemented; ConSEAL, which warps the streamline endpoints themselves. Every stage matches the public MATLAB to the single precision it carries; four errors in that reference are corrected by default and reproducible with `strict_upstream=True` (PORTING.md item 7) |
@@ -97,7 +97,7 @@ sbci.stats.local_test          # submodules resolve too
 
 The heavier submodules load on first use, so `import sbci` costs about 300 ms
 and pulls in neither matplotlib nor scipy unless you touch something that
-needs them. `tests/test_api_surface.py` pins both properties.
+needs them. `tests/test_api_surface.py` pins the import set; the time is not asserted.
 
 Anything wrong with a *file or its contents* raises a subclass of
 `sbci.SbciError`, so one `except` covers a pipeline's input problems while a
@@ -140,7 +140,7 @@ load_atlas("Glasser").n_regions       # 360
 Short names (`Schaefer200`, `Desikan`, `DK`, `Destrieux`, `Glasser`,
 `Brainnetome`, `Yeo7`, `Yeo17`) resolve to the stored names, ignoring case,
 spaces, hyphens and underscores. `list_atlases()` gives the full set, which
-also includes Gordon, the PALS-B12 family and CoCoNest at 23 scales.
+also includes Gordon, the PALS-B12 family and CoCoNest at 22 scales.
 
 Label `0` means "no region" -- the medial wall, plus everything outside a
 partial-coverage atlas. Regions are numbered `1..K` with no gaps.
@@ -175,7 +175,7 @@ Longleaf's default `python3` is 3.8, which this package does not support.
 ```bash
 ./scripts/setup_longleaf.sh                                   # once
 module load python/3.12.4                                     # every session
-source /work/users/x/y/$(whoami)/sbci-venv/bin/activate
+source /work/users/${USER:0:1}/${USER:1:1}/$USER/sbci-venv/bin/activate   # the two letters are your onyen's first two
 pytest
 ```
 
@@ -203,8 +203,7 @@ persistent, so anything worth keeping belongs in git.
 sbatch scripts/test.sbatch
 ```
 
-The suite currently finishes in well under a second, so the login node is fine
-for it today. The batch script exists because the full-grid and
+The suite takes about two minutes on four cores, which the login node tolerates. The batch script exists because the full-grid and
 tutorial-subject tests will not be, once the data release lands, and those do
 not belong on a login node.
 

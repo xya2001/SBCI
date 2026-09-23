@@ -52,6 +52,8 @@ areas. :func:`write_cifti` writes those beside the connectome as a companion
 
 from __future__ import annotations
 
+import os
+from functools import lru_cache
 from importlib import resources
 from pathlib import Path
 from typing import Any
@@ -61,12 +63,18 @@ import numpy as np
 N_FSLR_PER_HEMI = 32492
 N_FSLR = 2 * N_FSLR_PER_HEMI
 
+INTENT_DENSE = 3001
+"""NIfTI intent code of a ``.dconn.nii`` (``NIFTI_INTENT_CONNECTIVITY_DENSE``)."""
+INTENT_DENSE_SCALARS = 3006
+"""NIfTI intent code of a ``.dscalar.nii`` (``NIFTI_INTENT_CONNECTIVITY_DENSE_SCALARS``)."""
+
 _RESAMPLING_UNAVAILABLE = (
     "The ico4 to fsLR-32k overlap matrix is not bundled. Regenerate it with "
     "tools/build_resampling.py, which needs HCP's standard_mesh_atlases."
 )
 
 
+@lru_cache(maxsize=1)
 def load_overlap():
     """The sparse ico4 <-> fsLR-32k overlap matrix, shape ``(64984, 5124)``.
 
@@ -141,7 +149,7 @@ def resample(dense: np.ndarray, block: int = 8192) -> np.ndarray:
 
     # P D is (64984, 5124): 2.7 GB in float64, which is affordable. The square
     # that follows is not, so it is filled a block of rows at a time.
-    half = operator @ dense.astype(np.float64)
+    half = operator @ np.asarray(dense, dtype=np.float64)
     n = operator.shape[0]
     out = np.empty((n, n), dtype=np.float32)
     for start in range(0, n, block):
@@ -166,10 +174,16 @@ def write_cifti(path: str | Path, connectome: Any, block: int = 8192) -> Path:
     from nibabel import cifti2
 
     path = Path(path)
-    resampled = resample(connectome.dense().astype(np.float64), block=block)
+    if not os.access(path.parent if str(path.parent) else ".", os.W_OK):
+        raise OSError(f"cannot write to {path.parent}")
+    resampled = resample(connectome.dense(), block=block)
 
     axis = _brain_model_axis()
-    cifti2.Cifti2Image(resampled, (axis, axis)).to_filename(str(path))
+    image = cifti2.Cifti2Image(resampled, (axis, axis))
+    # nibabel leaves the intent at "unknown CIFTI" unless told; Workbench keys
+    # the file type on it.
+    image.nifti_header.set_intent(INTENT_DENSE)
+    image.to_filename(str(path))
 
     stem = path.name.split(".")[0]
     fields = dict(connectome.metadata.fields)
@@ -182,9 +196,11 @@ def write_cifti(path: str | Path, connectome: Any, block: int = 8192) -> Path:
     fslr_area, _ = vertex_areas()
     from nibabel.cifti2 import ScalarAxis
 
-    cifti2.Cifti2Image(
+    areas = cifti2.Cifti2Image(
         fslr_area[None, :].astype(np.float32), (ScalarAxis(["vertex area"]), axis)
-    ).to_filename(str(path.parent / f"{stem}_vertexarea.dscalar.nii"))
+    )
+    areas.nifti_header.set_intent(INTENT_DENSE_SCALARS)
+    areas.to_filename(str(path.parent / f"{stem}_vertexarea.dscalar.nii"))
     return path
 
 

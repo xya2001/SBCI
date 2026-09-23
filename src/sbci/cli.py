@@ -61,7 +61,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         from .examples import example as _example
 
         connectome = _example(args.modality, seed=args.seed)
-        path = connectome.save(args.out)
+        path = connectome.save(args.out or f"sub-example_{args.modality}.h5")
         print(f"wrote {path}")
         print("  synthetic connectivity on the real ico4 grid -- not measured data")
         return 0

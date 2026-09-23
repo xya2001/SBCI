@@ -63,7 +63,7 @@ fc = ContinuousConnectome.load("/work/users/x/y/xya/sbci-derivatives/sub-example
 
 ```
 sc                ContinuousConnectome(modality='sc', n_vertices=5124)
-stored form       (13125126,) float32, the strict upper triangle
+stored form       (13122006,) float32, the strict upper triangle
 area weights      (5124,), sum 327,684
 cortex mask       4,685 of 5,124 vertices
 ```
@@ -90,7 +90,7 @@ load_atlas("Glasser").n_regions        # 360
 44 atlases ship inside the package (332 KB), so this needs no download, no
 FreeSurfer and no MATLAB. Short names resolve to the stored names ignoring
 case, spaces, hyphens and underscores. `list_atlases()` gives the full set,
-which also includes Gordon, Yeo, the PALS-B12 family and CoCoNest at 23 scales.
+which also includes Gordon, Yeo, the PALS-B12 family and CoCoNest at 22 scales.
 
 Label `0` means "no region" — the medial wall, plus anything outside a
 partial-coverage atlas. Regions are numbered `1..K` with no gaps, and
@@ -176,8 +176,8 @@ run that forgot to record its bandwidth fails without leaving a partial file.
 
 ## The kernel maths, usable directly
 
-`cc.smooth()` is blocked because the format stores no endpoints, but the
-underlying functions work today:
+`cc.smooth()` is the high-level route; the functions underneath are usable
+directly:
 
 ```python
 from sbci.smoothing import (
@@ -186,7 +186,9 @@ from sbci.smoothing import (
 
 lam, U = load_eigenpairs("/work/users/x/y/xya/sbci-reference/SBCI_Toolkit/concon_estimate/EV_LBO_ds_ico4_L.mat", "L")
 kappa  = kappa_candidates(lam)[3]
-K      = diffusion_kernel(lam, U, kappa)
+K_L    = diffusion_kernel(lam, U, kappa)
+lam_R, U_R = load_eigenpairs("/work/users/x/y/xya/sbci-reference/SBCI_Toolkit/concon_estimate/EV_LBO_ds_ico4_R.mat", "R")
+K_R    = diffusion_kernel(lam_R, U_R, kappa)
 density = smooth_endpoints(Endpoints.from_matlab(
     "/work/users/x/y/xya/sbci-reference/SBCI_Toolkit/example_data/SBCI_Individual_Subject_Outcome/mesh_intersections_ico4.mat"), K_L, K_R)
 ```
@@ -254,12 +256,14 @@ reference run used to within 5e-08. Both are asserted in
 `tests/test_matlab_reference.py`.
 
 `kernel="shk"`, the default, reproduces `c3_main` at **r = 1.000000** across
-five ADNI subjects, with the scale factor at 0.99858 and nothing fitted. The
-kernel is not the heat kernel its name suggests: `concon` compounds a `(2l+1)`
-weight with a normalized spherical harmonic, giving `(2l+1)^(3/2)`, and it has
-compact support at about `2.9*sqrt(sigma)` radians. Two residuals remain and
-are documented rather than hidden -- a 0.14% amplitude offset and 0.08% more
-non-zero pairs, both identical across subjects. A full subject takes about a
+five ADNI subjects, with the scale factor at 1.000000 and nothing fitted
+(0.99858 with the closed-form series, `quantized=False`). The kernel is not
+the heat kernel its name suggests: `concon` compounds a `(2l+1)` weight with a
+normalized spherical harmonic, giving `(2l+1)^(3/2)`, and it has compact
+support at about `2.9*sqrt(sigma)` radians. The 0.14% amplitude offset the
+closed form carried was the binary's lookup-table quantization, and the tables
+are now reproduced; what remains is 0.08% more non-zero pairs at the boundary
+of `--final_thold` (1e-9 per streamline), identical across subjects. A full subject takes about a
 minute. See PORTING.md item 6.
 
 A re-smoothed density can carry mass on the medial wall, exactly as both
@@ -428,7 +432,7 @@ float32, **16.9 GB on disk**, and the writer needs about 25 GB of memory and
 three minutes. Use a batch job:
 
 ```bash
-sbatch --mem=60G --time=01:00:00 --wrap="module load python/3.12.4; source /work/users/x/y/xya/sbci-venv/bin/activate; python write_exchange.py"
+sbatch --mem=60G --time=01:00:00 --wrap="module load python/3.12.4; source /work/users/x/y/xya/sbci-venv/bin/activate; python scripts/write_exchange_file.py"
 ```
 
 To read it back, use plain `nibabel` -- the package deliberately does not
@@ -476,5 +480,4 @@ means an OnDemand desktop session rather than a plain `ssh`.
 | `sc.smooth()` on endpoints stored as vertices only | `MissingDataError` | `shk` needs where each streamline crossed, not the nearest vertex |
 | `sbci download` | `SystemExit` | needs the data release (Q6) |
 
-Every message names what has to happen and where it is tracked, and a test
-asserts those messages stay informative.
+Every message names what has to happen and where it is tracked.

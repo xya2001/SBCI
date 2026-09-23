@@ -137,3 +137,48 @@ def test_reading_back_to_ico4_refuses_rather_than_degrading():
     """The resampling is many-to-one; the inverse would quietly lose data."""
     with pytest.raises(NotImplementedError, match="lossy"):
         cifti.read_cifti("anything.dconn.nii")
+
+
+def test_write_cifti_sets_the_intent_codes_and_writes_the_companions(tmp_path, monkeypatch):
+    """On a fake 40 x 7 overlap: the .dconn intent, the areas' intent, the JSON sidecar."""
+    import json
+
+    import nibabel as nib
+    from scipy import sparse
+
+    from sbci.metadata import template
+
+    rng = np.random.default_rng(2)
+    small = rng.random((40, 7))
+    small[small < 0.7] = 0.0
+    small[0] = 1.0
+    small[:, 0] = np.where(rng.random(40) < 0.3, 1.0, small[:, 0])
+    fake = sparse.csr_matrix(small)
+    monkeypatch.setattr(cifti, "load_overlap", lambda: fake)
+    monkeypatch.setattr(cifti, "N_FSLR_PER_HEMI", 20)
+    monkeypatch.setattr(cifti, "N_FSLR", 40)
+
+    class Toy:
+        metadata = template(
+            "sc",
+            normalization="unit-mass",
+            registration_reference="fsaverage",
+            pipeline_version="x",
+            container_version="y",
+            streamline_count=1,
+            streamline_weighting="none",
+            kernel="shk",
+            bandwidth=0.005,
+        )
+
+        def dense(self):
+            dense = rng.random((7, 7)).astype(np.float32)
+            return dense + dense.T
+
+    path = cifti.write_cifti(tmp_path / "sub-toy_sc.dconn.nii", Toy(), block=16)
+    image = nib.load(str(path))
+    assert image.nifti_header.get_intent()[0] == "ConnDense"
+    areas = nib.load(str(tmp_path / "sub-toy_sc_vertexarea.dscalar.nii"))
+    assert areas.nifti_header.get_intent()[0] == "ConnDenseScalar"
+    sidecar = json.loads((tmp_path / "sub-toy_sc.json").read_text())
+    assert sidecar["exchange_space"] == "fsLR" and sidecar["kernel"] == "shk"

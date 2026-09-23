@@ -162,14 +162,26 @@ def example(modality: str = "sc", seed: int = 0) -> ContinuousConnectome:
 
 
 def _vertex_areas(surface) -> np.ndarray:
-    """Barycentric vertex areas of the mesh, normalized to sum to one.
+    """Per-vertex area weights in the pipeline's units: fsaverage vertices.
 
-    A third of each triangle's area goes to each of its corners, which is the
-    standard lumped-mass rule and matches what the pipeline stores.
+    The pipeline counts, for each ico4 vertex, the fsaverage vertices nearest to
+    it, so the weights are integers summing to 327,684 (SPEC_QUESTIONS.md item
+    3). The bundled ico4-to-fsLR overlap matrix carries exactly those counts as
+    its column sums, so the example uses the real weights when the overlap is
+    bundled and a barycentric estimate scaled to the same total otherwise.
+    Either way a unit-mass density has entries of order 1e-11, like a real file.
     """
+    try:
+        from .io.cifti import vertex_areas
+
+        _, areas = vertex_areas()
+        if areas.size == surface.n_vertices:
+            return np.asarray(areas, dtype=np.float64)
+    except (NotImplementedError, OSError):
+        pass
     v, f = surface.vertices, surface.faces
     cross = np.cross(v[f[:, 1]] - v[f[:, 0]], v[f[:, 2]] - v[f[:, 0]])
     face_area = 0.5 * np.linalg.norm(cross, axis=1)
     areas = np.zeros(surface.n_vertices, dtype=np.float64)
     np.add.at(areas, f.ravel(), np.repeat(face_area / 3.0, 3))
-    return areas / areas.sum()
+    return areas * (spec.AREA_TOTAL / areas.sum())

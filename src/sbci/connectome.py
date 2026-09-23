@@ -62,9 +62,11 @@ class ContinuousConnectome:
 
     @classmethod
     def load(cls, path: str | Path) -> ContinuousConnectome:
-        """Read a connectome from an HDF5 or CIFTI file and validate it.
+        """Read a computational ``.h5`` file and validate it.
 
-        The loader refuses a file whose metadata is missing a required key.
+        The loader refuses a file whose metadata is missing a required key. The
+        ``.dconn.nii`` exchange file is write-only: its resampling to fsLR-32k
+        is many-to-one, so it cannot be read back onto the ico4 grid.
 
         Examples
         --------
@@ -76,7 +78,11 @@ class ContinuousConnectome:
         if suffixes.endswith((".h5", ".hdf5")):
             parts = io.read_hdf5(path)
         elif suffixes.endswith((".dconn.nii", ".dconn.nii.gz")):
-            parts = io.read_cifti(path)
+            raise InvalidFileError(
+                f"{path.name!r} is an exchange file, which this package writes but does "
+                "not read: the resampling to fsLR-32k is many-to-one, so it cannot be "
+                "mapped back onto the ico4 grid. Load the .h5 computational file instead."
+            )
         else:
             raise InvalidFileError(
                 f"unrecognized connectome file {path.name!r}; "
@@ -96,6 +102,8 @@ class ContinuousConnectome:
                 f"connectivity implies {n} vertices but area has {self.area.size} "
                 f"and mask has {self.mask.size}"
             )
+        if self.coords is not None and np.shape(self.coords) != (n, 3):
+            raise InvalidFileError(f"coordinates are {np.shape(self.coords)}, expected {(n, 3)}")
 
     # --- properties --------------------------------------------------------
 
@@ -126,7 +134,7 @@ class ContinuousConnectome:
 
     # --- implemented API ---------------------------------------------------
 
-    def to_atlas(self, atlas: Atlas | str, how: str = "mass") -> np.ndarray:
+    def to_atlas(self, atlas: Atlas | str, how: str | None = None) -> np.ndarray:
         """Aggregate to a region-by-region matrix for a bundled atlas.
 
         Parameters
@@ -137,8 +145,14 @@ class ContinuousConnectome:
             ``"Desikan"``.
         how
             ``"mass"`` preserves total connectivity; ``"mean"`` divides by the
-            region areas to give a density. FC is aggregated through Fisher-z
-            automatically.
+            region areas to give a density. The default is ``"mass"`` for a
+            structural connectome and ``"mean"`` for a functional one: FC is
+            aggregated through Fisher-z, which is an average of correlations
+            and has no mass -- asking for ``"mass"`` on FC is refused.
+
+        Vertices outside the cortical mask contribute neither connectivity nor
+        area, so an atlas that labels the medial wall (``PALS_B12_Lobes``) is
+        aggregated over cortex only.
 
         Examples
         --------
@@ -148,8 +162,20 @@ class ContinuousConnectome:
         """
         if isinstance(atlas, str):
             atlas = load_atlas(atlas)
+        functional = self.modality == "fc"
+        if how is None:
+            how = "mean" if functional else "mass"
+        if functional and how == "mass":
+            raise ValueError(
+                "a functional connectome holds correlations, which have no mass; "
+                "use how='mean' (the default for FC)"
+            )
         return parcellation.parcellate(
-            self.dense(), atlas, self.area, how=how, fisher_z=self.modality == "fc"
+            self.dense(),
+            atlas,
+            np.where(self.mask, self.area, 0.0),
+            how=how,
+            fisher_z=functional,
         )
 
     def seed(self, vertex: int | None = None, region: Any = None) -> np.ndarray:
@@ -173,15 +199,7 @@ class ContinuousConnectome:
         if vertex is not None:
             if not 0 <= vertex < n:
                 raise IndexError(f"vertex {vertex} out of range for {n} vertices")
-            profile = np.zeros(n, dtype=np.float64)
-            # Read the row without materializing the dense matrix: entries
-            # (i, vertex) for i < vertex, then (vertex, j) for j > vertex.
-            for i in range(vertex):
-                profile[i] = self.data[_condensed_index(i, vertex, n)]
-            if vertex + 1 < n:
-                start = _condensed_index(vertex, vertex + 1, n)
-                profile[vertex + 1 :] = self.data[start : start + (n - vertex - 1)]
-            return profile
+            return self._row(int(vertex))
 
         if isinstance(region, tuple) and len(region) == 2:
             atlas, which = region
@@ -202,7 +220,25 @@ class ContinuousConnectome:
         total = weights.sum()
         if total == 0:
             raise ValueError("region mask selects no vertices")
-        return (self.dense() @ weights) / total
+        # Sum the members' rows straight from the condensed vector: no n x n
+        # matrix for a region of a few dozen vertices.
+        profile = np.zeros(n, dtype=np.float64)
+        for vertex in np.flatnonzero(member):
+            profile += weights[vertex] * self._row(int(vertex))
+        return profile / total
+
+    def _row(self, vertex: int) -> np.ndarray:
+        """One row of the dense matrix, read from the condensed vector."""
+        n = self.n_vertices
+        profile = np.zeros(n, dtype=np.float64)
+        # Entries (i, vertex) for i < vertex, then (vertex, j) for j > vertex.
+        if vertex > 0:
+            rows = np.arange(vertex)
+            profile[:vertex] = self.data[_condensed_index(rows, vertex, n)]
+        if vertex + 1 < n:
+            start = _condensed_index(vertex, vertex + 1, n)
+            profile[vertex + 1 :] = self.data[start : start + (n - vertex - 1)]
+        return profile
 
     def save(self, path: str | Path) -> Path:
         """Write the computational HDF5 file."""
@@ -220,7 +256,7 @@ class ContinuousConnectome:
         """Write the exchange ``.dconn.nii`` on fsLR-32k."""
         return io.write_cifti(path, self)
 
-    # --- awaiting the MATLAB ports (see PORTING.md) ------------------------
+    # --- analysis methods (each a verified port, see PORTING.md) -----------
 
     def coupling(self, fc: ContinuousConnectome, scope: str = "global", **kwargs) -> np.ndarray:
         """Structure-function coupling, as defined in the 2021 paper.
@@ -258,7 +294,8 @@ class ContinuousConnectome:
             heat kernel, which is what the released cohorts use; see
             SPEC_QUESTIONS.md item 10 for the decision and what each name means.
         bandwidth
-            ``kappa`` for ``rdk`` and ``matern``. Defaults to the value the
+            ``sigma`` for ``shk`` (default 0.005, the released cohorts' value);
+            ``kappa`` for ``rdk`` and ``matern``, defaulting to the value the
             reference selection formula picks from the spectrum.
         eigenpairs
             Where to get the Laplace-Beltrami basis: a directory holding
@@ -313,8 +350,8 @@ class ContinuousConnectome:
         return plot_surface(values, surface=surface, connectome=self, **kwargs)
 
 
-def _condensed_index(i: int, j: int, n: int) -> int:
-    """Index into the strict upper triangle for ``i < j``.
+def _condensed_index(i, j, n: int):
+    """Index into the strict upper triangle for ``i < j``; ``i`` may be an array.
 
     Examples
     --------

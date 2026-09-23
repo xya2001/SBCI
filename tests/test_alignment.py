@@ -24,6 +24,7 @@ from sbci.alignment import (
     align,
     cart_to_sphere,
     gradient_operators,
+    pole_rotation,
     rotate_off_poles,
     sphere_exp_map,
     sphere_log_map,
@@ -446,3 +447,38 @@ def test_an_unknown_derivative_method_is_refused():
     grid = SphericalGrid(rotate_off_poles(vertices), faces, order=2)
     with pytest.raises(ValueError, match="analytic.*difference"):
         Concon(grid, grid, derivative="spectral")
+
+
+def test_the_tree_search_finds_the_same_face_as_the_exhaustive_one(grid):
+    """The k-d-tree narrowing must never pick a different face than testing every face."""
+    rng = np.random.default_rng(13)
+    points = rng.normal(size=(2000, 3))
+    points /= np.linalg.norm(points, axis=1, keepdims=True)
+    query = MeshQuery(grid.vertices, grid.faces)
+    _, _, faces = query.query_faces(points)
+    assert np.array_equal(faces, query._exact_faces(points))
+
+
+def test_pole_rotation_is_the_rotation_rotate_off_poles_applies():
+    vertices, _ = icosphere(1)
+    rotation = pole_rotation(vertices)
+    assert np.allclose(rotation @ rotation.T, np.eye(3))
+    np.testing.assert_allclose(rotate_off_poles(vertices), vertices @ rotation.T)
+    np.testing.assert_allclose(rotate_off_poles(vertices) @ rotation, vertices, atol=1e-12)
+
+
+def test_align_refuses_a_misshapen_template_and_a_negative_density(pair):
+    grid, densities = pair
+    n = 2 * grid.n_vertices
+    with pytest.raises(ValueError, match="template"):
+        align(densities, template=np.ones(n), grids=(grid, grid), max_iterations=1)
+    with pytest.raises(ValueError, match="nonnegative"):
+        align([densities[0], -densities[1]], grids=(grid, grid), max_iterations=1)
+
+
+def test_the_default_grids_record_a_rotation_that_maps_back(pair):
+    """Warps live in the rotated frame; the recorded rotation undoes it."""
+    grid, densities = pair
+    result = align(densities[:2], grids=(grid, grid), max_iterations=1)
+    lh, rh = result.grid_rotations
+    assert np.allclose(lh, np.eye(3)) and np.allclose(rh, np.eye(3))

@@ -36,7 +36,7 @@ import h5py
 import numpy as np
 
 from .. import spec
-from ..errors import FormatError
+from ..errors import FormatError, InvalidFileError
 from ..metadata import Metadata
 
 CONNECTIVITY = "connectivity"
@@ -60,28 +60,31 @@ def _read_endpoints(handle) -> Any:
 
     sizes = {name: group[name].shape[0] for name in spec.ENDPOINT_DATASETS}
     if len(set(sizes.values())) != 1:
-        raise ValueError(f"/{ENDPOINTS} datasets disagree on the streamline count: {sizes}")
+        raise InvalidFileError(f"/{ENDPOINTS} datasets disagree on the streamline count: {sizes}")
 
     optional: dict[str, np.ndarray] = {}
     present = [name for name in spec.ENDPOINT_OPTIONAL_DATASETS if name in group]
     if present and len(present) != len(spec.ENDPOINT_OPTIONAL_DATASETS):
-        raise ValueError(
+        raise InvalidFileError(
             f"/{ENDPOINTS} carries {present} but positions need all of "
             f"{list(spec.ENDPOINT_OPTIONAL_DATASETS)}"
         )
     if present:
         optional = {name: np.asarray(group[name][()]) for name in present}
-        for name in ("triangle_in", "triangle_out"):
+        for name in spec.ENDPOINT_OPTIONAL_DATASETS:
             if optional[name].shape[0] != sizes["vertex_in"]:
-                raise ValueError(f"/{ENDPOINTS}/{name} disagrees on the streamline count")
+                raise InvalidFileError(f"/{ENDPOINTS}/{name} disagrees on the streamline count")
 
-    return Endpoints.from_global(
-        vertex_in=np.asarray(group["vertex_in"][()]),
-        vertex_out=np.asarray(group["vertex_out"][()]),
-        n_per_hemi=spec.N_VERTICES_PER_HEMI,
-        n_faces_per_hemi=spec.N_FACES_PER_HEMI,
-        **optional,
-    )
+    try:
+        return Endpoints.from_global(
+            vertex_in=np.asarray(group["vertex_in"][()]),
+            vertex_out=np.asarray(group["vertex_out"][()]),
+            n_per_hemi=spec.N_VERTICES_PER_HEMI,
+            n_faces_per_hemi=spec.N_FACES_PER_HEMI,
+            **optional,
+        )
+    except ValueError as exc:
+        raise InvalidFileError(f"/{ENDPOINTS}: {exc}") from exc
 
 
 def _write_endpoints(handle, endpoints, opts) -> None:
@@ -169,8 +172,12 @@ def write_hdf5(
     metadata.validate()
     if endpoints is not None and metadata.modality != "sc":
         raise ValueError(f"endpoints belong to a structural connectome, not {metadata.modality!r}")
+    # Serialize before the file is opened: a value the encoder refuses must not
+    # leave a truncated file behind.
+    text = metadata.to_json()
     path = Path(path)
-    opts = {"compression": compression} if compression else {}
+    # The byte-shuffle filter costs nothing to read and improves gzip on floats.
+    opts = {"compression": compression, "shuffle": True} if compression else {}
 
     with h5py.File(path, "w") as handle:
         handle.create_dataset(CONNECTIVITY, data=np.asarray(data, dtype=np.float32), **opts)
@@ -180,5 +187,5 @@ def write_hdf5(
             handle.create_dataset(COORDINATES, data=np.asarray(coords, dtype=np.float32), **opts)
         if endpoints is not None:
             _write_endpoints(handle, endpoints, opts)
-        handle.create_dataset(METADATA, data=metadata.to_json())
+        handle.create_dataset(METADATA, data=text)
     return path

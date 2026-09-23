@@ -144,7 +144,8 @@ def plot_surface(
         hemisphere = mesh.hemisphere(side)
         for column, view in enumerate(views):
             nilearn_plotting.plot_surf(
-                surf_mesh=(hemisphere.vertices, hemisphere.faces),
+                # nilearn recentres the coordinates in place; the bundled arrays are frozen
+                surf_mesh=(np.array(hemisphere.vertices), np.array(hemisphere.faces)),
                 surf_map=hemisphere_values,
                 hemi="left" if side == "L" else "right",
                 view=view,

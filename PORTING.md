@@ -1,6 +1,6 @@
 # MATLAB components to port
 
-WP2 states that four MATLAB components must be ported. They are listed here
+WP2 named four MATLAB components to port; seven are ported here. They are listed
 with their source files, the Python module that will hold them, and the test
 that will decide the port is correct. **A port is not done until its
 correctness test passes against the MATLAB output on the tutorial subject** --
@@ -143,7 +143,7 @@ a decision -- one for the group.
 - **To:** `src/sbci/parcellation.py`, reached through
   `ContinuousConnectome.to_atlas()`.
 - **Atlas label files are vendored.** `tools/convert_atlases.py` turns each
-  `*_avg_roi_ico4.mat` into an `.npz` under `src/sbci/data/atlases/`, 47 of
+  `*_avg_roi_ico4.mat` into an `.npz` under `src/sbci/data/atlases/`, 44 of
   them, so no release step needs MATLAB.
 
 ### Agreement with the reference
@@ -311,10 +311,8 @@ the poles, which is why this has not bitten anyone.
   derivative, so two implementations take different steps. Agreement is
   therefore reported as a correlation, not a tolerance.
 - **Grid:** no constraint. `SphericalGrid(mesh, l)` takes the mesh as an
-  argument; only the demo scripts hardcode the retired 0.94 grid.
-- **Worth reading:** `scripts/kde/spherical_kernel.m` and `spherical_kde.m`
-  are this group's own MATLAB reference for spherical kernel smoothing, and
-  are directly relevant to item 6.
+  argument; only the reference's demo scripts hardcode its retired 0.94 grid,
+  and this package uses the ico4 sphere throughout.
 
 ## 5. FPCA reduction -- DONE, VERIFIED. Local inference still open.
 
@@ -436,9 +434,10 @@ harmonics:
 | best global scale | 6.52 |
 | relative error after scaling | 0.206 |
 
-**The global scale** of 6.5 is a normalization convention: this port normalizes
-each endpoint's kernel column to sum one, and `convert_raw.py` applies no
-normalization at all -- its normalizing block is commented out in the source.
+**The global scale** of 6.5 was a normalization convention: that draft
+normalized each endpoint's kernel column to sum one, while `convert_raw.py`
+applies no normalization at all -- its normalizing block is commented out in
+the source. The shipped port follows `convert_raw.py` and needs no scale.
 
 **The 20% residual after scaling is compact support.** An earlier draft of this
 section said "the support difference is not the issue", on the grounds that
@@ -470,9 +469,9 @@ whole-sphere kernel would give. Measured:
 | 0.0050 | 11.89 deg | 31 | 2.936 |
 | 0.0100 | 16.53 deg | 61 | 2.885 |
 
-So the kernel vanishes at about **2.9 sqrt(sigma) radians**, and this port's
-kernel, which spreads over the whole sphere, is wrong everywhere beyond that.
-It places 10.7% of its mass there. That is exactly the deficit the distance
+So the kernel vanishes at about **2.9 sqrt(sigma) radians**, and the draft's
+kernel, which spread over the whole sphere, was wrong everywhere beyond that.
+It placed 10.7% of its mass there. That is exactly the deficit the distance
 analysis kept finding at 12-60 degrees and could not attribute to bandwidth or
 truncation.
 
@@ -484,7 +483,8 @@ carried for months.
 **Inside the support there is a taper.** Against the recovered profile, the bare
 truncated heat kernel has rms error 0.085; multiplying by a window that
 vanishes at the cutoff drops that to **0.010-0.013** for any reasonable window
-shape. The exact taper is not yet identified, and the remaining candidates are
+shape. The taper turned out to be the lookup tables themselves (*The kernel,
+resolved*, below); the candidates at the time were
 `--OPT_VAL_exp_num_kern_samps 6` and `--OPT_VAL_exp_num_harm_samps 5`: the
 symbols `c3::Subject::calc_kern_lookup_table(double, int)` and
 `calc_harm_lookup_table(int, int)` confirm the kernel is tabulated rather than
@@ -510,7 +510,7 @@ subject's own endpoints (40,000 sampled of 1,001,877) and its released matrix:
 
 | kernel | r | drift | 2-6 deg | 6-12 | 12-25 | 25-60 | 60-180 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| no window (what the port does today) | 0.9747 | 1.86 | 0.97 | 0.88 | **0.65** | **0.52** | 0.56 |
+| no window (the draft at the time) | 0.9747 | 1.86 | 0.97 | 0.88 | **0.65** | **0.52** | 0.56 |
 | times `1 - u^3` | 0.9882 | 1.36 | 1.04 | 1.05 | 1.13 | 1.24 | 0.91 |
 | times `1 - u^4` | **0.9891** | 1.37 | 1.02 | 1.03 | 1.07 | 1.12 | 0.82 |
 
@@ -580,8 +580,9 @@ nothing fitted, where the old kernel needed 6.5 on this subject and 155.8 once
 the normalization by streamline count was applied correctly. Correlation is
 1.000000 over all 13,125,126 pairs.
 
-The port keeps 0.09% more pairs than `c3_main`, which is `--final_thold 1e-9`:
-the reference drops values below it and this port does not yet.
+The port kept 0.09% more pairs than `c3_main` until `apply_final_threshold`
+reproduced `--final_thold 1e-9`, the per-streamline value below which the
+reference writes nothing; 0.08% remain, at that threshold's boundary.
 
 ### Shipping it
 
@@ -809,20 +810,19 @@ not the other, so the two describe different endpoint sets.
 `smoothed_sc_avg_0.005_ico4.mat`, because they are not the same data.** The
 r = 0.65 ceiling was never a porting failure; the comparison target was wrong.
 
-**What would actually verify the port:** a subject's
-`subject_xing_sphere_avg_coords.tsv` or `snapped_fibers.npz` together with its
-`smoothed_sc_avg_*.mat` from the same run. Neither is present in the toolkit's
-example data or readable in the lab space on Longleaf. Ask whoever ran the
-pipeline to keep one subject's intermediates; the port can then be checked in
-an afternoon.
+**What actually verified the port:** a subject's
+`subject_xing_sphere_avg_coords.tsv` together with its `smoothed_sc_avg_*.mat`
+from the same run, found later in the lab space -- *The verification that was
+missing, and now exists*, at the top of this item.
 
-### What to ask
+### What to ask -- answered
 
-Three parameters remain undocumented and unaccounted for: `--epsilon 0.001`,
-`--OPT_VAL_exp_num_kern_samps 6` and `--OPT_VAL_exp_num_harm_samps 5`. The last
-two imply ConCon evaluates by sampling rather than exactly, which a closed-form
-implementation would not reproduce. Whether the estimator is the plain kernel
-density estimate assumed here is also worth confirming with the author.
+The three parameters that were unaccounted for are now read from the source:
+`--OPT_VAL_exp_num_kern_samps 6` and `--OPT_VAL_exp_num_harm_samps 5` are the
+sizes of the two lookup tables (10^6 and 10^5 samples over the cosine) that
+`concon_kernel_table` reproduces, and `--epsilon 0.001` is the cutoff scan's
+threshold, which the steep descent makes insensitive across four decades. The
+estimator is the plain kernel density estimate assumed here.
 
 ## 7. ConSEAL -- DONE, VERIFIED AGAINST MATLAB; FOUR ERRORS IN THE REFERENCE, CORRECTED BY DEFAULT
 
@@ -1024,7 +1024,10 @@ aligned = result.aligned_endpoints(0)               # an Endpoints object, ready
 `strict_upstream=True` reproduces the reference to the digits above;
 `init_rotation=True` adds the multi-shell rigid search (its schedule is
 regenerated from `create_search_schedule.m`, 80/20/20/20/16 rotations, and the
-60 symmetries are found on any icosphere orientation rather than assumed).
+60 icosahedral rotations are fitted to the grid rather than assumed, and the
+densities are transported by interpolation, so it also runs on the bundled
+FreeSurfer sphere, which is an icosphere to 1.7e-4 -- the precision of its
+stored coordinates).
 On ico4 an iteration costs a few seconds per 100,000 streamlines: the kernel
 has 89 nonzeros per row at the published bandwidth (cutoff 21.5 degrees), so
 `K' A K` is a sparse sandwich, and relocating the endpoints is a k-d-tree
@@ -1043,8 +1046,9 @@ query.
 - Bandwidth cross-validation is ported in both forms and untested against
   MATLAB, since the paper does not use it.
 
-## Suggested order
+## Status
 
-3 -> 1 -> 2 -> 5 -> 4. Parcellation unblocks the first notebook, kernel
-smoothing unblocks the WP3 speed target, and ENCORE is last because nothing
-else depends on it.
+All seven items are ported and verified; what is left is under each item's
+*Still open*. They were done in the order 3, 1, 2, 5, 4, 6, 7: parcellation
+unblocked the first notebook, kernel smoothing the WP3 speed target, and the
+two alignments came last because nothing else depends on them.

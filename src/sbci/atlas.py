@@ -1,6 +1,6 @@
 """Bundled atlases, as per-vertex label vectors on the ico4 grid.
 
-Atlases ship inside the package (about 1 MB all told) so that
+Atlases ship inside the package (44 of them, about 330 KB all told) so that
 :meth:`sbci.ContinuousConnectome.to_atlas` never needs a network call, a
 FreeSurfer installation, or MATLAB. They are generated once by
 ``tools/convert_atlases.py`` and committed.
@@ -89,16 +89,31 @@ class Atlas:
     labels: np.ndarray
     names: tuple[str, ...]
 
+    def __post_init__(self) -> None:
+        """Check that every label has a name, and freeze the shared label array."""
+        labels = np.asarray(self.labels)
+        if labels.size and (labels.min() < 0 or labels.max() > len(self.names)):
+            raise ValueError(
+                f"{self.name}: labels run {labels.min()}..{labels.max()} but "
+                f"{len(self.names)} names were given; label i names names[i - 1]"
+            )
+        labels.setflags(write=False)
+        object.__setattr__(self, "labels", labels)
+
     @property
     def region_ids(self) -> np.ndarray:
-        """Sorted non-zero label ids present in :attr:`labels`."""
-        ids = np.unique(self.labels)
-        return ids[ids != 0]
+        """The label ids ``1..K``, one per name -- present in the labels or not.
+
+        Derived from the names rather than from the labels found, so that a
+        region with no vertex at this resolution keeps its row rather than
+        shifting every later region onto the wrong name.
+        """
+        return np.arange(1, len(self.names) + 1)
 
     @property
     def n_regions(self) -> int:
         """Number of regions, excluding the unassigned label."""
-        return int(self.region_ids.size)
+        return len(self.names)
 
     @property
     def coverage(self) -> float:
@@ -143,7 +158,7 @@ class Atlas:
         wanted = str(region).strip().lower()
         for index, candidate in enumerate(self.names):
             if candidate.strip().lower() == wanted:
-                return labels == self.region_ids[index]
+                return labels == index + 1
 
         close = difflib.get_close_matches(str(region), list(self.names), n=3, cutoff=0.5)
         if close:

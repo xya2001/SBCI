@@ -13,9 +13,9 @@ Annex A gives each one in full, with the evidence and a recommendation.
 One of the five should start immediately, because its answer comes from outside
 this work and the project's acceptance criterion waits on it:
 
-- **Q6 — may we redistribute derived dense connectomes openly?** This is a
-  question for HCP, not for us. It decides whether the project's own acceptance
-  test can pass as written. Nobody has asked yet.
+- **Q6 — may we redistribute derived dense connectomes openly?** Asked and
+  answered: no (SPEC_QUESTIONS.md item 6). The acceptance criterion has to be
+  reworded around the user's own HCP credentials rather than met as written.
 
 The other four are ratifications rather than investigations: minutes of
 discussion each, but everything written to disk depends on them.
@@ -87,8 +87,8 @@ data release exists.
 | plot a surface map | works on inflated, white, pial and spherical surfaces | — |
 | export to CIFTI | works; writes a 16.9 GB fsLR-32k dense connectome | — |
 
-**Four of seven lines work today.** Of the three that do not: one is a legal
-question, one is publication, and one is a known bug with a known fix.
+**Six of seven lines work today.** The seventh, `download`, waits on the data
+release (Q6).
 
 ## 3. Architecture
 
@@ -130,16 +130,17 @@ src/sbci/
 **Design rules that have earned their place.** The specification lives in one
 module, so changing a convention is a one-file change. The loader refuses an
 underspecified file rather than defaulting — a silently defaulted bandwidth
-makes two incomparable files look comparable. Unported methods raise with the
-name of the MATLAB file to port and the test that will prove it, and a test
-asserts those messages stay informative. Heavy dependencies are optional: a
+makes two incomparable files look comparable. Every method is a verified port,
+and misuse raises an `SbciError` that names what has to happen. Heavy
+dependencies are optional: a
 compute node running the pipeline should not need a rendering stack.
 
 [[pagebreak]]
 
 ## 4. Where things stand
 
-297 tests passing, lint clean, 96 files, 1.3 MB. Repository at `~/sbci` on
+The suite passes and lint is clean (`pytest -q` prints the current count; it
+has grown past six hundred). Repository at `~/sbci` on
 Longleaf; environment at `/work/users/x/y/xya/sbci-venv` (scratch, rebuilt by
 `scripts/setup_longleaf.sh`); reference checkouts and MATLAB reference output
 under `/work/users/x/y/xya/`.
@@ -158,11 +159,9 @@ under `/work/users/x/y/xya/`.
   cuneus, lowest in posterior cingulate and insula, with left and right
   agreeing to 0.002 although nothing in the code enforces it
 
-**Decided but not yet built**
-
-- The spherical heat kernel, which under the Q10 decision is the default and is
-  what produced every released cohort. Until it is ported the package cannot
-  regenerate its own released data.
+**Built since this section was first written:** the spherical heat kernel
+(PORTING.md item 6, r = 1.000000 at full scale), FPCA (item 5), ENCORE (item 4)
+and ConSEAL (item 7).
 
 **Not built**
 
@@ -272,10 +271,9 @@ and the format version keeps its `-draft` suffix.
    read from its source once the binary was found to run. The naming the
    decision implied is applied: `shk` is the spherical kernel and the Matérn
    kernel is `matern`.
-2. **FPCA reduction.** Needed by the reduced-rank API and the cohort notebook,
-   and **blocked on verification rather than effort**: two of its three MATLAB
-   dependencies are no longer downloadable, so the reference cannot be run and
-   the standard in section 5 cannot be met. Resolve the dependencies first.
+2. **FPCA reduction** -- now **done** and verified against a MATLAB run to
+   1e-10 (PORTING.md item 5). The dependencies that looked blocking were not
+   needed: the spline layer is the identity on the grid.
 
 **Publishing.** The name `sbci` is free on PyPI. Claiming it early costs
 nothing and prevents an awkward rename later.
@@ -285,11 +283,11 @@ nothing and prevents an awkward rename later.
 | Risk | Consequence | Mitigation |
 | --- | --- | --- |
 | Q6 answers "credentials required" | the acceptance test cannot pass as written | ask now; prepare a fallback criterion |
-| the spherical kernel port does not reproduce the released files | the package cannot regenerate its own released data | verify directly against `smoothed_sc_avg_0.005_ico4.mat`, which already exists |
+| ~~the spherical kernel port does not reproduce the released files~~ | resolved | r = 1.000000 and scale 1.000000 against `smoothed_sc_avg_0.005_ico4.mat` on five subjects (PORTING.md item 6) |
 | Q2 flips to "include the diagonal" | every released file must be rewritten | freeze before the first release, not after |
 | Q3/Q9 picks the plain sum | the legacy importer normalizes wrongly | decide before importing a cohort |
-| a cohort mixes the two kernels | the files are silently incomparable | the validator refuses mixed kernels; metadata records which was used |
-| FPCA dependencies stay unobtainable | one method cannot meet the verification standard | decide whether to ship it unverified, and say so plainly in the docs |
+| a cohort mixes the two kernels | the files are silently incomparable | metadata records which was used; a cohort-level check that refuses a mix is still to be written |
+| ~~FPCA dependencies stay unobtainable~~ | resolved | none were needed; verified to 1e-10 (PORTING.md item 5) |
 | ico4 cannot resolve the finest atlases | Schaefer900 and Schaefer1000 lose parcels outright | already measured and documented; do not advertise them |
 
 ## 9. Decisions needed, with owners
@@ -322,7 +320,7 @@ the brief's own open question: do the HCP data use terms permit redistributing
 *derived* dense connectomes openly, or must every user hold HCP credentials?
 *Why it matters:* this is the difference between the five-minute acceptance
 test passing and not. If credentials are required, the criterion has to be
-reworded rather than met. *Nobody has asked yet.*
+reworded rather than met. *Answered: no (SPEC_QUESTIONS.md item 6).*
 
 ### Tier 2 — ratifications for the format owner, minutes each
 
@@ -404,8 +402,9 @@ MICCAI 2016) inflates the cortex to a sphere and smooths with a truncated
 spherical-harmonic heat kernel; it produced every released cohort. The
 **Riemannian diffusion kernel** (bioRxiv 2025.09.08.674789) uses
 Laplace–Beltrami eigenfunctions on the cortical surface itself and argues that
-the spherical projection distorts the estimate. They agree at r = 0.58, about
-the size of the difference the newer paper is about.
+the spherical projection distorts the estimate. At the reference bandwidth
+they agree at only r = 0.29 (SPEC_QUESTIONS.md item 10): the difference the
+newer paper is about.
 
 That the two really are different geometries has been confirmed rather than
 assumed. The shipped eigenpairs were checked against both candidate surfaces:
@@ -419,12 +418,11 @@ Consequences: released cohorts stay canonical and nothing is reprocessed; the
 validator must refuse to mix kernels within a cohort; and the two take
 different bandwidth parameters — `sigma` for the spherical kernel, `kappa` for
 the Riemannian one — so `bandwidth` in the metadata is meaningful only
-alongside `kernel`. The spherical kernel still has to be ported, and unusually
-it can be checked against a released file rather than a reference run.
+alongside `kernel`. The spherical kernel is ported and, unusually, checked
+against the released files themselves: r = 1.000000 (PORTING.md item 6).
 
 ### Closed
 
-**Q5. Bundled surface geometry.** Answered. The toolkit already ships inflated,
-white and spherical meshes at ico4 resolution; they are converted and bundled,
-290 KB in total, so plotting needs no download. One caveat for the record: a
-pial surface is not available at ico4 resolution.
+**Q5. Bundled surface geometry.** Answered. Inflated, white, pial and spherical
+meshes at ico4 resolution are built from fsaverage and bundled, 376 KB in
+total, so plotting needs no download.

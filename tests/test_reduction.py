@@ -219,3 +219,101 @@ def test_too_large_a_penalty_inverts_and_selects_the_roughest_mode(cohort):
     assert inverted_roughness > working_roughness
     assert inverted_roughness == pytest.approx(np.linalg.eigvalsh(ring).max(), rel=0.01)
     assert inverted.explained[-1] < 0.1 * working.explained[-1]
+
+
+def test_the_large_grid_path_matches_the_dense_one(monkeypatch):
+    """Above ARPACK_THRESHOLD the projector and operator are applied, not formed.
+
+    Force the dense path on the same problem and the two must agree: same
+    mathematics, different evaluation order.
+    """
+    import sbci.reduction as reduction
+
+    rng = np.random.default_rng(6)
+    n, n_subjects, true_rank = reduction.ARPACK_THRESHOLD + 40, 5, 3
+    truth = np.linalg.qr(rng.standard_normal((n, n)))[0][:, :true_rank]
+    weights = rng.standard_normal((n_subjects, true_rank)) * np.array([5.0, 3.0, 1.0])
+    matrices = np.stack(
+        [
+            sum(weights[i, k] * np.outer(truth[:, k], truth[:, k]) for k in range(true_rank))
+            for i in range(n_subjects)
+        ]
+    )
+    noise = rng.standard_normal(matrices.shape) * 0.01
+    matrices = matrices + (noise + np.transpose(noise, (0, 2, 1))) / 2
+    matrices -= matrices.mean(axis=0, keepdims=True)
+    start = np.linalg.qr(rng.standard_normal((n, n)))[0][:, :2]
+    gram = np.diag(rng.uniform(0.5, 1.5, n))
+
+    operator_path = fit_basis(matrices, gram, rank=2, start=start)
+    monkeypatch.setattr(reduction, "ARPACK_THRESHOLD", 10**9)
+    dense_path = fit_basis(matrices, gram, rank=2, start=start)
+
+    for k in range(2):
+        assert abs(abs(operator_path.basis[:, k] @ dense_path.basis[:, k]) - 1.0) < 1e-8
+    np.testing.assert_allclose(operator_path.scales, dense_path.scales, rtol=1e-8)
+    np.testing.assert_allclose(operator_path.explained, dense_path.explained, rtol=1e-8)
+
+
+def test_the_gram_operator_is_the_unfolded_product():
+    """The implicit mode-1 Gram matrix equals the reference's explicit one."""
+    from sbci.reduction import _mode1_gram
+
+    rng = np.random.default_rng(8)
+    residual = rng.standard_normal((4, 7, 7))
+    unfolded = np.moveaxis(residual, 0, -1).reshape(7, 7 * 4, order="F")
+    explicit = unfolded @ unfolded.T
+    vector = rng.standard_normal(7)
+    np.testing.assert_allclose(_mode1_gram(residual)(vector), explicit @ vector, rtol=1e-12)
+
+
+def test_projecting_the_training_cohort_recovers_its_own_scores(cohort):
+    """reduce() centres and remembers the mean, so raw subjects project correctly."""
+    matrices, _ = cohort
+    offset = np.ones_like(matrices[0])
+    raw = [m + offset for m in matrices]  # an uncentred cohort
+    result = reduce(raw, rank=3, seed=0)
+    assert result.mean is not None
+    again = project(result, np.stack(raw))
+    for k in range(result.rank):
+        assert abs(np.corrcoef(again[:, k], result.scores[:, k])[0, 1]) > 0.99
+    np.testing.assert_allclose(
+        result.reconstruct(0) - result.mean, result.reconstruct(0) - result.mean
+    )
+    rebuilt = np.stack([result.reconstruct(i) for i in range(len(raw))])
+    assert np.abs(rebuilt - np.stack(raw)).max() < np.abs(np.stack(raw)).max()
+
+
+def test_the_closed_form_projection_equals_the_explicit_least_squares(cohort):
+    matrices, _ = cohort
+    result = fit_basis(matrices, np.eye(matrices.shape[1]), rank=3, seed=0)
+    n = matrices.shape[1]
+    lower = np.tril_indices(n)
+    design = np.column_stack([np.outer(b, b)[lower] for b in result.basis.T])
+    explicit = np.stack([np.linalg.lstsq(design, m[lower], rcond=None)[0] for m in matrices])
+    np.testing.assert_allclose(
+        project(result, matrices) * result.scales, explicit, rtol=1e-8, atol=1e-10
+    )
+
+
+def test_too_large_a_penalty_warns_about_the_inversion(cohort):
+    matrices, _ = cohort
+    n = matrices.shape[1]
+    with pytest.warns(RuntimeWarning, match="roughest"):
+        fit_basis(matrices, np.eye(n), _ring_laplacian(n), rank=1, alpha=5.0, seed=0)
+
+
+def test_reduce_accepts_connectome_like_objects_off_the_ico4_grid(cohort):
+    """A connectome on another grid gets the plain inner product, not the ico4 roughness."""
+    matrices, _ = cohort
+
+    class Toy:
+        def __init__(self, dense):
+            self._dense = dense
+            self.area = np.ones(dense.shape[0])
+
+        def dense(self):
+            return self._dense
+
+    result = reduce([Toy(m) for m in matrices], rank=2, seed=0)
+    assert result.basis.shape == (matrices.shape[1], 2)

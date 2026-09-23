@@ -46,9 +46,12 @@ def to_dense(condensed: np.ndarray, n: int | None = None) -> np.ndarray:
     if n is None:
         n = n_from_condensed(condensed.size)
     out = np.zeros((n, n), dtype=condensed.dtype)
-    iu = np.triu_indices(n, k=1)
-    out[iu] = condensed
-    return out + out.T
+    rows, cols = np.triu_indices(n, k=1)
+    # Fill both triangles rather than adding the transpose, which would
+    # allocate a second n x n array -- 105 MB on the ico4 grid.
+    out[rows, cols] = condensed
+    out[cols, rows] = condensed
+    return out
 
 
 def to_condensed(dense: np.ndarray) -> np.ndarray:

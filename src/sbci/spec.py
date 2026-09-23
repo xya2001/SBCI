@@ -27,6 +27,14 @@ N_VERTICES = 5124
 
 N_FACES_PER_HEMI = 5120
 N_FACES = 10240
+
+AREA_TOTAL = 327_684
+"""Sum of the per-vertex area weights on the canonical grid.
+
+Areas are counted in fsaverage vertices (163,842 per hemisphere), so they are
+integers per ico4 vertex and total the whole fsaverage sphere; the ico4-to-fsLR
+overlap matrix has the same column sums (SPEC_QUESTIONS.md item 3).
+"""
 """Triangles of the grid mesh, left hemisphere first, then right."""
 
 HEMISPHERE_ORDER = ("L", "R")

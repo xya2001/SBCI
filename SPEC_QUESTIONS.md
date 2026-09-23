@@ -91,14 +91,11 @@ where `src/sbci/spec.py` currently carries a **provisional** value, marked
    wall excluded, which is HCP's own convention and 14.1 GB. The writer
    currently emits the full mesh, with medial-wall rows and columns zero.
 
-5. ~~**Bundled surface geometry.**~~ **Answered.** The toolkit already ships
-   `lh/rh_inflated_avg_lps_ico4.vtk`, `_white_`, and `_sphere_` under
-   `example_data/fsaverage_label`. All three are now converted by
-   `tools/convert_surfaces.py` and bundled in the wheel, 290 KB in total, so
-   `plot()` needs no download. One caveat for the record: **pial is not
-   available at ico4 resolution**, only inflated, white and sphere. If a pial
-   view is wanted it has to be downsampled from the full-resolution fsaverage
-   surface and added to the converter.
+5. ~~**Bundled surface geometry.**~~ **Answered.** Four geometries -- inflated,
+   white, pial and sphere -- are built by `tools/build_surfaces.py` from the
+   fsaverage surfaces at ico4 resolution and bundled in the wheel, 376 KB in
+   total, so `plot()` needs no download (item 11 records how the pial surface,
+   which the toolkit does not ship at ico4, was downsampled).
 
 6. **The data release.** ~~Do the HCP terms permit redistributing derived
    connectomes openly?~~ **Answered, and the answer is no.** The group's own
@@ -166,7 +163,7 @@ where `src/sbci/spec.py` currently carries a **provisional** value, marked
    with a maximum absolute difference of 0.89 against a kernel maximum of 0.94.
 
    **Open: where the basis should be distributed from.** Bundling it would add
-   about 52 MB to a wheel whose other data is 700 KB, so it needs the same
+   about 52 MB to a wheel whose other data is about 900 KB, so it needs the same
    answer item 6 needs about hosting. Until then `.smooth()` works wherever the
    toolkit is checked out, and says exactly where it looked when it is not.
 
@@ -235,8 +232,9 @@ where `src/sbci/spec.py` currently carries a **provisional** value, marked
     - Released cohorts stay canonical; nothing is reprocessed.
     - `smooth()` defaults to `kernel="shk"`. `shk` means the **spherical heat
       kernel**, not the Matern kernel -- see the naming note below.
-    - The validator must refuse to mix kernels within a cohort, since the two
-      are not comparable.
+    - The two are not comparable, so a cohort must not mix kernels. `sbci
+      validate` checks one file and records the kernel; a cohort-level check
+      that refuses a mix is still to be written.
     - The two kernels take different bandwidth parameters: the spherical kernel
       takes `sigma` (0.005 in the released files) and the Riemannian kernel
       takes `kappa` (about 1.95). `bandwidth` alone is therefore ambiguous in
@@ -247,12 +245,10 @@ where `src/sbci/spec.py` currently carries a **provisional** value, marked
     kernel, because `compute_matern_kernel_matrix.m` is what the toolkit ships.
     Under this decision `sbci.smoothing.KERNELS` is now
     `("shk", "rdk", "matern")`: `shk` is the spherical heat kernel and is the
-    default, and the Matern kernel is `matern`. The spherical kernel is ported
-    but not shipped yet. Against the correct reference it reaches **r =
-    0.978**; a 20% amplitude error remains, traced to an undocumented
-    normalization or sampling convention -- PORTING.md item 6. Until that
-    closes, `smooth()` names the gap rather than silently substituting a
-    different kernel.
+    default, and the Matern kernel is `matern`. The spherical kernel is shipped
+    and is the default: it reproduces `c3_main` at r = 1.00000000 and scale
+    1.000000 on all 1,001,877 endpoints of a subject, and on five subjects --
+    PORTING.md item 6.
 
 11. ~~**No anatomical surface can be drawn.**~~ **RESOLVED.**
 

@@ -97,11 +97,13 @@ def test_fast_query_agrees_with_the_exact_search(grid):
     rng = np.random.default_rng(3)
     points = rng.normal(size=(500, 3))
     points /= np.linalg.norm(points, axis=1, keepdims=True)
-    fast_w, fast_i, fast_f = FastMeshQuery(grid.vertices, grid.faces).query(points)
+    query = FastMeshQuery(grid.vertices, grid.faces)
+    fast_w, fast_i, fast_f = query.query(points)
     exact_w, exact_i = MeshQuery(grid.vertices, grid.faces).query(points)
     assert np.array_equal(fast_i, exact_i)
     assert np.allclose(fast_w, exact_w, atol=1e-12)
     assert np.array_equal(grid.faces[fast_f], fast_i)
+    assert np.array_equal(fast_f, query._exact_faces(points))
 
 
 def test_a_query_at_a_vertex_puts_all_weight_on_it(grid):
@@ -354,15 +356,14 @@ def test_a_refused_update_leaves_the_field_alone_unless_strict(grid, monkeypatch
     """The flow of a velocity field cannot fold, so force the reference's check to fire."""
     import sbci.conseal as conseal
 
+    warp, strict = StationaryWarp(grid), StationaryWarp(grid)  # before the fold test is faked
     monkeypatch.setattr(conseal, "triangles_fold", lambda vertices, faces: True)
-    warp = StationaryWarp(grid)
     displacement = 0.01 * np.ones((grid.n_vertices, 2))
     before = warp.velocity.copy()
     assert not warp.compose(displacement)
     assert warp.rejected == 1
     assert np.array_equal(warp.velocity, before)
     assert np.allclose(warp.vertices, grid.vertices)
-    strict = StationaryWarp(grid)
     assert not strict.compose(displacement, strict_upstream=True)
     assert not np.array_equal(strict.velocity, before)  # the reference keeps it (item 3)
     assert np.allclose(strict.vertices, grid.vertices)
@@ -593,3 +594,88 @@ def test_the_overlap_metrics_are_one_for_identical_endpoints(connectome):
     assert overlap_coefficient(connectome, connectome, 1e-4) == 1.0
     assert dice_score(connectome, connectome, 1e-4) == 1.0
     assert np.isclose(endpoint_mass(connectome).sum(), 1.0)
+
+
+def test_cotangent_weights_use_the_angle_opposite_the_edge():
+    """A right triangle: the edge opposite the right angle gets no weight."""
+    vertices = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+    faces = np.array([[0, 1, 2]])
+    standard = cotangent_laplacian(vertices, faces).toarray()
+    assert standard[1, 2] == pytest.approx(0.0)
+    assert standard[0, 1] == pytest.approx(-0.5) and standard[0, 2] == pytest.approx(-0.5)
+    reference = cotangent_laplacian(vertices, faces, reference_layout=True).toarray()
+    assert reference[1, 2] == pytest.approx(-0.5)  # the reference's misplaced weight (item 12)
+    for matrix in (standard, reference):
+        assert np.allclose(matrix, matrix.T)
+        assert np.allclose(matrix @ np.ones(3), 0.0)
+
+
+def test_a_half_turn_rotation_is_not_mistaken_for_the_identity(grid):
+    half_turn = np.diag([-1.0, -1.0, 1.0])
+    warp = StationaryWarp(grid).rotate(half_turn)
+    expected = grid.vertices @ half_turn.T
+    turned = np.arccos(np.clip((warp.vertices * expected).sum(1), -1, 1))
+    unmoved = np.arccos(np.clip((warp.vertices * grid.vertices).sum(1), -1, 1))
+    assert np.median(turned) < 0.2
+    assert np.median(unmoved) > 2.0
+
+
+def test_the_chain_rule_is_zero_where_the_density_was_clamped(grid, connectome, kernel):
+    k, dk = kernel
+    f = connectome.evaluate(k)
+    _, d_e1, d_e2 = connectome.q_transform(k, dk)
+    assert np.isfinite(d_e1).all() and np.isfinite(d_e2).all()
+    assert not d_e1[f == 0].any() and not d_e2[f == 0].any()
+
+
+def test_an_inward_mesh_is_refused_and_a_non_icosphere_has_no_symmetry_group(grid):
+    mirrored = SphericalGrid(grid.vertices * np.array([-1.0, 1.0, 1.0]), grid.faces, order=2)
+    with pytest.raises(ValueError, match="oriented"):
+        StationaryWarp(mirrored)
+    rng = np.random.default_rng(3)
+    jittered = grid.vertices + 0.01 * rng.normal(size=grid.vertices.shape)
+    jittered /= np.linalg.norm(jittered, axis=1, keepdims=True)
+    with pytest.raises(ValueError, match="symmetries"):
+        mesh_symmetries(jittered, grid.faces)
+
+
+def test_the_bundled_grid_is_oriented_outward_and_icosahedral_to_stored_precision():
+    """FreeSurfer's ico4 sphere is an icosphere to 1.7e-4: its coordinates carry so many digits.
+
+    The 60 rotations are found, they permute the vertices at the default
+    tolerance, and an exact-arithmetic tolerance refuses the mesh rather than
+    pretend.
+    """
+    from sbci.conseal import default_grids, icosahedral_rotations
+
+    lh, rh = default_grids(order=1)
+    for hemisphere in (lh, rh):
+        assert not triangles_fold(hemisphere.vertices, hemisphere.faces)
+        rotations, deviation = icosahedral_rotations(hemisphere.vertices, hemisphere.faces)
+        assert rotations.shape == (60, 3, 3)
+        assert 1e-5 < deviation < 5e-4
+        _, permutations = mesh_symmetries(hemisphere.vertices, hemisphere.faces)
+        assert permutations.shape == (60, hemisphere.n_vertices)
+        with pytest.raises(ValueError, match="symmetries"):
+            mesh_symmetries(hemisphere.vertices, hemisphere.faces, tolerance=1e-6)
+
+
+def test_the_rigid_search_transport_is_the_permutation_on_an_exact_icosphere(grid):
+    """Pulling back by a symmetry through barycentric interpolation is the reference's gather."""
+    from sbci.conseal import ConSEAL, FastMeshQuery
+
+    rotations, permutations = mesh_symmetries(grid.vertices, grid.faces)
+    rng = np.random.default_rng(5)
+    values = rng.random((grid.n_vertices, grid.n_vertices))
+    query = FastMeshQuery(grid.vertices, grid.faces)
+    for rotation, perm in zip(rotations[:7], permutations[:7], strict=True):
+        image = np.argsort(perm)  # image[i] = where vertex i lands
+        pulled = ConSEAL._pull_back(values, grid, query, rotation)
+        np.testing.assert_allclose(pulled, values[np.ix_(image, image)], atol=1e-9)
+
+
+def test_endpoints_align_refuses_a_misshapen_template(grid, connectome):
+    with pytest.raises(ValueError, match="template"):
+        endpoints_align(
+            [connectome], template=np.ones(3), sigma=0.05, kernel_degree=12, grids=(grid, grid)
+        )
