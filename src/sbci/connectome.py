@@ -74,10 +74,12 @@ class ContinuousConnectome:
         >>> cc = ContinuousConnectome.load("sub-100307_sc.h5")   # doctest: +SKIP
         """
         path = Path(path)
-        if not path.exists():
-            raise FileNotFoundError(f"no such file: {path}")
         suffixes = "".join(path.suffixes)
         if suffixes.endswith((".h5", ".hdf5")):
+            # Checked here, after the kind of file is known, so that an
+            # unrecognized name is reported as such whether or not it exists.
+            if not path.exists():
+                raise FileNotFoundError(f"no such file: {path}")
             parts = io.read_hdf5(path)
         elif suffixes.endswith((".dconn.nii", ".dconn.nii.gz")):
             raise InvalidFileError(
