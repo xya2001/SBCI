@@ -61,6 +61,7 @@ the data release exists.
 | `sbci.endpoints_align(cc_list)` | implemented; ConSEAL, which warps the streamline endpoints themselves. Every stage matches the public MATLAB to the single precision it carries; four errors in that reference are corrected by default and reproducible with `strict_upstream=True` (PORTING.md item 7) |
 | `sbci.stats.local_test(scores, design)` | implemented; **no reference exists**, so verified against `scipy.stats` and against the procedures' own guarantees (PORTING.md item 5) |
 | `sbci.example(modality="sc"\|"fc")` | implemented; synthetic connectivity on the real grid, smoothed from 20,000 synthetic streamline endpoints it carries, so `smooth()` and `endpoints_align()` run on it; passes `sbci validate` |
+| `sbci.example_cohort(n_subjects, seed, effect)` | implemented; a synthetic cohort with shared anatomy, individual variation and one bundle scaled by a synthetic age, so `reduce`, `local_test` and the alignments can be run against a known answer |
 | `sbci info <file>` | implemented; what a file holds, without opening Python |
 | `sbci example --out <file>` | implemented; writes a file to try the package on |
 | `sbci atlases [--match ...]` | implemented; lists the bundled atlases and their region counts |
@@ -88,6 +89,38 @@ so it is a faithful subject for learning the API, writing tests and checking a
 plotting stack -- and never a basis for a claim about brains. Its metadata
 records `pipeline_version` as `synthetic-example` and says the endpoints were
 drawn, not tracked.
+
+## An end-to-end analysis without data
+
+One subject exercises the single-subject methods. The cohort methods need
+subjects that share anatomy and differ in a known way, which is what
+`sbci.example_cohort()` builds: every subject draws its streamlines around the
+same bundles, jittered in weight and position, and one bundle's weight scales
+with a synthetic age. The whole pipeline then runs against a planted answer:
+
+```python
+import sbci
+
+cohort = sbci.example_cohort(n_subjects=10, seed=0)     # about 20 s; 52 MB per subject
+reduction = sbci.reduce(cohort.connectomes, rank=4)      # FPCA, about two and a half minutes
+result = sbci.local_test(reduction.scores, cohort.age)   # which components track age?
+result.significant()                                     # one of the four components
+effect = result.effect_map(reduction, alpha=0.05)        # where on the cortex the effect sits
+cohort.connectomes[0].plot(effect)                       # compare with cohort.truth, the planted bundle
+```
+
+On our runs one of the four components carried the planted bundle (which one
+varies with the solver's start): its scores correlate with age at 0.95, the
+adjusted p-value is 1e-4, and the effect map restricted to significant
+components correlates 0.94 with `cohort.truth`. The effect is deliberately
+not the largest source of variance -- `effect=0.5`
+slips past a rank-4 FPCA, and three degrees of anatomical jitter
+(`anatomy=0.05`) hides even the default, which is the case the alignment
+methods exist for. Alignment fits in front of `reduce`:
+`sbci.endpoints_align(cohort.connectomes)` warps every subject's endpoints
+onto a common template, `aligned_endpoints(i)` hands them back, and
+`smooth()` turns them into aligned connectomes (USAGE.md shows the three
+lines). Timings are for four cores.
 
 ## Getting around the package
 

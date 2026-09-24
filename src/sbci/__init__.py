@@ -56,6 +56,8 @@ def load(path: str | Path) -> ContinuousConnectome:
 #: Names that live in a submodule and are pulled in on first use.
 _LAZY: dict[str, str] = {
     "example": "examples",
+    "example_cohort": "examples",
+    "Cohort": "examples",
     "align": "alignment",
     "Alignment": "alignment",
     "Encore": "alignment",
@@ -106,7 +108,7 @@ if TYPE_CHECKING:  # pragma: no cover - for type checkers only
     from .alignment import Alignment, Encore, Warp, align
     from .conseal import EndpointAlignment, EndpointConnectome, EndpointWarp, endpoints_align
     from .coupling import structure_function_coupling
-    from .examples import example
+    from .examples import Cohort, example, example_cohort
     from .parcellation import parcellate
     from .plotting import plot_surface
     from .reduction import Reduction, fit_basis, project, reduce
@@ -143,6 +145,8 @@ __all__ = [
     "ContinuousConnectome",
     "load",
     "example",
+    "example_cohort",
+    "Cohort",
     # parcellations and surfaces
     "Atlas",
     "load_atlas",

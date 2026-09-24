@@ -7,6 +7,8 @@ real file, and it has to say clearly that it is not one.
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import pytest
 
@@ -182,3 +184,89 @@ def test_cli_atlases_lists_and_filters(capsys):
 def test_cli_atlases_reports_no_match(capsys):
     assert main(["atlases", "--match", "nonesuch"]) == 1
     assert "no bundled atlas matches" in capsys.readouterr().out
+
+
+# From the compute-node calibration of the fixture below: the bundle's own mass
+# tracks age at 0.98, its home region's self-connectivity at 0.76 (diluted by
+# everything else the region carries), and two independent examples correlate
+# at 0.63 over the Desikan matrix where cohort subjects sit above 0.95.
+BUNDLE_MASS_CORRELATION = 0.9
+REGION_CORRELATION = 0.6
+
+
+@pytest.fixture(scope="module")
+def cohort():
+    """Six small subjects with a strong planted effect, so the checks below are cheap and sharp."""
+    return sbci.example_cohort(n_subjects=6, seed=0, effect=0.9, n_streamlines=2000)
+
+
+def test_a_cohort_is_reproducible_and_says_it_is_synthetic(cohort):
+    again = sbci.example_cohort(n_subjects=6, seed=0, effect=0.9, n_streamlines=2000)
+    np.testing.assert_array_equal(again.age, cohort.age)
+    np.testing.assert_array_equal(again.connectomes[3].data, cohort.connectomes[3].data)
+    assert cohort.n_subjects == 6 and cohort.age.min() >= 20 and cohort.age.max() <= 80
+    assert all(
+        "synthetic-cohort" in cc.metadata.fields["pipeline_version"] for cc in cohort.connectomes
+    )
+    assert all(cc.endpoints.n_streamlines == 2000 for cc in cohort.connectomes)
+
+
+def test_cohort_subjects_share_anatomy_unlike_independent_examples(cohort):
+    """Subjects of one cohort resemble each other far more than two examples do.
+
+    Two independent examples correlate at about 0.63 over the Desikan matrix;
+    subjects drawn around the same bundles sit well above that.
+    """
+    atlas = sbci.load_atlas("Desikan")
+    iu = np.triu_indices(atlas.n_regions)
+    within = np.stack([cc.to_atlas(atlas)[iu] for cc in cohort.connectomes])
+    assert np.corrcoef(within)[np.triu_indices(6, 1)].min() > 0.85
+    assert not np.array_equal(cohort.connectomes[0].data, cohort.connectomes[1].data)
+
+
+def test_the_planted_bundle_rises_with_age(cohort):
+    """The truth is recoverable by a plain regression, both on the bundle and on its region."""
+    assert cohort.truth.shape == (sbci.spec.N_VERTICES,) and cohort.truth.max() == pytest.approx(
+        1.0
+    )
+    # the bundle's own mass: the density integrated against its field at both ends
+    mass = np.array(
+        [cohort.truth @ cc.dense().astype(np.float64) @ cohort.truth for cc in cohort.connectomes]
+    )
+    assert np.corrcoef(mass, cohort.age)[0, 1] > BUNDLE_MASS_CORRELATION
+    # and, diluted by everything else the region carries, its home region's self-connectivity
+    atlas = sbci.load_atlas("Desikan")
+    half = sbci.spec.N_VERTICES_PER_HEMI
+    region = int(atlas.labels[np.argmax(cohort.truth[:half])]) - 1
+    within = np.array([cc.to_atlas(atlas)[region, region] for cc in cohort.connectomes])
+    assert np.corrcoef(within, cohort.age)[0, 1] > REGION_CORRELATION
+
+
+def test_an_fc_cohort_matches_its_sc_cohort(cohort):
+    fc = sbci.example_cohort(n_subjects=6, seed=0, effect=0.9, modality="fc")
+    np.testing.assert_array_equal(fc.age, cohort.age)
+    assert fc.effect_bundle == cohort.effect_bundle
+    assert all(not cc.has_endpoints and cc.data.min() < 0 for cc in fc.connectomes)
+
+
+def test_cohort_arguments_are_checked():
+    with pytest.raises(ValueError, match="effect"):
+        sbci.example_cohort(n_subjects=2, effect=1.0)
+    with pytest.raises(ValueError, match="n_subjects"):
+        sbci.example_cohort(n_subjects=0)
+
+
+@pytest.mark.skipif(
+    not os.environ.get("SBCI_SLOW_TESTS"),
+    reason="three minutes of FPCA on ico4; set SBCI_SLOW_TESTS=1",
+)
+def test_reduce_and_local_test_recover_the_planted_bundle():
+    """The README's end-to-end analysis, at its defaults, with its known answer."""
+    cohort = sbci.example_cohort(n_subjects=10, seed=0)
+    reduction = sbci.reduce(cohort.connectomes, rank=4)
+    result = sbci.local_test(reduction.scores, cohort.age)
+    found = result.significant(0.05)
+    assert found.size >= 1
+    assert abs(np.corrcoef(reduction.scores[:, found[0]], cohort.age)[0, 1]) > 0.8
+    effect = result.effect_map(reduction, alpha=0.05)
+    assert np.corrcoef(effect, cohort.truth)[0, 1] > 0.5

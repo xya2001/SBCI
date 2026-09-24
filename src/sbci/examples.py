@@ -24,13 +24,20 @@ What *is* real: the ico4 grid, the vertex areas, the medial-wall mask (taken
 from the bundled Desikan atlas), and the file format. A file written by
 :func:`example` passes ``sbci validate``.
 
-Building the structural example takes a second or two, most of it the kernel.
-The last two builds are kept, so repeated calls with the same arguments are
-free and return independent copies.
+:func:`example_cohort` goes one step further and builds a cohort with a known
+answer: every subject draws its streamlines around the *same* bundles, jittered
+in weight and position, and one bundle's weight scales with a synthetic age.
+Alignment, reduction and inference then have something real to recover, and
+the :class:`Cohort` carries the truth to compare against.
+
+Building a structural subject takes a second or two, most of it the kernel.
+The last two examples and the last cohort are kept, so repeated calls with the
+same arguments are free and return independent copies.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from functools import lru_cache
 
 import numpy as np
@@ -58,6 +65,17 @@ N_STREAMLINES = 20_000
 #: Fraction of synthetic streamlines with both ends in one hemisphere.
 #: Inter-hemispheric connectivity is genuinely the sparser part.
 SAME_HEMISPHERE = 0.8
+
+#: Individual variation in a cohort: the bundle weights are multiplied by a
+#: log-normal factor with this standard deviation ...
+COHORT_WEIGHT_SPREAD = 0.10
+
+#: ... and the bundle centres are displaced by a smooth random tangent field of
+#: about this many radians (a degree), so subjects differ in anatomy while a
+#: bundle stays a bundle. Calibrated so that a rank-4 FPCA of ten subjects still
+#: finds the planted effect; at 0.05 (three degrees) it no longer does, which
+#: is what the alignment methods are for.
+COHORT_ANATOMY_SPREAD = 0.02
 
 
 def _unit(vertices: np.ndarray) -> np.ndarray:
@@ -159,13 +177,74 @@ def _streamline_endpoints(sphere, mask, centres, weights, rng: np.random.Generat
     )
 
 
-def _metadata(modality: str, version: str, n_streamlines: int = 0, bandwidth: float = 0.0):
+def _deform(centres: np.ndarray, rng: np.random.Generator, spread: float) -> np.ndarray:
+    """One subject's anatomy: the bundle centres moved by a smooth random tangent field.
+
+    The field is three very broad bumps, each carrying a random vector, so
+    neighbouring bundles move together and the deformation stays smooth.
+    """
+    if spread <= 0:
+        return centres
+    poles = _unit(rng.normal(size=(3, 3)))
+    vectors = spread * rng.normal(size=(3, 3))
+    field = np.exp(3.0 * (centres @ poles.T - 1.0)) @ vectors
+    field -= (field * centres).sum(axis=1, keepdims=True) * centres  # tangential
+    return _unit(centres + field)
+
+
+def _structural(sphere, mask, area, centres, weights, rng, n_streamlines: int, metadata):
+    """A structural connectome: the default kernel applied to freshly drawn endpoints."""
+    from .smoothing import smooth
+
+    n = sphere.n_vertices
+    endpoints = _streamline_endpoints(sphere, mask, centres, weights, rng, n_streamlines)
+    # smooth() defines the density from the endpoints exactly as it would for
+    # a real file, so re-smoothing the result reproduces it.
+    seedling = ContinuousConnectome(
+        data=np.zeros(n * (n - 1) // 2, dtype=np.float32),
+        area=area,
+        mask=mask,
+        metadata=metadata,
+        coords=sphere.vertices,
+        endpoints=endpoints,
+    )
+    return smooth(seedling, kernel="shk", mask_medial_wall=True)
+
+
+def _functional(sphere, mask, area, centres, amplitudes, rng, metadata):
+    """A functional connectome: correlated synthetic timeseries, which is how FC is made."""
+    fields = _bumps(sphere, centres) * np.sqrt(amplitudes).astype(np.float32)
+    signals = fields @ rng.normal(size=(N_COMPONENTS, 240)).astype(np.float32)
+    signals += rng.normal(scale=0.35, size=signals.shape).astype(np.float32)
+    signals -= signals.mean(axis=1, keepdims=True)
+    signals /= np.linalg.norm(signals, axis=1, keepdims=True)
+    dense = signals @ signals.T
+    # The medial wall carries no connectivity, as the spec requires.
+    dense[~mask, :] = 0.0
+    dense[:, ~mask] = 0.0
+    np.fill_diagonal(dense, 0.0)
+    return ContinuousConnectome(
+        data=grid.to_condensed(dense).astype(np.float32),
+        area=area,
+        mask=mask,
+        metadata=metadata,
+        coords=sphere.vertices,
+    )
+
+
+def _metadata(
+    modality: str,
+    version: str,
+    n_streamlines: int = 0,
+    bandwidth: float = 0.0,
+    kind: str = "example",
+):
     """Complete metadata that says plainly the file is synthetic."""
     common = dict(
         normalization="unit-mass" if modality == "sc" else "none",
         registration_reference="fsaverage",
-        pipeline_version=f"synthetic-example/{version}",
-        container_version="none (synthetic example, not pipeline output)",
+        pipeline_version=f"synthetic-{kind}/{version}",
+        container_version=f"none (synthetic {kind}, not pipeline output)",
     )
     if modality == "sc":
         common.update(
@@ -236,15 +315,7 @@ def example(
         raise ValueError(f"modality must be one of {spec.MODALITIES}, got {modality!r}")
     if modality == "sc" and int(n_streamlines) < 1:
         raise ValueError(f"n_streamlines must be at least 1, got {n_streamlines}")
-    prototype = _build(modality, int(seed), int(n_streamlines) if modality == "sc" else 0)
-    return ContinuousConnectome(
-        data=prototype.data.copy(),
-        area=prototype.area.copy(),
-        mask=prototype.mask.copy(),
-        metadata=Metadata(dict(prototype.metadata.fields)),
-        coords=prototype.coords,  # the bundled sphere, which is read-only
-        endpoints=None if prototype.endpoints is None else prototype.endpoints.copy(),
-    )
+    return _copy(_build(modality, int(seed), int(n_streamlines) if modality == "sc" else 0))
 
 
 @lru_cache(maxsize=2)
@@ -254,47 +325,195 @@ def _build(modality: str, seed: int, n_streamlines: int) -> ContinuousConnectome
 
     rng = np.random.default_rng(seed)
     sphere = load_surface("sphere")
-    n = sphere.n_vertices
     # The mask is real: the medial wall carries no Desikan region.
     mask = load_atlas("Desikan").labels != 0
     area = _vertex_areas(sphere)
     centres = _centres(sphere, mask, rng)
 
     if modality == "sc":
-        from .smoothing import DEFAULT_SIGMA, smooth
+        from .smoothing import DEFAULT_SIGMA
 
         weights = rng.gamma(2.0, 1.0, size=N_COMPONENTS)
-        endpoints = _streamline_endpoints(sphere, mask, centres, weights, rng, n_streamlines)
-        # smooth() defines the density from the endpoints exactly as it would
-        # for a real file, so re-smoothing the example reproduces it.
-        seedling = ContinuousConnectome(
-            data=np.zeros(n * (n - 1) // 2, dtype=np.float32),
-            area=area,
-            mask=mask,
-            metadata=_metadata("sc", __version__, n_streamlines, DEFAULT_SIGMA),
-            coords=sphere.vertices,
-            endpoints=endpoints,
-        )
-        return smooth(seedling, kernel="shk", mask_medial_wall=True)
+        metadata = _metadata("sc", __version__, n_streamlines, DEFAULT_SIGMA)
+        return _structural(sphere, mask, area, centres, weights, rng, n_streamlines, metadata)
+    amplitudes = np.ones(N_COMPONENTS)
+    return _functional(sphere, mask, area, centres, amplitudes, rng, _metadata("fc", __version__))
 
-    # Correlate synthetic timeseries, which is how FC is actually made.
-    fields = _bumps(sphere, centres)
-    signals = fields @ rng.normal(size=(N_COMPONENTS, 240)).astype(np.float32)
-    signals += rng.normal(scale=0.35, size=signals.shape).astype(np.float32)
-    signals -= signals.mean(axis=1, keepdims=True)
-    signals /= np.linalg.norm(signals, axis=1, keepdims=True)
-    dense = signals @ signals.T
-    # The medial wall carries no connectivity, as the spec requires.
-    dense[~mask, :] = 0.0
-    dense[:, ~mask] = 0.0
-    np.fill_diagonal(dense, 0.0)
+
+def _copy(connectome: ContinuousConnectome) -> ContinuousConnectome:
+    """An independent copy, so callers can edit what they get without touching the cache."""
     return ContinuousConnectome(
-        data=grid.to_condensed(dense).astype(np.float32),
-        area=area,
-        mask=mask,
-        metadata=_metadata("fc", __version__),
-        coords=sphere.vertices,
+        data=connectome.data.copy(),
+        area=connectome.area.copy(),
+        mask=connectome.mask.copy(),
+        metadata=Metadata(dict(connectome.metadata.fields)),
+        coords=connectome.coords,  # the bundled sphere, which is read-only
+        endpoints=None if connectome.endpoints is None else connectome.endpoints.copy(),
     )
+
+
+@dataclass
+class Cohort:
+    """What :func:`example_cohort` returns: synthetic subjects, and the truth about them."""
+
+    connectomes: list
+    """One :class:`~sbci.ContinuousConnectome` per subject, on the ico4 grid."""
+    age: np.ndarray
+    """``(n_subjects,)`` synthetic ages in years, uniform on 20 to 80; the covariate."""
+    effect_bundle: int
+    """Which of the :data:`N_COMPONENTS` bundles was scaled with age."""
+    truth: np.ndarray
+    """``(n_vertices,)`` the planted bundle's field over the surface, both hemispheres:
+    what an effect map recovered from the cohort should resemble."""
+    seed: int
+    """The seed everything was drawn from."""
+
+    @property
+    def n_subjects(self) -> int:
+        """Subjects in the cohort."""
+        return len(self.connectomes)
+
+    def __repr__(self) -> str:  # pragma: no cover - cosmetic
+        return f"<Cohort of {self.n_subjects} synthetic subjects, seed {self.seed}>"
+
+
+def example_cohort(
+    n_subjects: int = 10,
+    seed: int = 0,
+    effect: float = 0.7,
+    modality: str = "sc",
+    n_streamlines: int = N_STREAMLINES,
+    variation: float = COHORT_WEIGHT_SPREAD,
+    anatomy: float = COHORT_ANATOMY_SPREAD,
+) -> Cohort:
+    """Build a synthetic cohort with shared anatomy, individual variation and one planted effect.
+
+    Every subject is an :func:`example` drawn around the same bundles: the
+    centres and base weights come from ``seed``, each subject multiplies the
+    weights by a log-normal factor (:data:`COHORT_WEIGHT_SPREAD`), moves the
+    centres by a smooth random field (:data:`COHORT_ANATOMY_SPREAD`) and draws
+    its own streamlines. One bundle of median weight is scaled by
+    ``1 + effect * z``, where ``z`` is the subject's age standardized to
+    ``[-1, 1]``, so its connectivity rises with age; ``effect=0.7`` means the
+    oldest subject carries about six times the youngest's weight on it.
+
+    This is what lets the whole pipeline be run with a known answer: at the
+    defaults, :func:`sbci.reduce` at rank 4 on ten subjects puts the planted
+    bundle in one component, :func:`sbci.local_test` finds that component
+    (adjusted p about 1e-4), and its :meth:`~sbci.stats.LocalTest.effect_map`
+    correlates above 0.8 with :attr:`Cohort.truth`. The effect is one source of
+    variance among the individual variation, not the largest -- at ``effect=0.5``
+    a rank-4 FPCA misses it, and with ``anatomy=0.05`` (three degrees) so does
+    ``effect=0.7``, which is the case the alignment methods exist for. Nothing
+    here was measured from anyone; the metadata says so.
+
+    Parameters
+    ----------
+    n_subjects
+        How many subjects. Each structural subject takes a second or two to
+        build and 52 MB in memory.
+    seed
+        Seed for the shared structure and, through it, every subject.
+    effect
+        Strength of the planted effect, in ``[0, 1)``.
+    modality
+        ``"sc"`` for structural subjects with endpoints, ``"fc"`` for functional
+        ones whose timeseries share the same bundles and weights (the same
+        ``seed`` gives matching cohorts, for coupling analyses).
+    n_streamlines
+        Streamlines per structural subject.
+    variation, anatomy
+        Individual variation: the log-normal spread of the bundle weights and
+        the size in radians of the random displacement of the bundle centres.
+        Anatomy is what the alignment methods remove; turn it up to give them
+        more to do, or down to make the planted effect easier to find.
+
+    Examples
+    --------
+    >>> import sbci
+    >>> cohort = sbci.example_cohort(n_subjects=2, n_streamlines=1000)
+    >>> cohort.n_subjects, cohort.age.shape, cohort.truth.shape
+    (2, (2,), (5124,))
+    >>> bool(cohort.age.min() >= 20 and cohort.age.max() <= 80)
+    True
+
+    The analysis with a known answer::
+
+        cohort = sbci.example_cohort(n_subjects=10)
+        reduction = sbci.reduce(cohort.connectomes, rank=4)
+        result = sbci.local_test(reduction.scores, cohort.age)
+        result.significant()                      # the component carrying the planted bundle
+        result.effect_map(reduction)              # compare with cohort.truth
+    """
+    if modality not in spec.MODALITIES:
+        raise ValueError(f"modality must be one of {spec.MODALITIES}, got {modality!r}")
+    if int(n_subjects) < 1:
+        raise ValueError(f"n_subjects must be at least 1, got {n_subjects}")
+    if not 0.0 <= float(effect) < 1.0:
+        raise ValueError(f"effect must be in [0, 1), got {effect}")
+    if modality == "sc" and int(n_streamlines) < 1:
+        raise ValueError(f"n_streamlines must be at least 1, got {n_streamlines}")
+    if float(variation) < 0 or float(anatomy) < 0:
+        raise ValueError("variation and anatomy are spreads and cannot be negative")
+    prototype = _build_cohort(
+        int(n_subjects),
+        int(seed),
+        float(effect),
+        modality,
+        int(n_streamlines) if modality == "sc" else 0,
+        float(variation),
+        float(anatomy),
+    )
+    return Cohort(
+        connectomes=[_copy(cc) for cc in prototype.connectomes],
+        age=prototype.age.copy(),
+        effect_bundle=prototype.effect_bundle,
+        truth=prototype.truth.copy(),
+        seed=prototype.seed,
+    )
+
+
+@lru_cache(maxsize=1)
+def _build_cohort(
+    n_subjects: int,
+    seed: int,
+    effect: float,
+    modality: str,
+    n_streamlines: int,
+    variation: float,
+    anatomy: float,
+):
+    """The prototype cohort for one set of arguments; :func:`example_cohort` hands out copies."""
+    from . import __version__
+
+    shared = np.random.default_rng([seed, 0])
+    sphere = load_surface("sphere")
+    mask = load_atlas("Desikan").labels != 0
+    area = _vertex_areas(sphere)
+    centres = _centres(sphere, mask, shared)
+    weights = shared.gamma(2.0, 1.0, size=N_COMPONENTS)
+    age = shared.uniform(20.0, 80.0, size=n_subjects)
+    z = (age - 50.0) / 30.0
+    effect_bundle = int(np.argsort(weights)[N_COMPONENTS // 2])  # a typical bundle, not an outlier
+    truth = _bumps(sphere, centres)[:, effect_bundle].astype(np.float64)
+
+    connectomes = []
+    for subject in range(n_subjects):
+        rng = np.random.default_rng([seed, subject + 1])
+        own = weights * np.exp(variation * rng.normal(size=N_COMPONENTS))
+        own[effect_bundle] *= 1.0 + effect * z[subject]
+        centres_own = _deform(centres, rng, anatomy)
+        if modality == "sc":
+            from .smoothing import DEFAULT_SIGMA
+
+            metadata = _metadata("sc", __version__, n_streamlines, DEFAULT_SIGMA, kind="cohort")
+            connectomes.append(
+                _structural(sphere, mask, area, centres_own, own, rng, n_streamlines, metadata)
+            )
+        else:
+            metadata = _metadata("fc", __version__, kind="cohort")
+            connectomes.append(_functional(sphere, mask, area, centres_own, own, rng, metadata))
+    return Cohort(connectomes, age, effect_bundle, truth, seed)
 
 
 def _vertex_areas(surface) -> np.ndarray:

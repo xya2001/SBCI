@@ -282,6 +282,52 @@ files. `spherical_heat_kernel(..., quantized=False)` gives the closed-form
 series the tables approximate. Only the ~31 vertices inside the 12.2-degree
 cutoff are visited per endpoint, found with a KD-tree.
 
+## A synthetic cohort, end to end
+
+`sbci.example()` gives one subject; `sbci.example_cohort()` gives a cohort
+built to be analysed. The shared structure comes from `seed`: 48 bundle
+centres on cortex (mirrored into the right hemisphere) and their base weights.
+Each subject then multiplies the weights by a log-normal factor (spread 0.10),
+moves the centres by a smooth random tangent field (about a degree), and draws
+its own 20,000 streamlines. One bundle of median weight is scaled by
+`1 + effect * z`, with `z` the subject's age standardized to `[-1, 1]` and
+`effect=0.7` by default, so the oldest subject carries about six times the
+youngest's weight on it. `variation=` and `anatomy=` set the two spreads. The returned `Cohort` holds the `connectomes`, the
+`age` covariate, the `effect_bundle` index and `truth`, the planted bundle's
+field over the surface.
+
+```python
+import sbci
+
+cohort = sbci.example_cohort(n_subjects=10, seed=0)     # about 20 s on four cores
+
+# optional: align first (ConSEAL warps the endpoints; re-smooth to get connectomes back).
+# About two minutes per subject per five iterations on four cores: a batch job for a real cohort.
+aligned = sbci.endpoints_align(cohort.connectomes, max_iterations=10)
+for i, cc in enumerate(cohort.connectomes):
+    cc.endpoints = aligned.aligned_endpoints(i)
+subjects = [cc.smooth(kernel="shk", mask_medial_wall=True) for cc in cohort.connectomes]
+
+reduction = sbci.reduce(subjects, rank=4)                # FPCA, about two and a half minutes
+result = sbci.local_test(reduction.scores, cohort.age)   # F test per component, FDR across them
+result.significant()                                     # one component tracks age (its index varies run to run)
+effect = result.effect_map(reduction, alpha=0.05)        # one value per vertex, significant components only
+float(np.corrcoef(effect, cohort.truth)[0, 1])           # about 0.94: the planted bundle, where it was planted
+subjects[0].plot(effect)
+```
+
+The planted effect is one source of variance among the individual variation,
+not the largest: on our runs it was one of four components (the index varies
+with the solver's start), its scores correlated with age at 0.95 and its
+adjusted p-value was 1e-4. Make the cohort
+harder and the analysis has to earn it -- `effect=0.5` slips past a rank-4
+FPCA of ten subjects, and `anatomy=0.05` (three degrees of jitter) hides even
+the default, which is exactly the situation alignment is for. Ten subjects
+occupy about 520 MB as connectomes and four times that inside `reduce`.
+`modality="fc"` builds the matching functional cohort
+from the same bundles and weights, for coupling analyses across subjects.
+Every file says `synthetic-cohort` in its `pipeline_version`.
+
 ## Reducing a cohort to a handful of numbers
 
 A connectome is thirteen million numbers. FPCA finds a small set of surface
