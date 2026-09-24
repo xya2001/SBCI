@@ -1,9 +1,23 @@
-# Using the package on Longleaf
+# Using the package
 
 Everything below is live: `scripts/tour.py` runs all of it and prints the
 output quoted here.
 
-## Setup
+## Setup anywhere
+
+```bash
+pip install "sbci[plotting] @ git+https://github.com/xya2001/SBCI.git"
+python -c "import sbci; print(sbci.example())"
+```
+
+Python 3.10 or newer; the plotting extra is only for figures. Without data of
+your own, every example below runs on `sbci.example()` and
+`sbci.example_cohort()`. The paths quoted are the lab's on the Longleaf
+cluster, so substitute yours. The `rdk` and `matern` kernels need the
+Laplace-Beltrami basis, two files from `SBCI_Toolkit/concon_estimate`; *Storing
+endpoints, and re-smoothing from them* says where to put them.
+
+## Setup on Longleaf
 
 **Once:**
 
@@ -38,7 +52,9 @@ permanent.
 
 ## Data to try it on
 
-One subject is already imported, converted from legacy pipeline output:
+Anywhere, `sbci.example()` and `sbci.example_cohort()` build synthetic subjects
+on the real grid. On Longleaf, one real subject is already imported, converted
+from legacy pipeline output:
 
 ```
 /work/users/x/y/xya/sbci-derivatives/sub-example_sc.h5

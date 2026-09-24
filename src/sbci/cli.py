@@ -18,7 +18,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"sbci {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    download = subparsers.add_parser("download", help="fetch a released cohort or tutorial subject")
+    download = subparsers.add_parser(
+        "download", help="fetch a released cohort or tutorial subject (pending the data release)"
+    )
     download.add_argument("cohort", help="cohort name, e.g. hcp-ya")
     download.add_argument("--subject", help="single subject id, e.g. 100307")
     download.add_argument("--out", default=".", help="destination directory")

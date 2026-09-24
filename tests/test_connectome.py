@@ -197,3 +197,15 @@ def test_exchange_files_are_refused_by_load_with_an_explanation(tmp_path):
     path.write_bytes(b"")
     with pytest.raises(InvalidFileError, match="write"):
         ContinuousConnectome.load(path)
+
+
+def test_load_names_a_missing_file_plainly(tmp_path):
+    """Not h5py's 'unable to synchronously open file' with its flags."""
+    with pytest.raises(FileNotFoundError, match="no such file") as caught:
+        ContinuousConnectome.load(tmp_path / "nope.h5")
+    assert "synchronously" not in str(caught.value)
+
+
+def test_save_names_a_missing_directory_plainly(tmp_path, connectome):
+    with pytest.raises(FileNotFoundError, match="directory does not exist"):
+        connectome.save(tmp_path / "nowhere" / "sub-x_sc.h5")

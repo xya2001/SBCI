@@ -176,6 +176,8 @@ def write_hdf5(
     # leave a truncated file behind.
     text = metadata.to_json()
     path = Path(path)
+    if not path.parent.is_dir():
+        raise FileNotFoundError(f"directory does not exist: {path.parent}")
     # The byte-shuffle filter costs nothing to read and improves gzip on floats.
     opts = {"compression": compression, "shuffle": True} if compression else {}
 

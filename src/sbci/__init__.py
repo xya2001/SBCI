@@ -1,17 +1,19 @@
 """sbci -- continuous brain connectivity.
 
-The five-minute start::
+Try it with nothing but the package installed::
 
-    pip install sbci
-    sbci download hcp-ya --subject 100307
+    pip install "sbci[plotting] @ git+https://github.com/xya2001/SBCI.git"
 
     import sbci
 
-    cc = sbci.load("sub-100307_sc.h5")
+    cc = sbci.example()                  # synthetic connectome on the real ico4 grid
     M  = cc.to_atlas("Schaefer200")      # 200 x 200 matrix
     p  = cc.seed(vertex=1234)            # profile over the surface
     cc.plot(p)                           # inflated-surface figure
-    cc.to_cifti("sub-100307_sc.dconn.nii")
+    cc.save("sub-example_sc.h5")         # a file that passes `sbci validate`
+
+With a real file, ``cc = sbci.load("sub-100307_sc.h5")`` and the same calls;
+``cc.to_cifti(...)`` writes the exchange file for Connectome Workbench.
 
 Everything in :data:`__all__` is reachable straight off ``sbci``, and so is
 every submodule -- ``sbci.stats.local_test`` works after a plain ``import

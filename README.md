@@ -1,46 +1,90 @@
 # sbci
 
-Continuous brain connectivity: read, parcellate, smooth, and couple
-surface-based continuous connectomes.
+Continuous brain connectivity: read, parcellate, smooth, couple, align and
+reduce surface-based continuous connectomes on the ico4 grid (5124 vertices),
+with every method a verified port of the SBCI group's MATLAB.
 
-**To use it: [USAGE.md](USAGE.md)** -- setup on Longleaf, every working
-function with a worked example, and what the unfinished ones tell you.
+> **Status: pre-alpha.** Every method in the API table below is implemented
+> and verified against its reference; only `sbci download` waits on the data
+> release.
 
-**Start here: [BLUEPRINT.md](BLUEPRINT.md)** -- what this package is, what
-"finished" means, where it stands, and what blocks what.
+## Install
 
-> **Status: pre-alpha.** Every method in the API below is implemented and
-> verified against its reference; only `sbci download` waits on the data
-> release. See [PORTING.md](PORTING.md) for how each port was verified and
-> [SPEC_QUESTIONS.md](SPEC_QUESTIONS.md) for the decisions WP1 owes this
-> package.
-
-## The five-minute start
+Python 3.10 or newer. The package is not on PyPI yet, so install from GitHub:
 
 ```bash
-pip install sbci
-sbci download hcp-ya --subject 100307        # one subject, SC + FC, ~100 MB
+pip install "sbci @ git+https://github.com/xya2001/SBCI.git"             # core: numpy, scipy, h5py, nibabel
+pip install "sbci[plotting] @ git+https://github.com/xya2001/SBCI.git"   # adds matplotlib and nilearn for figures
 ```
 
-`sbci download` needs the data release, which does not exist yet. Until it
-does, there is a synthetic connectome on the real grid so the package can be
-tried today -- `sbci.example()`, or `sbci example --out sub-example_sc.h5`.
-Its connectivity is generated rather than measured, and its metadata says so.
+On UNC's Longleaf cluster use `scripts/setup_longleaf.sh` instead; see
+*Development on Longleaf* below.
+
+## Try it in two minutes
+
+No data is needed: the package builds a synthetic connectome on the real grid.
 
 ```python
 import sbci
 
-cc = sbci.load("sub-100307_sc.h5")
+cc = sbci.example()                  # synthetic, on the real ico4 grid; a couple of seconds
+cc.to_atlas("Schaefer200").shape     # (200, 200)
+cc.plot(cc.seed(vertex=1234))        # a figure; needs the plotting extra
+cc.smooth(kernel="shk", mask_medial_wall=True)     # re-smooths its 20,000 endpoints: gives cc back
+sbci.endpoints_align([cc, sbci.example(seed=1)], max_iterations=5)   # ConSEAL on two synthetic subjects
+cc.save("sub-example_sc.h5")
+```
+
+Or from the shell:
+
+```bash
+sbci example --out sub-example_sc.h5      # write one to disk
+sbci info sub-example_sc.h5               # what it holds
+sbci validate sub-example_sc.h5           # nine checks, all should pass
+sbci atlases --match Yeo                  # the bundled atlases
+```
+
+The grid, the vertex areas, the medial-wall mask and the file format are real;
+the connectivity is generated: 20,000 streamline endpoints drawn at random
+around smooth bumps on the sphere, kept only where they land in cortex, and
+smoothed with the default kernel exactly as `smooth()` does it. The example
+carries those endpoints, so re-smoothing and ConSEAL have something to work on
+without lab data. A file written this way passes every `sbci validate` check,
+so it is a faithful subject for learning the API, writing tests and checking a
+plotting stack -- and never a basis for a claim about brains. Its metadata
+records `pipeline_version` as `synthetic-example` and says the endpoints were
+drawn, not tracked.
+
+## With real data
+
+```python
+import sbci
+
+cc = sbci.load("sub-100307_sc.h5")     # a computational file from the pipeline, or from tools/import_legacy.py
 M  = cc.to_atlas("Schaefer200")        # 200 x 200 matrix
 p  = cc.seed(vertex=1234)              # profile on the surface
 cc.plot(p)                             # inflated-surface figure
 cc.to_cifti("sub-100307_sc.dconn.nii") # opens in Workbench; 16.9 GB
 ```
 
-Running that script on a machine none of us configured, from a blank Python
-environment, in under five minutes, is the acceptance criterion for this
+`sbci download hcp-ya --subject 100307` will fetch a subject once the data
+release exists (SPEC_QUESTIONS.md item 6); until then, convert existing
+pipeline output with `tools/import_legacy.py` (see *Using legacy pipeline
+output*). Running the lines above on a machine none of us configured, from a
+blank environment, in under five minutes is the acceptance criterion for this
 package. It is encoded in `tests/test_five_minute_start.py`, which skips until
-the data release exists.
+the release exists.
+
+## The documents
+
+| Read | For |
+| --- | --- |
+| [USAGE.md](USAGE.md) | every working function with a worked example, and what each error tells you |
+| [BLUEPRINT.md](BLUEPRINT.md) | what the package is, what "finished" means, where it stands, and the decisions it waits on |
+| [PORTING.md](PORTING.md) | how each of the seven MATLAB methods was ported and verified, and the errors found in the references |
+| [SPEC_QUESTIONS.md](SPEC_QUESTIONS.md) | the file-format decisions, answered and open |
+| [VERIFICATION.md](VERIFICATION.md) | how to check every claim yourself, in tiers from five minutes to a MATLAB licence |
+| [scripts/](scripts/README.md), [tools/](tools/README.md) | worked scripts (with the lab's Longleaf paths) and the builders of the bundled data |
 
 ## API
 
@@ -66,29 +110,6 @@ the data release exists.
 | `sbci example --out <file>` | implemented; writes a file to try the package on |
 | `sbci atlases [--match ...]` | implemented; lists the bundled atlases and their region counts |
 | `sbci download` | pending the data release (SPEC_QUESTIONS.md item 6) |
-
-## Trying it without data
-
-```python
-import sbci
-
-cc = sbci.example()                  # synthetic, on the real ico4 grid
-cc.to_atlas("Schaefer200").shape     # (200, 200)
-cc.plot(cc.seed(vertex=1234))
-cc.smooth(kernel="shk", mask_medial_wall=True)     # re-smooths its 20,000 endpoints: gives cc back
-sbci.endpoints_align([cc, sbci.example(seed=1)], max_iterations=5)   # ConSEAL on two synthetic subjects
-```
-
-The grid, the vertex areas, the medial-wall mask and the file format are real;
-the connectivity is generated: 20,000 streamline endpoints drawn at random
-around smooth bumps on the sphere, kept only where they land in cortex, and
-smoothed with the default kernel exactly as `smooth()` does it. The example
-carries those endpoints, so re-smoothing and ConSEAL have something to work on
-without lab data. A file written this way passes every `sbci validate` check,
-so it is a faithful subject for learning the API, writing tests and checking a
-plotting stack -- and never a basis for a claim about brains. Its metadata
-records `pipeline_version` as `synthetic-example` and says the endpoints were
-drawn, not tracked.
 
 ## An end-to-end analysis without data
 
