@@ -169,26 +169,47 @@ class _Deflation:
     ico4 grid. ``P`` is a rank-``k`` update of the identity, so applying it is
     ``O(n k)`` plus one product with ``G``; this class applies it and never
     forms it, except for the small case where a dense diagonalization is used.
+
+    ``gram`` is the ``(n, n)`` inner product, or its diagonal as a 1-D array:
+    on a mesh it is ``diag(areas)``, and applying that as a dense matrix would
+    cost a full matrix-vector pass per projection for an elementwise scaling.
     """
 
     def __init__(self, kept, gram):
+        gram = np.asarray(gram, dtype=np.float64)
         self.kept = kept
-        self.gram = gram
-        self.inverse = (
-            None if kept is None or kept.shape[1] == 0 else np.linalg.inv(kept.T @ gram @ kept)
-        )
+        self.diagonal = gram if gram.ndim == 1 else None
+        self.matrix = gram if gram.ndim == 2 else None
+        if kept is None or kept.shape[1] == 0:
+            self.inverse = None
+        else:
+            self.inverse = np.linalg.inv(kept.T @ self._gram_times(kept))
+
+    def _gram_times(self, x):
+        """``G x`` for a vector or a matrix of columns."""
+        if self.diagonal is not None:
+            return self.diagonal[:, None] * x if x.ndim == 2 else self.diagonal * x
+        return self.matrix @ x
+
+    def _gram_transposed_times(self, x):
+        """``G' x``."""
+        if self.diagonal is not None:
+            return self.diagonal * x
+        return self.matrix.T @ x
 
     def apply(self, vector):
         """``P v``."""
         if self.inverse is None:
             return vector
-        return vector - self.kept @ (self.inverse @ (self.kept.T @ (self.gram @ vector)))
+        return vector - self.kept @ (self.inverse @ (self.kept.T @ self._gram_times(vector)))
 
     def apply_transposed(self, vector):
         """``P' v``."""
         if self.inverse is None:
             return vector
-        return vector - self.gram.T @ (self.kept @ (self.inverse.T @ (self.kept.T @ vector)))
+        return vector - self._gram_transposed_times(
+            self.kept @ (self.inverse.T @ (self.kept.T @ vector))
+        )
 
     def quadratic(self, matrix, vector):
         """``v' P M P' v``."""
@@ -201,7 +222,8 @@ class _Deflation:
         if n <= ARPACK_THRESHOLD:
             if self.inverse is None:
                 return matrix
-            projector = np.eye(n) - self.kept @ self.inverse @ self.kept.T @ self.gram
+            gram = self.matrix if self.matrix is not None else np.diag(self.diagonal)
+            projector = np.eye(n) - self.kept @ self.inverse @ self.kept.T @ gram
             return projector @ matrix @ projector.T
 
         from scipy.sparse.linalg import LinearOperator
@@ -289,6 +311,7 @@ def fit_basis(
     tol_inner: float = 1e-3,
     seed=None,
     start=None,
+    copy: bool = True,
 ) -> Reduction:
     """Estimate the shared basis, one component at a time.
 
@@ -297,7 +320,9 @@ def fit_basis(
     matrices
         ``(n_subjects, n, n)`` symmetric, already centred on the cohort mean.
     gram
-        ``(n, n)`` inner-product matrix; on a mesh this is ``diag(areas)``.
+        ``(n, n)`` inner-product matrix, or its diagonal as a 1-D array; on a
+        mesh this is ``diag(areas)``. A dense diagonal is recognized and
+        applied elementwise.
     roughness
         ``(n, n)`` penalty matrix, or ``None`` for no penalty.
     rank
@@ -310,6 +335,10 @@ def fit_basis(
     start
         ``(n, rank)`` initial vectors, one per component. Supplying them makes
         the fit deterministic; otherwise they are drawn from ``seed``.
+    copy
+        Work on a copy of ``matrices`` (the default). ``False`` deflates the
+        given array in place, which :func:`reduce` uses so that the cohort is
+        held once rather than twice -- 2 GB rather than 4 for ten ico4 subjects.
     """
     matrices = np.asarray(matrices, dtype=np.float64)
     if matrices.ndim != 3 or matrices.shape[1] != matrices.shape[2]:
@@ -319,8 +348,16 @@ def fit_basis(
         raise ValueError(f"rank must be at least 1, got {rank}")
 
     gram = np.asarray(gram, dtype=np.float64)
-    if gram.shape != (n, n):
+    if gram.ndim == 1:
+        if gram.shape != (n,):
+            raise ValueError(f"gram is {gram.shape}, expected {(n, n)} or a diagonal of length {n}")
+    elif gram.shape != (n, n):
         raise ValueError(f"gram is {gram.shape}, expected {(n, n)}")
+    elif np.count_nonzero(gram) == np.count_nonzero(np.diagonal(gram)):
+        # A diagonal inner product -- vertex areas, or the identity -- is
+        # applied elementwise from here on: as a dense matrix it costs a full
+        # matrix-vector pass per projection, a sixth of the fit on ico4.
+        gram = np.diagonal(gram).copy()
     penalty = None if roughness is None else np.asarray(roughness, dtype=np.float64)
     if penalty is not None and penalty.shape != (n, n):
         raise ValueError(f"roughness is {penalty.shape}, expected {(n, n)}")
@@ -330,7 +367,7 @@ def fit_basis(
 
     # The tensor is (n, n, n_subjects) in the reference; keep subjects first
     # here and contract explicitly, which is clearer and avoids a transpose.
-    residual = matrices.copy()
+    residual = matrices.copy() if copy else matrices
     total_norm = np.linalg.norm(residual)
 
     components = np.zeros((n, rank))
@@ -352,11 +389,11 @@ def fit_basis(
         vector = power_iteration(_mode1_gram(residual), guess, max_inner, tol_inner)
         vector = vector / np.linalg.norm(vector)
 
-        weights = np.einsum("nij,i,j->n", residual, vector, vector)
+        weights = (residual @ vector) @ vector  # v' R_s v for every subject, by BLAS
         norm = np.linalg.norm(weights)
         score = weights / norm if norm else weights
 
-        contracted = np.einsum("nij,n->ij", residual, score)
+        contracted = np.tensordot(score, residual, axes=(0, 0))
         regularized = contracted if penalty is None else contracted - alpha * penalty
         regularized = (regularized + regularized.T) / 2
         objective[k, 0] = deflation.quadratic(regularized, vector)
@@ -364,11 +401,11 @@ def fit_basis(
         change = np.inf
         step = 0
         while step < max_outer - 1 and change > tol_outer:
-            weights = np.einsum("nij,i,j->n", residual, vector, vector)
+            weights = (residual @ vector) @ vector  # v' R_s v for every subject, by BLAS
             norm = np.linalg.norm(weights)
             score = weights / norm if norm else weights
 
-            contracted = np.einsum("nij,n->ij", residual, score)
+            contracted = np.tensordot(score, residual, axes=(0, 0))
             regularized = contracted if penalty is None else contracted - alpha * penalty
             regularized = (regularized + regularized.T) / 2
             operator = deflation.sandwich(regularized)
@@ -407,7 +444,14 @@ def fit_basis(
         components[:, k] = vector
         score_matrix[:, k] = score
         scales[k] = scale
-        captured = sum(float(((m - r) ** 2).sum()) for m, r in zip(matrices, residual, strict=True))
+        # ||M - R||^2 in closed form: what has been removed so far is
+        # sum_j scale_j score_sj psi_j psi_j', so the norm needs only the
+        # (k+1) x (k+1) overlaps of the components, not another pass over the
+        # cohort (and no untouched copy of it, which `copy=False` gave up).
+        kept_basis = components[:, : k + 1]
+        overlap = kept_basis.T @ kept_basis
+        coefficients = scales[: k + 1] * score_matrix[:, : k + 1]
+        captured = float(np.sum(overlap**2 * (coefficients.T @ coefficients)))
         explained[k] = np.sqrt(captured) / total_norm
 
     return Reduction(
@@ -457,10 +501,10 @@ def project(reduction: Reduction, matrices) -> np.ndarray:
 
 
 def _grid_gram_and_roughness(area, coordinates=None):
-    """The mesh inner product and roughness penalty for the bundled grid."""
+    """The mesh inner product (as its diagonal) and roughness penalty for the bundled grid."""
     from .surface import load_surface
 
-    gram = np.diag(np.asarray(area, dtype=np.float64))
+    gram = np.asarray(area, dtype=np.float64)  # diag(areas), kept as the diagonal
     surface = load_surface("sphere")
     vertices = np.asarray(surface.vertices, dtype=np.float64)
     faces = np.asarray(surface.faces, dtype=np.int64)
@@ -533,8 +577,9 @@ def reduce(cc_list, rank: int = 10, **kwargs) -> Reduction:
         # grid, so they only apply on it; any other grid gets the plain ones.
         gram, roughness = _grid_gram_and_roughness(area)
     else:
-        gram, roughness = np.eye(n), None
+        gram, roughness = np.ones(n), None
 
+    kwargs.setdefault("copy", False)  # `matrices` is ours: deflate it in place
     result = fit_basis(matrices, gram, roughness, rank=rank, **kwargs)
     result.mean = mean
     return result

@@ -308,7 +308,7 @@ for i, cc in enumerate(cohort.connectomes):
     cc.endpoints = aligned.aligned_endpoints(i)
 subjects = [cc.smooth(kernel="shk", mask_medial_wall=True) for cc in cohort.connectomes]
 
-reduction = sbci.reduce(subjects, rank=4)                # FPCA, about two and a half minutes
+reduction = sbci.reduce(subjects, rank=4)                # FPCA, one to three minutes depending on the node
 result = sbci.local_test(reduction.scores, cohort.age)   # F test per component, FDR across them
 result.significant()                                     # one component tracks age (its index varies run to run)
 effect = result.effect_map(reduction, alpha=0.05)        # one value per vertex, significant components only

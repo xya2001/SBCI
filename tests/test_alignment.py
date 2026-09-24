@@ -482,3 +482,31 @@ def test_the_default_grids_record_a_rotation_that_maps_back(pair):
     result = align(densities[:2], grids=(grid, grid), max_iterations=1)
     lh, rh = result.grid_rotations
     assert np.allclose(lh, np.eye(3)) and np.allclose(rh, np.eye(3))
+
+
+def test_the_threaded_sparse_product_is_bit_for_bit_the_single_call():
+    """Row blocks in threads accumulate every output row exactly as one call does."""
+    from scipy import sparse
+
+    from sbci.alignment import PARALLEL_ELEMENTS, sparse_times_dense
+
+    rng = np.random.default_rng(23)
+    n = 700
+    matrix = sparse.random(n, n, density=0.02, random_state=24, format="csr")
+    dense = rng.standard_normal((n, n))
+    assert dense.size < PARALLEL_ELEMENTS
+    single = np.asarray(matrix @ dense)
+    np.testing.assert_array_equal(sparse_times_dense(matrix, dense), single)  # small: one call
+    forced = sparse_times_dense(matrix, dense, threads=4)
+    np.testing.assert_array_equal(forced, single)  # still one call, below the threshold
+    big = rng.standard_normal((n, (PARALLEL_ELEMENTS // n) + 1))
+    np.testing.assert_array_equal(
+        sparse_times_dense(matrix, big, threads=3), np.asarray(matrix @ big)
+    )
+    np.testing.assert_array_equal(
+        sparse_times_dense(matrix.T.tocsc(), big, threads=2), np.asarray(matrix.T @ big)
+    )
+    fortran = np.asfortranarray(big)
+    np.testing.assert_array_equal(
+        sparse_times_dense(matrix, fortran, threads=2), np.asarray(matrix @ big)
+    )

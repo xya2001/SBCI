@@ -397,6 +397,31 @@ diagonalization. A full `eigh` on the 5124-vertex grid would cost hours for a
 single vector. ARPACK is the library MATLAB's `eigs` itself calls, so the large
 case is if anything closer to the reference; the two paths agree to 5.3e-15.
 
+### Speed
+
+The fit is bound by memory traffic over the cohort: every application of the
+mode-1 Gram operator reads all `S` matrices twice, and each outer step reads
+them twice more. Three things that cost passes for nothing were removed, each
+checked to give the same numbers -- the basis, scores and explained fractions
+of a ten-subject ico4 cohort agree with the previous code to 1e-15, the
+difference of BLAS summation order:
+
+- the mesh inner product is `diag(areas)` and was stored as a dense `n x n`
+  matrix, so every projection onto the complement of the kept components paid
+  a full matrix-vector product for an elementwise scaling -- about a sixth of
+  the fit;
+- the subject weights and the contracted matrix were `einsum` contractions,
+  about twice as slow as the equivalent BLAS forms `(R v) . v` and
+  `tensordot(score, R)`;
+- the explained fraction was measured by differencing the cohort against an
+  untouched copy after every component; it is now the closed form
+  `sum_jl (psi_j . psi_l)^2 (C' C)_jl` over the components removed, and
+  `reduce()` deflates its own stack in place, so the cohort is held once
+  (210 MB per subject in float64) rather than twice.
+
+Ten ico4 subjects at rank 4 take about 40 s on four cores of a compute node,
+down from 66 s, and 2.1 GB rather than 4.2 GB.
+
 ## 6. Spherical kernel -- DONE, r = 1.000000 AT FULL SCALE
 
 - **From:** [`dcmoyer/concon`](https://github.com/dcmoyer/concon), C++, MIT.
@@ -1031,7 +1056,9 @@ FreeSurfer sphere, which is an icosphere to 1.7e-4 -- the precision of its
 stored coordinates).
 On ico4 an iteration costs a few seconds per 100,000 streamlines: the kernel
 has 89 nonzeros per row at the published bandwidth (cutoff 21.5 degrees), so
-`K' A K` is a sparse sandwich, and relocating the endpoints is a k-d-tree
+`K' A K` is a sparse sandwich (its sparse-times-dense products run on all the
+cores the job was given, in row blocks that reproduce the single-core result
+bit for bit), and relocating the endpoints is a k-d-tree
 query.
 
 ### Still open

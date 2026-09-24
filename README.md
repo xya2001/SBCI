@@ -102,7 +102,7 @@ with a synthetic age. The whole pipeline then runs against a planted answer:
 import sbci
 
 cohort = sbci.example_cohort(n_subjects=10, seed=0)     # about 20 s; 52 MB per subject
-reduction = sbci.reduce(cohort.connectomes, rank=4)      # FPCA, about two and a half minutes
+reduction = sbci.reduce(cohort.connectomes, rank=4)      # FPCA, one to three minutes depending on the node
 result = sbci.local_test(reduction.scores, cohort.age)   # which components track age?
 result.significant()                                     # one of the four components
 effect = result.effect_map(reduction, alpha=0.05)        # where on the cortex the effect sits

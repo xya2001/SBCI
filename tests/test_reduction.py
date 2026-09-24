@@ -317,3 +317,39 @@ def test_reduce_accepts_connectome_like_objects_off_the_ico4_grid(cohort):
 
     result = reduce([Toy(m) for m in matrices], rank=2, seed=0)
     assert result.basis.shape == (matrices.shape[1], 2)
+
+
+def test_a_diagonal_inner_product_gives_the_same_fit_as_its_dense_form():
+    """The mesh inner product is diag(areas); applying it elementwise must change nothing."""
+    rng = np.random.default_rng(21)
+    n, n_subjects = 30, 6
+    matrices = rng.standard_normal((n_subjects, n, n))
+    matrices = matrices + matrices.transpose(0, 2, 1)
+    weights = rng.uniform(0.5, 2.0, size=n)
+    start = rng.standard_normal((n, 3))
+    dense = fit_basis(matrices, np.diag(weights), rank=3, start=start)
+    diagonal = fit_basis(matrices, weights, rank=3, start=start)
+    np.testing.assert_array_equal(dense.basis, diagonal.basis)
+    np.testing.assert_array_equal(dense.scores, diagonal.scores)
+    np.testing.assert_array_equal(dense.explained, diagonal.explained)
+    with pytest.raises(ValueError, match="gram is"):
+        fit_basis(matrices, weights[:-1], rank=2)
+
+
+def test_in_place_deflation_and_the_closed_form_explained_fraction():
+    """copy=False leaves the residual in the caller's array; explained matches the direct norm."""
+    rng = np.random.default_rng(22)
+    n, n_subjects = 25, 5
+    matrices = rng.standard_normal((n_subjects, n, n))
+    matrices = matrices + matrices.transpose(0, 2, 1)
+    start = rng.standard_normal((n, 4))
+    kept = matrices.copy()
+    result = fit_basis(matrices, np.eye(n), rank=4, start=start, copy=False)
+    assert not np.array_equal(matrices, kept)  # deflated in place
+    residual_norm = np.linalg.norm(matrices)
+    removed = np.linalg.norm(kept - matrices)
+    assert result.explained[-1] == pytest.approx(removed / np.linalg.norm(kept), rel=1e-10)
+    assert residual_norm < np.linalg.norm(kept)
+    again = fit_basis(kept, np.eye(n), rank=4, start=start)  # the default copies
+    np.testing.assert_array_equal(again.basis, result.basis)
+    np.testing.assert_array_equal(again.explained, result.explained)

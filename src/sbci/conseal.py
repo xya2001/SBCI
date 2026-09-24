@@ -107,6 +107,7 @@ from .alignment import (
     MeshQuery,
     SphericalGrid,
     normalize_rows,
+    sparse_times_dense,
     sphere_exp_map,
     sphere_log_map,
     voronoi_areas,
@@ -420,17 +421,17 @@ class EndpointConnectome:
             dense = adjacency.toarray()
             # (K^T A)^T is A K but Fortran-ordered; make it contiguous once
             # rather than letting each sparse product copy it.
-            ak = np.ascontiguousarray((kernel.T @ dense).T)
-            connectome = np.asarray(kernel.T @ ak)
+            ak = np.ascontiguousarray(sparse_times_dense(kernel.T, dense).T)
+            connectome = sparse_times_dense(kernel.T, ak)
         np.maximum(connectome, 0.0, out=connectome)
         if derivative is None:
             return connectome
 
         if strict_upstream:
-            akt = np.asarray((kernel @ dense).T)  # A K^T
+            akt = np.ascontiguousarray(sparse_times_dense(kernel, dense).T)  # A K^T
             parts = []
             for d in (derivative.x, derivative.y, derivative.z):
-                part = np.asarray(d @ akt)
+                part = sparse_times_dense(d, akt)
                 parts.append(part + part.T)
             d_e1 = sum(p * e[:, None] for p, e in zip(parts, self.e1.T, strict=True))
             d_e2 = sum(p * e[:, None] for p, e in zip(parts, self.e2.T, strict=True))
@@ -446,7 +447,7 @@ class EndpointConnectome:
         m2 = sum(d @ sparse.diags(e) for d, e in zip(axes, self.e2.T, strict=True))
         if few:
             return connectome, (m1.T @ ak).toarray(), (m2.T @ ak).toarray()
-        return connectome, np.asarray(m1.T @ ak), np.asarray(m2.T @ ak)
+        return connectome, sparse_times_dense(m1.T, ak), sparse_times_dense(m2.T, ak)
 
     def q_transform(self, kernel, derivative=None, strict_upstream: bool = False):
         """The square-root density ``Q = sqrt(F)``, with derivatives by the chain rule.
@@ -1246,7 +1247,8 @@ class ConSEAL:
         operator = sparse.csr_matrix(
             (weights.ravel(), (np.repeat(np.arange(n), 3), indices.ravel())), shape=(n, n)
         )
-        return np.asarray(operator @ values @ operator.T)
+        halfway = sparse_times_dense(operator, values)
+        return sparse_times_dense(operator, halfway.T).T
 
     def _rigid(self, q1, moving: EndpointConnectome, kernel, verbose: bool = False):
         """``initial_registration``: a multi-shell rotation search, per hemisphere."""
