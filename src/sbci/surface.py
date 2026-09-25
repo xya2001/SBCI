@@ -141,3 +141,63 @@ def load_surface(name: str = "inflated") -> Surface:
     vertices.setflags(write=False)
     faces.setflags(write=False)
     return Surface(name=name, vertices=vertices, faces=faces)
+
+
+SHADING_PASSES = 4
+"""Neighbourhood-averaging passes behind :func:`sulcal_depth`: about a
+centimetre of smoothing at ico4 resolution, the scale of a sulcus."""
+
+
+def vertex_normals(vertices, faces) -> np.ndarray:
+    """Unit outward normals at the vertices: area-weighted means of the face normals."""
+    vertices = np.asarray(vertices, dtype=np.float64)
+    faces = np.asarray(faces, dtype=np.int64)
+    corners = vertices[faces]
+    face_normals = np.cross(corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0])
+    normals = np.zeros_like(vertices)
+    for k in range(3):
+        np.add.at(normals, faces[:, k], face_normals)
+    lengths = np.linalg.norm(normals, axis=1, keepdims=True)
+    return np.divide(normals, lengths, out=np.zeros_like(normals), where=lengths > 0)
+
+
+@lru_cache(maxsize=1)
+def sulcal_depth() -> np.ndarray:
+    """A sulcal-depth map over the grid, for shading figures.
+
+    Positive in sulci and negative on gyral crowns, like FreeSurfer's ``sulc``,
+    so that drawn in grayscale under a surface map it darkens the fundi and
+    lets the folds show through. It is the signed distance, along the outward
+    normal, from each white-surface vertex to the mean of its neighbourhood
+    after :data:`SHADING_PASSES` passes of neighbour averaging -- cheap, needs
+    no FreeSurfer, and at ico4 resolution follows the gyral pattern well
+    enough to shade a figure. In millimetres, roughly -3 to 3; the returned
+    array is read-only and shared.
+
+    Examples
+    --------
+    >>> from sbci.surface import sulcal_depth
+    >>> depth = sulcal_depth()
+    >>> depth.shape
+    (5124,)
+    >>> bool(0.3 < (depth > 0).mean() < 0.7)   # sulci and gyri in comparable measure
+    True
+    """
+    from scipy import sparse
+
+    white = load_surface("white")
+    vertices = np.asarray(white.vertices, dtype=np.float64)
+    faces = np.asarray(white.faces, dtype=np.int64)
+    n = vertices.shape[0]
+    rows = faces[:, [0, 1, 2, 0, 1, 2]].ravel()
+    cols = faces[:, [1, 2, 0, 2, 0, 1]].ravel()
+    adjacency = sparse.coo_matrix((np.ones(rows.size), (rows, cols)), shape=(n, n)).tocsr()
+    adjacency.data[:] = 1.0  # an edge shared by two faces counts once
+    degree = np.asarray(adjacency.sum(axis=1)).ravel()
+    averaging = sparse.diags(1.0 / np.maximum(degree, 1)) @ adjacency
+    smoothed = vertices
+    for _ in range(SHADING_PASSES):
+        smoothed = averaging @ smoothed
+    depth = ((smoothed - vertices) * vertex_normals(vertices, faces)).sum(axis=1)
+    depth.setflags(write=False)
+    return depth

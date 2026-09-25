@@ -8,16 +8,20 @@ are extras and the imports happen inside the call.
 
 The standard neuroimaging view of a whole-brain map is four panels -- each
 hemisphere seen laterally and medially -- and that is what
-:func:`plot_surface` produces by default. A map with NaNs, as
-:func:`sbci.coupling.global_coupling` returns for the medial wall, renders
-those vertices in the background colour rather than at one end of the scale.
+:func:`plot_surface` produces by default. The surface is shaded by sulcal
+depth (:func:`sbci.surface.sulcal_depth`), so the folds show through the map
+the way they do in FreeSurfer's and nilearn's own figures; without it a map
+that is small over most of the cortex leaves the brain an unreadable white.
+A map with NaNs, as :func:`sbci.coupling.global_coupling` returns for the
+medial wall, renders those vertices as bare shaded surface rather than at
+one end of the scale.
 """
 
 from __future__ import annotations
 
 import numpy as np
 
-from .surface import GEOMETRIES, load_surface
+from .surface import GEOMETRIES, load_surface, sulcal_depth
 
 SURFACES = GEOMETRIES
 VIEWS = ("lateral", "medial", "dorsal", "ventral", "anterior", "posterior")
@@ -46,6 +50,7 @@ def plot_surface(
     vmax: float | None = None,
     title: str | None = None,
     symmetric: bool | None = None,
+    shading: bool = True,
     **kwargs,
 ):
     """Render a per-vertex map on a cortical surface.
@@ -68,6 +73,11 @@ def plot_surface(
     symmetric
         Centre the colour scale on zero. Defaults to true when the map has
         both signs, which is what a coupling map usually wants.
+    shading
+        Shade the surface by sulcal depth from the white surface, darker in
+        the sulci, with the map's colours laid over it (``bg_on_data`` in
+        nilearn's terms). ``False`` draws the bare mesh under the map. Pass
+        your own ``bg_map`` through ``kwargs`` to shade by something else.
 
     Returns
     -------
@@ -130,6 +140,13 @@ def plot_surface(
 
     half = mesh.n_vertices // 2
     per_hemisphere = {"L": values[:half], "R": values[half:]}
+    if shading and "bg_map" not in kwargs:
+        depth = sulcal_depth()
+        backgrounds = {"L": depth[:half], "R": depth[half:]}
+        kwargs.setdefault("bg_on_data", True)
+        kwargs.setdefault("alpha", 1.0)
+    else:
+        backgrounds = {}
 
     figure, axes = plt.subplots(
         len(per_hemisphere),
@@ -156,6 +173,7 @@ def plot_surface(
                 colorbar=(column == len(views) - 1) and not constant,
                 axes=axes[row, column],
                 figure=figure,
+                **({"bg_map": backgrounds[side]} if side in backgrounds else {}),
                 **kwargs,
             )
             axes[row, column].set_title(f"{side} {view}", fontsize=10)

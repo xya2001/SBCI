@@ -177,10 +177,13 @@ figure = sc.plot(coupling_map, title="SC-FC coupling", cmap="coolwarm")
 figure.savefig("coupling.png", dpi=150)
 ```
 
-Four panels, each hemisphere seen laterally and medially. Needs the plotting
-extra, which `setup_longleaf.sh` installs. Four geometries are bundled --
-inflated (the default), white, pial and sphere -- all in the grid's vertex
-order and sharing one face list (`SPEC_QUESTIONS.md` items 11 and 13).
+Four panels, each hemisphere seen laterally and medially, on a surface shaded
+by sulcal depth so the folds show through the map (`shading=False` draws the
+bare mesh; `threshold=` hides the small values so the shading shows there).
+Needs the plotting extra, which `setup_longleaf.sh` installs. Four geometries
+are bundled -- inflated (the default), white, pial and sphere -- all in the
+grid's vertex order and sharing one face list (`SPEC_QUESTIONS.md` items 11
+and 13).
 
 ## `save` and `sbci validate`
 

@@ -10,12 +10,14 @@ python scripts/make_figures.py docs/figures
 
 which needs the plotting extra and takes a few minutes (a rank-4 FPCA on ten
 subjects and one ConSEAL registration); on a cluster, run it in a batch job.
-On the surface views, the gray mesh is the medial wall, which carries no
-cortex and no connectivity.
+The surface views are shaded by sulcal depth (dark in the sulci), computed
+from the bundled white surface; the medial wall, which carries no cortex,
+shows as bare shaded surface. Maps are thresholded at a few percent of their
+peak so that the shading shows where there is nothing to see.
 
 | Figure | What it shows |
 | --- | --- |
-| `seed_profile.png` | `cc.seed(vertex=1234)` on the inflated surface: the density of connections from one left-hemisphere vertex to every other |
+| `seed_profile.png` | `cc.seed(vertex=1234)` on the inflated surface: the density of connections from one left temporal vertex to every other, relative to its peak, for a 200,000-streamline example |
 | `region_matrix.png` | `cc.to_atlas("Desikan")`: the same subject collapsed to 68 regions, on a log scale |
 | `coupling.png` | `sc.coupling(fc)`: structure-function coupling of the matching SC and FC examples, one value per vertex |
 | `spherical_kernel.png` | the kernel `smooth(kernel="shk")` applies, at the released bandwidth and twice it, with its cutoffs |

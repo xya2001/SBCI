@@ -31,6 +31,13 @@ BLUE_RAMP = LinearSegmentedColormap.from_list(
     "sbci_blue",
     ["#f4f8fd", "#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"],
 )
+# On the shaded surface the map is thresholded, so its ramp can start visible.
+SURFACE_RAMP = LinearSegmentedColormap.from_list(
+    "sbci_surface", ["#b7d3f6", "#86b6ef", "#5598e7", "#2a78d6", "#1c5cab", "#104281", "#0d366b"]
+)
+#: Streamlines for the single-subject figures: ten times the example's default,
+#: so the profile and the region matrix are smooth rather than speckled.
+N_STREAMLINES = 200_000
 VIEWS = ("lateral", "medial")
 
 plt.rcParams.update(
@@ -59,20 +66,26 @@ def save(figure, out: Path, name: str, dpi: int = 110) -> None:
 
 def seed_profile(out: Path, cc) -> None:
     profile = cc.seed(vertex=1234)
-    figure = cc.plot(profile, views=VIEWS, cmap=BLUE_RAMP)
-    figure.suptitle("Connectivity of one vertex (1234, left hemisphere) over the cortex", y=1.02)
+    profile = profile / profile.max()  # unit-mass densities are 1e-10 per pair; show the shape
+    figure = cc.plot(profile, views=VIEWS, cmap=SURFACE_RAMP, threshold=0.02, vmin=0.02, vmax=1.0)
+    figure.suptitle(
+        "Connectivity of one vertex (1234, left temporal cortex), relative to its peak", y=1.02
+    )
     save(figure, out, "seed_profile.png")
 
 
 def region_matrix(out: Path, cc) -> None:
     atlas = sbci.load_atlas("Desikan")
     matrix = cc.to_atlas(atlas, how="mass")
-    positive = matrix[matrix > 0]
+    # A log scale over the full range spans nine decades and turns the matrix
+    # into speckle; the top four decades carry the structure, and anything
+    # fainter is drawn as "no connection".
+    top = float(matrix.max())
     figure, axis = plt.subplots(figsize=(6.2, 5.4))
     image = axis.imshow(
         np.where(matrix > 0, matrix, np.nan),
         cmap=BLUE_RAMP,
-        norm=LogNorm(vmin=positive.min(), vmax=positive.max()),
+        norm=LogNorm(vmin=top * 1e-4, vmax=top),
         interpolation="nearest",
     )
     half = atlas.n_regions // 2
@@ -87,7 +100,7 @@ def region_matrix(out: Path, cc) -> None:
     for spine in axis.spines.values():
         spine.set_visible(False)
     bar = figure.colorbar(image, ax=axis, fraction=0.046, pad=0.03)
-    bar.set_label("mass between the two regions (log scale)", color=MUTED)
+    bar.set_label("mass between the two regions (log scale, top four decades)", color=MUTED)
     bar.outline.set_visible(False)
     axis.set_title("The synthetic subject parcellated with the Desikan atlas (68 regions)")
     save(figure, out, "region_matrix.png")
@@ -97,7 +110,7 @@ def coupling(out: Path, sc, fc) -> None:
     values = sc.coupling(fc)
     # Coupling is high almost everywhere on the synthetic pair, so a symmetric
     # scale would paint the whole surface one shade: run the ramp from zero.
-    figure = sc.plot(values, views=VIEWS, cmap=BLUE_RAMP, symmetric=False, vmin=0.0)
+    figure = sc.plot(values, views=VIEWS, cmap=SURFACE_RAMP, symmetric=False, vmin=0.0)
     figure.suptitle(
         "Structure-function coupling: cosine similarity of the SC and FC profiles", y=1.02
     )
@@ -117,14 +130,17 @@ def cohort_figures(out: Path) -> None:
     print(f"  significant components: {found.tolist()}, adjusted p {adjusted}")
     subject = cohort.connectomes[0]
 
-    figure = subject.plot(cohort.truth, views=VIEWS, cmap=BLUE_RAMP, vmin=0.0, vmax=1.0)
+    figure = subject.plot(
+        cohort.truth, views=VIEWS, cmap=SURFACE_RAMP, threshold=0.02, vmin=0.02, vmax=1.0
+    )
     figure.suptitle(
         "The planted bundle: the field one bundle's weight scales with age (cohort.truth)", y=1.02
     )
     save(figure, out, "cohort_truth.png")
 
     effect = result.effect_map(reduction, alpha=0.05)
-    figure = subject.plot(effect, views=VIEWS, cmap="coolwarm", symmetric=True)
+    effect = effect / np.abs(effect).max()
+    figure = subject.plot(effect, views=VIEWS, cmap="coolwarm", symmetric=True, threshold=0.05)
     correlation = np.corrcoef(effect, cohort.truth)[0, 1]
     figure.suptitle(
         f"Recovered: the effect map of the significant component "
@@ -205,7 +221,7 @@ def main(argv: list[str]) -> int:
     out = Path(argv[1]) if len(argv) > 1 else Path("docs/figures")
     out.mkdir(parents=True, exist_ok=True)
     print("single subject", flush=True)
-    sc, fc = sbci.example("sc"), sbci.example("fc")
+    sc, fc = sbci.example("sc", n_streamlines=N_STREAMLINES), sbci.example("fc")
     seed_profile(out, sc)
     region_matrix(out, sc)
     coupling(out, sc, fc)

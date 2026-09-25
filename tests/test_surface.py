@@ -214,3 +214,28 @@ def test_each_face_stays_within_one_hemisphere():
     left = faces < N_VERTICES_PER_HEMI
     assert np.all(left.all(axis=1) | (~left).all(axis=1))
     assert int(left.all(axis=1).sum()) == faces.shape[0] // 2
+
+
+def test_sulcal_depth_shades_both_ways_and_the_normals_point_outward():
+    """The shading map has sulci and gyri in comparable measure; the shared faces are outward."""
+    from sbci.surface import load_surface, sulcal_depth, vertex_normals
+
+    depth = sulcal_depth()
+    assert depth.shape == (N_VERTICES,) and np.isfinite(depth).all()
+    assert 0.3 < float((depth > 0).mean()) < 0.7
+    assert 0.5 < float(np.abs(depth).max()) < 20.0  # millimetres, at ico4 resolution
+    # On the sphere every normal must be radial, so the face list the white
+    # surface shares with it is oriented outward there too.
+    sphere = load_surface("sphere")
+    radial = sphere.vertices / np.linalg.norm(sphere.vertices, axis=1, keepdims=True)
+    normals = vertex_normals(sphere.vertices, sphere.faces)
+    assert float(((radial * normals).sum(axis=1) > 0.9).mean()) > 0.99
+    with pytest.raises(ValueError):
+        depth[0] = 1.0  # shared and frozen
+
+
+def test_plot_can_run_without_shading(surface_map):
+    from sbci.plotting import plot_surface
+
+    figure = plot_surface(surface_map, views=("lateral",), shading=False)
+    assert figure is not None
