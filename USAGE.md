@@ -125,6 +125,11 @@ areas, giving a density comparable across regions of different size; this
 reproduces `parcellate_sc.m`. FC is aggregated through Fisher-z automatically,
 because averaging correlations directly is biased.
 
+![The Desikan region matrix of the synthetic subject](docs/figures/region_matrix.png)
+
+*`cc.to_atlas("Desikan")` on the synthetic subject: 68 regions, left hemisphere
+first, mass on a log scale.*
+
 ## `seed` — one profile
 
 ```python
@@ -156,6 +161,11 @@ Two things worth knowing: **negative FC values are kept** — discarding them
 flips the sign of the map in association cortex — and **`discrete_coupling` is
 a Pearson correlation, not a cosine**, matching MATLAB's `corr2`, while global
 and region are uncentred cosine similarity.
+
+![Structure-function coupling on the surface](docs/figures/coupling.png)
+
+*`sc.coupling(fc)` for the matching synthetic SC and FC: one cosine similarity
+per vertex, drawn on the inflated surface.*
 
 ## `plot` — a surface figure
 
@@ -211,6 +221,11 @@ density = smooth_endpoints(Endpoints.from_matlab(
 
 Verified against a MATLAB reference run to single-precision rounding, which is
 all the reference itself carries. Takes 4.4 s for both hemispheres.
+
+![The spherical kernel at two bandwidths](docs/figures/spherical_kernel.png)
+
+*The kernel `smooth(kernel="shk")` applies, relative to its peak, at the
+released bandwidth and at twice it, with the cutoff beyond which it is zero.*
 
 ## Storing endpoints, and re-smoothing from them
 
@@ -480,6 +495,11 @@ seconds per 100,000 streamlines rather than minutes. Three things to know:
   all four, and does so to the digits of the MATLAB reference run.
 - **Rigid initialization is off by default**, as in the reference's own
   example; `init_rotation=True` runs the multi-shell rotation search first.
+![ConSEAL cost per iteration](docs/figures/conseal_cost.png)
+
+*`sbci.endpoints_align` registering one synthetic subject onto another for five
+iterations: the cost falls at every step.*
+
 ## Writing the exchange file
 
 ```python

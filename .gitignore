@@ -48,3 +48,5 @@ slurm-*.out
 # gprof output: c3_main is built with profiling and drops this
 # wherever it is run from.
 gmon.out
+# the example figures are committed; everything else drawn while working is not
+!docs/figures/*.png

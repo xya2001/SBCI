@@ -55,6 +55,13 @@ plotting stack -- and never a basis for a claim about brains. Its metadata
 records `pipeline_version` as `synthetic-example` and says the endpoints were
 drawn, not tracked.
 
+![The connectivity of one vertex over the cortex](docs/figures/seed_profile.png)
+
+*`cc.plot(cc.seed(vertex=1234))`: the density of connections from one
+left-hemisphere vertex to every other, on the inflated surface. The gray mesh is
+the medial wall. More figures, all from the synthetic data, are in
+[docs/figures](docs/figures/README.md).*
+
 ## With real data
 
 ```python
@@ -142,6 +149,16 @@ methods exist for. Alignment fits in front of `reduce`:
 onto a common template, `aligned_endpoints(i)` hands them back, and
 `smooth()` turns them into aligned connectomes (USAGE.md shows the three
 lines). Timings are for four cores.
+
+| The planted bundle, `cohort.truth` | What the analysis recovers |
+| --- | --- |
+| ![The planted bundle](docs/figures/cohort_truth.png) | ![The recovered effect map](docs/figures/cohort_effect.png) |
+
+![The significant component's scores against age](docs/figures/cohort_scores.png)
+
+*Left: the field whose weight was scaled with age. Right: the effect map of the
+one component `local_test` found significant, which correlates 0.94 with it.
+Below: that component's scores against the synthetic age.*
 
 ## Getting around the package
 
