@@ -239,3 +239,22 @@ def test_plot_can_run_without_shading(surface_map):
 
     figure = plot_surface(surface_map, views=("lateral",), shading=False)
     assert figure is not None
+
+
+def test_shading_is_flat_on_the_medial_wall(monkeypatch):
+    """The wall is a cut surface, not cortex: its shading must carry no folds."""
+    from nilearn import plotting as nilearn_plotting
+
+    from sbci.atlas import cortex_mask
+    from sbci.plotting import plot_surface
+
+    recorded = []
+    monkeypatch.setattr(nilearn_plotting, "plot_surf", lambda *a, **k: recorded.append(k))
+    figure = plot_surface(np.ones(N_VERTICES), views=("medial",))
+    matplotlib.pyplot.close(figure)
+    half = N_VERTICES_PER_HEMI
+    cortex = cortex_mask()
+    for background, rows in zip(recorded, (slice(0, half), slice(half, None)), strict=True):
+        assert background["bg_on_data"] is True
+        wall, folds = background["bg_map"][~cortex[rows]], background["bg_map"][cortex[rows]]
+        assert np.ptp(wall) == 0.0 and np.ptp(folds) > 1.0

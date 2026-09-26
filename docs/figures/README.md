@@ -11,9 +11,10 @@ python scripts/make_figures.py docs/figures
 which needs the plotting extra and takes a few minutes (a rank-4 FPCA on ten
 subjects and one ConSEAL registration); on a cluster, run it in a batch job.
 The surface views are shaded by sulcal depth (dark in the sulci), computed
-from the bundled white surface; the medial wall, which carries no cortex,
-shows as bare shaded surface. Maps are thresholded at a few percent of their
-peak so that the shading shows where there is nothing to see.
+from the bundled white surface; the medial wall, which is the cut surface
+between the hemispheres and carries no cortex, is left flat gray. Maps are
+thresholded at a few percent of their peak so that the shading shows where
+there is nothing to see.
 
 | Figure | What it shows |
 | --- | --- |

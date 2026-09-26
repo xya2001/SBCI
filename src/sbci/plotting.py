@@ -12,15 +12,16 @@ hemisphere seen laterally and medially -- and that is what
 depth (:func:`sbci.surface.sulcal_depth`), so the folds show through the map
 the way they do in FreeSurfer's and nilearn's own figures; without it a map
 that is small over most of the cortex leaves the brain an unreadable white.
-A map with NaNs, as :func:`sbci.coupling.global_coupling` returns for the
-medial wall, renders those vertices as bare shaded surface rather than at
-one end of the scale.
+The medial wall, which carries no cortex, is shaded flat; a map with NaNs
+there, as :func:`sbci.coupling.global_coupling` returns, renders those
+vertices as that flat surface rather than at one end of the scale.
 """
 
 from __future__ import annotations
 
 import numpy as np
 
+from .atlas import cortex_mask
 from .surface import GEOMETRIES, load_surface, sulcal_depth
 
 SURFACES = GEOMETRIES
@@ -76,8 +77,11 @@ def plot_surface(
     shading
         Shade the surface by sulcal depth from the white surface, darker in
         the sulci, with the map's colours laid over it (``bg_on_data`` in
-        nilearn's terms). ``False`` draws the bare mesh under the map. Pass
-        your own ``bg_map`` through ``kwargs`` to shade by something else.
+        nilearn's terms). Outside cortex -- the medial wall, from the
+        connectome's mask or the bundled atlas -- the shading is flat, so the
+        wall reads as the cut surface it is. ``False`` draws the bare mesh
+        under the map. Pass your own ``bg_map`` through ``kwargs`` to shade by
+        something else.
 
     Returns
     -------
@@ -141,7 +145,14 @@ def plot_surface(
     half = mesh.n_vertices // 2
     per_hemisphere = {"L": values[:half], "R": values[half:]}
     if shading and "bg_map" not in kwargs:
-        depth = sulcal_depth()
+        # Flat outside cortex: FreeSurfer fills the medial wall with a surface
+        # that has curvature of its own, which would otherwise be shaded as if
+        # it were folded cortex. The connectome's mask says where cortex is;
+        # without one, the bundled medial wall does.
+        cortex = (
+            np.asarray(connectome.mask, dtype=bool) if connectome is not None else cortex_mask()
+        )
+        depth = np.where(cortex, sulcal_depth(), 0.0)
         backgrounds = {"L": depth[:half], "R": depth[half:]}
         kwargs.setdefault("bg_on_data", True)
         kwargs.setdefault("alpha", 1.0)

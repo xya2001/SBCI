@@ -43,7 +43,7 @@ from functools import lru_cache
 import numpy as np
 
 from . import grid, spec
-from .atlas import load_atlas
+from .atlas import cortex_mask
 from .connectome import ContinuousConnectome
 from .metadata import Metadata, template
 from .surface import load_surface
@@ -326,7 +326,7 @@ def _build(modality: str, seed: int, n_streamlines: int) -> ContinuousConnectome
     rng = np.random.default_rng(seed)
     sphere = load_surface("sphere")
     # The mask is real: the medial wall carries no Desikan region.
-    mask = load_atlas("Desikan").labels != 0
+    mask = cortex_mask()
     area = _vertex_areas(sphere)
     centres = _centres(sphere, mask, rng)
 
@@ -488,7 +488,7 @@ def _build_cohort(
 
     shared = np.random.default_rng([seed, 0])
     sphere = load_surface("sphere")
-    mask = load_atlas("Desikan").labels != 0
+    mask = cortex_mask()
     area = _vertex_areas(sphere)
     centres = _centres(sphere, mask, shared)
     weights = shared.gamma(2.0, 1.0, size=N_COMPONENTS)

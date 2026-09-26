@@ -272,3 +272,21 @@ def load_atlas(name: str) -> Atlas:
             labels=np.asarray(data["labels"], dtype=np.int32),
             names=tuple(str(n) for n in data["names"]),
         )
+
+
+def cortex_mask() -> np.ndarray:
+    """``True`` on cortex and ``False`` on the medial wall, over the whole grid.
+
+    The wall is where the bundled Desikan atlas assigns no region (label 0):
+    the cut surface between the hemispheres, which carries no cortex and no
+    connectivity. This is the mask the synthetic examples use and the one
+    figures shade flat.
+
+    Examples
+    --------
+    >>> from sbci.atlas import cortex_mask
+    >>> mask = cortex_mask()
+    >>> mask.shape, int(mask.sum())
+    ((5124,), 4685)
+    """
+    return load_atlas("Desikan").labels != 0
