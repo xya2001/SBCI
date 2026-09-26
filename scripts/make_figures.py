@@ -39,6 +39,7 @@ SURFACE_RAMP = LinearSegmentedColormap.from_list(
 #: so the profile and the region matrix are smooth rather than speckled.
 N_STREAMLINES = 200_000
 VIEWS = ("lateral", "medial")
+TITLE_SIZE = 15  # the surface figures are large; a 12-point title reads as a footnote on them
 
 plt.rcParams.update(
     {
@@ -64,12 +65,37 @@ def save(figure, out: Path, name: str, dpi: int = 110) -> None:
     print(f"  wrote {path} ({path.stat().st_size // 1024} KB)", flush=True)
 
 
+SEED = 1234  # a left temporal vertex
+
+
 def seed_profile(out: Path, cc) -> None:
-    profile = cc.seed(vertex=1234)
+    profile = cc.seed(vertex=SEED)
     profile = profile / profile.max()  # unit-mass densities are 1e-10 per pair; show the shape
     figure = cc.plot(profile, views=VIEWS, cmap=SURFACE_RAMP, threshold=0.02, vmin=0.02, vmax=1.0)
+    # Mark the seed on the lateral view of its hemisphere. nilearn recentres
+    # each hemisphere on its own mean before drawing, so do the same.
+    left = np.asarray(sbci.load_surface("inflated").vertices[: cc.n_vertices // 2], dtype=float)
+    x, y, z = left[SEED] - left.mean(axis=0)
+    lateral = figure.axes[0]
+    # A 3-D axes sorts artists by depth and would bury the dot under the mesh;
+    # switch to drawing order so the marker sits on top.
+    lateral.computed_zorder = False
+    lateral.scatter(
+        [x],
+        [y],
+        [z],
+        s=90,
+        color=ORANGE,
+        edgecolor="white",
+        linewidth=1.5,
+        zorder=10,
+        depthshade=False,
+    )
     figure.suptitle(
-        "Connectivity of one vertex (1234, left temporal cortex), relative to its peak", y=1.02
+        f"Where one vertex connects to: the density of streamlines between vertex {SEED} "
+        "(orange dot, left temporal cortex)\nand every other vertex, relative to the strongest",
+        fontsize=TITLE_SIZE,
+        y=1.06,
     )
     save(figure, out, "seed_profile.png")
 
@@ -112,7 +138,10 @@ def coupling(out: Path, sc, fc) -> None:
     # scale would paint the whole surface one shade: run the ramp from zero.
     figure = sc.plot(values, views=VIEWS, cmap=SURFACE_RAMP, symmetric=False, vmin=0.0)
     figure.suptitle(
-        "Structure-function coupling: cosine similarity of the SC and FC profiles", y=1.02
+        "Structure-function coupling: at each vertex, the cosine similarity of its SC and FC "
+        "profiles",
+        fontsize=TITLE_SIZE,
+        y=1.03,
     )
     save(figure, out, "coupling.png")
 
@@ -134,7 +163,9 @@ def cohort_figures(out: Path) -> None:
         cohort.truth, views=VIEWS, cmap=SURFACE_RAMP, threshold=0.02, vmin=0.02, vmax=1.0
     )
     figure.suptitle(
-        "The planted bundle: the field one bundle's weight scales with age (cohort.truth)", y=1.02
+        "The planted bundle: the field whose weight scales with age (cohort.truth)",
+        fontsize=TITLE_SIZE,
+        y=1.03,
     )
     save(figure, out, "cohort_truth.png")
 
@@ -143,9 +174,10 @@ def cohort_figures(out: Path) -> None:
     figure = subject.plot(effect, views=VIEWS, cmap="coolwarm", symmetric=True, threshold=0.05)
     correlation = np.corrcoef(effect, cohort.truth)[0, 1]
     figure.suptitle(
-        f"Recovered: the effect map of the significant component "
+        "Recovered: the effect map of the component that tracks age\n"
         f"(correlation with the planted field {correlation:.2f})",
-        y=1.02,
+        fontsize=TITLE_SIZE,
+        y=1.06,
     )
     save(figure, out, "cohort_effect.png")
 

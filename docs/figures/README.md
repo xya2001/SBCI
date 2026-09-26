@@ -18,7 +18,7 @@ there is nothing to see.
 
 | Figure | What it shows |
 | --- | --- |
-| `seed_profile.png` | `cc.seed(vertex=1234)` on the inflated surface: the density of connections from one left temporal vertex to every other, relative to its peak, for a 200,000-streamline example |
+| `seed_profile.png` | `cc.seed(vertex=1234)` on the inflated surface: at each vertex, the density of streamlines between the seed (orange dot, left temporal cortex) and that vertex, relative to the strongest, for a 200,000-streamline example |
 | `region_matrix.png` | `cc.to_atlas("Desikan")`: the same subject collapsed to 68 regions, on a log scale |
 | `coupling.png` | `sc.coupling(fc)`: structure-function coupling of the matching SC and FC examples, one value per vertex |
 | `spherical_kernel.png` | the kernel `smooth(kernel="shk")` applies, at the released bandwidth and twice it, with its cutoffs |

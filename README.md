@@ -57,10 +57,11 @@ drawn, not tracked.
 
 ![The connectivity of one vertex over the cortex](docs/figures/seed_profile.png)
 
-*`cc.plot(cc.seed(vertex=1234))`: the density of connections from one
-left temporal vertex to every other, on the inflated surface shaded by sulcal
-depth. More figures, all from the synthetic data, are in
-[docs/figures](docs/figures/README.md).*
+*`cc.plot(cc.seed(vertex=1234))`: where one vertex connects to. The value at
+each vertex is the density of streamlines between the seed (the orange dot,
+left temporal cortex) and that vertex, relative to the strongest, on the
+inflated surface shaded by sulcal depth. More figures, all from the synthetic
+data, are in [docs/figures](docs/figures/README.md).*
 
 ## With real data
 
