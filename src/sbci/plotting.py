@@ -187,8 +187,20 @@ def plot_surface(
                 **({"bg_map": backgrounds[side]} if side in backgrounds else {}),
                 **kwargs,
             )
-            axes[row, column].set_title(f"{side} {view}", fontsize=10)
+            axes[row, column].set_title(f"{side} {view}", fontsize=12)
+
+    # nilearn places colorbar ticks at the threshold and at quarter points of
+    # what is left, which gives 0.27, 0.51, 0.76 and, on a symmetric scale, a
+    # -0.05 printed over a 0.05. Round ticks at readable spacing instead.
+    from matplotlib.ticker import FormatStrFormatter, MaxNLocator
+
+    grid = {id(axis) for axis in axes.ravel()}
+    for extra in figure.axes:
+        if id(extra) not in grid:  # a colorbar
+            extra.yaxis.set_major_locator(MaxNLocator(nbins=5, steps=[1, 2, 2.5, 5, 10]))
+            extra.yaxis.set_major_formatter(FormatStrFormatter("%g"))
+            extra.tick_params(labelsize=11)
 
     if title:
-        figure.suptitle(title)
+        figure.suptitle(title, fontsize=15)
     return figure

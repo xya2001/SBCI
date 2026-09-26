@@ -151,15 +151,19 @@ onto a common template, `aligned_endpoints(i)` hands them back, and
 `smooth()` turns them into aligned connectomes (USAGE.md shows the three
 lines). Timings are for four cores.
 
-| The planted bundle, `cohort.truth` | What the analysis recovers |
-| --- | --- |
-| ![The planted bundle](docs/figures/cohort_truth.png) | ![The recovered effect map](docs/figures/cohort_effect.png) |
+![The planted bundle](docs/figures/cohort_truth.png)
+
+*The planted bundle, `cohort.truth`: the field whose weight was scaled with
+age.*
+
+![The recovered effect map](docs/figures/cohort_effect.png)
+
+*What the analysis recovers: the effect map of the one component `local_test`
+found significant, which correlates 0.94 with the planted field.*
 
 ![The significant component's scores against age](docs/figures/cohort_scores.png)
 
-*Left: the field whose weight was scaled with age. Right: the effect map of the
-one component `local_test` found significant, which correlates 0.94 with it.
-Below: that component's scores against the synthetic age.*
+*That component's scores against the synthetic age.*
 
 ## Getting around the package
 

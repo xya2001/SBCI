@@ -39,7 +39,7 @@ SURFACE_RAMP = LinearSegmentedColormap.from_list(
 #: so the profile and the region matrix are smooth rather than speckled.
 N_STREAMLINES = 200_000
 VIEWS = ("lateral", "medial")
-TITLE_SIZE = 15  # the surface figures are large; a 12-point title reads as a footnote on them
+TITLE_SIZE = 17  # the surface figures are large; a 12-point title reads as a footnote on them
 
 plt.rcParams.update(
     {
@@ -58,7 +58,7 @@ plt.rcParams.update(
 )
 
 
-def save(figure, out: Path, name: str, dpi: int = 110) -> None:
+def save(figure, out: Path, name: str, dpi: int = 125) -> None:
     path = out / name
     figure.savefig(path, dpi=dpi, bbox_inches="tight")
     plt.close(figure)
@@ -95,7 +95,7 @@ def seed_profile(out: Path, cc) -> None:
         f"Where one vertex connects to: the density of streamlines between vertex {SEED} "
         "(orange dot, left temporal cortex)\nand every other vertex, relative to the strongest",
         fontsize=TITLE_SIZE,
-        y=1.06,
+        y=1.11,  # two lines at this size need clearance above the panel labels
     )
     save(figure, out, "seed_profile.png")
 
@@ -177,7 +177,7 @@ def cohort_figures(out: Path) -> None:
         "Recovered: the effect map of the component that tracks age\n"
         f"(correlation with the planted field {correlation:.2f})",
         fontsize=TITLE_SIZE,
-        y=1.06,
+        y=1.11,  # two lines at this size need clearance above the panel labels
     )
     save(figure, out, "cohort_effect.png")
 
