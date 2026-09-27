@@ -198,26 +198,130 @@ def cohort_figures(out: Path) -> None:
     axis.legend(frameon=False, loc="lower right")
     save(figure, out, "cohort_scores.png")
 
+
+def angles(p, q):
+    return np.degrees(np.arccos(np.clip((p * q).sum(axis=1), -1.0, 1.0)))
+
+
+def alignment_recovery(out: Path) -> None:
+    """Deform a subject by a known smooth warp and measure how much of it each method undoes."""
+    from sbci.alignment import Encore, MeshQuery, _hemisphere_grids, align
+    from sbci.conseal import DEFAULT_WARP_ORDER, EndpointConnectome, StationaryWarp, default_grids
+    from sbci.smoothing import endpoint_positions
+
+    subject = sbci.example(seed=0)
+    lh, rh = default_grids()
+    rng = np.random.default_rng(7)
+
+    def known_warp(grid):
+        warp = StationaryWarp(grid)
+        coefficients = rng.standard_normal(grid.basis.shape[1])
+        displacement = (coefficients[None, :, None] * grid.basis).sum(axis=1)
+        displacement *= 0.07 / np.linalg.norm(displacement, axis=1).max()  # four degrees at most
+        assert warp.compose(displacement)
+        return warp
+
+    lh_true, rh_true = known_warp(lh), known_warp(rh)
+    carrier = EndpointConnectome.from_endpoints(subject.endpoints, lh, rh)
+    original = carrier.positions()
+    carrier.warp(lh_true, rh_true)
+    deformed = sbci.example(seed=0)
+    deformed.endpoints = carrier.to_endpoints()
+    deformed = deformed.smooth(kernel="shk", mask_medial_wall=True)
+    moved = EndpointConnectome.from_endpoints(deformed.endpoints, lh, rh).positions()
+    before = np.r_[angles(original[0], moved[0]), angles(original[1], moved[1])]
+
     t = time.time()
-    aligned = sbci.endpoints_align(cohort.connectomes[:2], template=0, max_iterations=5)
-    print(f"  ConSEAL in {time.time() - t:.0f}s", flush=True)
-    figure, axis = plt.subplots(figsize=(5.6, 3.8))
-    costs = np.asarray(aligned.costs[1], dtype=float)
-    relative = costs / costs[0]
-    axis.plot(range(len(relative)), relative, color=BLUE, linewidth=2, marker="o", markersize=6)
-    axis.annotate(
-        f"{relative[-1]:.3f}",
-        (len(relative) - 1, relative[-1]),
-        textcoords="offset points",
-        xytext=(8, 0),
-        va="center",
-        color=INK,
+    conseal = sbci.endpoints_align(
+        [subject, deformed],
+        template=0,
+        max_iterations=60,
+        threshold=1e-7,
+        delta=0.1,
+        step_clamp=float("inf"),
+        viscosity=0.0,
     )
-    axis.set_xlabel("iteration")
-    axis.set_ylabel("cost, relative to the start")
-    axis.set_xticks(range(len(relative)))
-    axis.set_title("ConSEAL registering synthetic subject 2 onto subject 1", loc="left")
-    save(figure, out, "conseal_cost.png")
+    back = endpoint_positions(conseal.aligned_endpoints(1))
+    after_conseal = np.r_[angles(original[0], back[0]), angles(original[1], back[1])]
+    print(
+        f"  ConSEAL in {time.time() - t:.0f}s: {before.mean():.2f} -> {after_conseal.mean():.2f}",
+        flush=True,
+    )
+
+    t = time.time()
+    grids, rotations = _hemisphere_grids(DEFAULT_WARP_ORDER, return_rotations=True)
+    encore = align(
+        [subject, deformed],
+        template=Encore(*grids).root(subject.dense()),
+        grids=grids,
+        max_iterations=50,
+    )
+    warp = encore.warps[1]
+    warped = (warp.lh_vertices @ rotations[0], warp.rh_vertices @ rotations[1])
+    # ENCORE's warp is a pull-back, so undo the deformation through its inverse: locate each
+    # moved endpoint on the warped mesh and carry those weights to the unwarped vertices.
+    fixed = []
+    ends = (carrier.hemisphere_in, carrier.hemisphere_out)
+    for points, hemispheres in zip(moved, ends, strict=True):
+        placed = np.empty_like(points)
+        for side, grid in enumerate((lh, rh)):
+            pick = np.asarray(hemispheres) == side
+            weights, indices = MeshQuery(warped[side], grid.faces).query(points[pick])
+            combined = np.einsum("nk,nkj->nj", weights, grid.vertices[indices])
+            placed[pick] = combined / np.linalg.norm(combined, axis=1, keepdims=True)
+        fixed.append(placed)
+    after_encore = np.r_[angles(original[0], fixed[0]), angles(original[1], fixed[1])]
+    print(
+        f"  ENCORE in {time.time() - t:.0f}s: {before.mean():.2f} -> {after_encore.mean():.2f} deg",
+        flush=True,
+    )
+
+    figure, (left, right) = plt.subplots(1, 2, figsize=(11.5, 4.2))
+    bins = np.linspace(0, 3.0, 61)
+    for values, color, label in (
+        (before, MUTED, "as deformed"),
+        (after_conseal, BLUE, "after ConSEAL"),
+        (after_encore, ORANGE, "after ENCORE"),
+    ):
+        left.hist(
+            values,
+            bins=bins,
+            histtype="step",
+            linewidth=2,
+            color=color,
+            label=f"{label}: mean {values.mean():.2f} deg",
+        )
+    left.set_xlabel("distance of each endpoint from where it started (degrees)")
+    left.set_ylabel("endpoints")
+    left.set_title("Endpoints moved by a known warp, and put back", loc="left")
+    left.legend(frameon=False)
+    for trace, color, label in (
+        (np.asarray(conseal.costs[1]), BLUE, "ConSEAL"),
+        (np.asarray(encore.traces[1]), ORANGE, "ENCORE"),
+    ):
+        relative = trace / trace[0]
+        right.plot(range(len(relative)), relative, color=color, linewidth=2, label=label)
+        right.annotate(
+            f"{label} {relative[-1]:.2f}",
+            (len(relative) - 1, relative[-1]),
+            textcoords="offset points",
+            xytext=(6, 0),
+            va="center",
+            color=color,
+            fontsize=9,
+        )
+    right.set_xlabel("iteration")
+    right.set_ylabel("cost, relative to the start")
+    right.set_ylim(0, 1.05)
+    right.set_title("Cost of the registration", loc="left")
+    right.legend(frameon=False, loc="upper right")
+    figure.suptitle(
+        "Alignment with a known answer: a synthetic subject registered onto an undeformed copy "
+        "of itself",
+        fontsize=14,
+        y=1.03,
+    )
+    save(figure, out, "alignment_recovery.png")
 
 
 def spherical_kernel(out: Path) -> None:
@@ -261,6 +365,8 @@ def main(argv: list[str]) -> int:
     spherical_kernel(out)
     print("cohort", flush=True)
     cohort_figures(out)
+    print("alignment", flush=True)
+    alignment_recovery(out)
     return 0
 
 

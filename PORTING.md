@@ -245,6 +245,21 @@ central difference in double precision; agreement with the reference is the
 same at every step size, so nothing is given up. **This is a deliberate
 divergence and needs WP1 sign-off.**
 
+### A third weakness: one step length, and the first failure ends it
+
+The reference moves by a fixed length in coefficient space each iteration
+(`step`, 0.05 by default, along the normalized gradient) and stops the first
+time a step fails to lower the cost. That works when the subjects are far
+apart. When they are close -- a subject and a copy of itself deformed by a
+degree, which is the size of anatomical differences after a good initial
+registration -- the first step already overshoots, the cost rises, and the
+reference returns the identity having done nothing. Measured on a synthetic
+subject whose endpoints were moved by 1.0 degrees on average: cost 0.00935
+before, 0.00935 after, at 20 and at 50 iterations. The port now halves the
+step length up to `backtracks` times (four by default) before giving up, and
+doubles it back after an accepted step; `backtracks=0` reproduces the
+reference, and the reference comparison above is run that way.
+
 ### How close is it possible to get?
 
 The port's finite difference sits **0.0367** from the reference at every step
@@ -1060,6 +1075,33 @@ has 89 nonzeros per row at the published bandwidth (cutoff 21.5 degrees), so
 cores the job was given, in row blocks that reproduce the single-core result
 bit for bit), and relocating the endpoints is a k-d-tree
 query.
+
+### Measured on a known deformation
+
+The reference's own tests compare registrations of unrelated subjects, which
+says the cost falls but not how far the warp is from the right one. So: a
+synthetic subject's endpoints were moved by a known smooth warp (a random
+combination of the warp basis fields, 1.0 degrees on average and 3.6 at most,
+`scripts/make_figures.py`), the deformed copy re-smoothed, and registered back
+onto the original. What matters is where the endpoints end up:
+
+| setting | iterations taken | endpoint residual (from 0.98 deg) | cost removed |
+| --- | --- | --- | --- |
+| public defaults (`threshold=1e-4`) | 10 | 0.64 deg, 34% undone | 72% |
+| public defaults, `threshold=1e-7` | 60 | 0.47 deg, 52% | 89% |
+| public update, `delta=0.2`, `threshold=1e-7` | 60 | 0.27 deg, 72% | 97% |
+| the fork's update (`delta=0.1`, no clamp, no viscosity), `threshold=1e-7` | 60 | 0.17 deg, 82% | 99% |
+
+Two things follow. The public stopping rule is an *absolute* change in cost,
+and 1e-4 is a quarter of the whole cost when two subjects are this alike, so
+it stops after ten iterations; pass a smaller threshold for similar subjects.
+And the recovered warp should be judged by the endpoints, not by the grid
+vertices: the vertex field the registration finds differs from the one that
+made the deformation wherever there are no endpoints to constrain it (the
+vertex residual grows even as the endpoint residual falls), which is a
+property of the problem, not a fault of the port. ENCORE on the same pair,
+with its inverse applied to the endpoints, reaches 0.40 degrees, 59% undone
+(item 4).
 
 ### Still open
 

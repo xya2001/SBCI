@@ -548,7 +548,11 @@ def test_alignment_registration_agrees_with_matlab(encore_reference, encore_grid
     """The registered connectome, which inherits the derivative's instability."""
     from sbci.alignment import Encore
 
-    encore = Encore(*encore_grids, step=0.05, max_iterations=15, threshold=1e-8, delta=1e-10)
+    # backtracks=0: the reference stops at its first non-improving step, and
+    # this reproduces its run rather than improving on it.
+    encore = Encore(
+        *encore_grids, step=0.05, max_iterations=15, threshold=1e-8, delta=1e-10, backtracks=0
+    )
     result, _, _, _ = encore.register(encore_reference["F1"], encore_reference["F2"])
     theirs = encore_reference["reg_result"]
     assert _relative(result, theirs) < 1e-2

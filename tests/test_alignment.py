@@ -284,6 +284,32 @@ def test_registration_does_not_increase_its_own_cost(pair):
     assert after <= before + 1e-12
 
 
+def test_a_step_too_long_is_halved_rather_than_ending_the_registration(pair):
+    """The reference stops at the first non-improving step; the port halves it first."""
+    grid, densities = pair
+    before = (
+        (Encore(grid, grid).root(densities[0]) - Encore(grid, grid).root(densities[1])) ** 2
+        * Encore(grid, grid).area_product
+    ).sum()
+    reference = Encore(grid, grid, step=5.0, max_iterations=3, delta=1e-5, backtracks=0)
+    _, _, _, stuck = reference.register(densities[0], densities[1])
+    assert stuck == pytest.approx(before)  # a step this long overshoots, and the reference gives up
+    halving = Encore(grid, grid, step=5.0, max_iterations=3, delta=1e-5, backtracks=8)
+    _, _, _, moved = halving.register(densities[0], densities[1])
+    assert moved < before - 1e-9
+
+
+def test_align_records_a_cost_trace_per_subject(pair):
+    from sbci.alignment import align
+
+    grid, densities = pair
+    result = align(densities[:2], grids=(grid, grid), max_iterations=3, template_iterations=1)
+    assert len(result.traces) == 2
+    for trace, final in zip(result.traces, result.costs, strict=True):
+        assert trace.ndim == 1 and trace.size >= 1 and trace[-1] == pytest.approx(final)
+        assert np.all(np.diff(trace) <= 1e-12)  # every accepted step lowers the cost
+
+
 def test_evaluate_through_the_identity_warp_returns_the_input(pair):
     grid, densities = pair
     concon = Concon(grid, grid, delta=1e-5)

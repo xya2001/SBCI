@@ -879,6 +879,8 @@ class Alignment:
     aligned: list = field(default_factory=list)
     costs: list = field(default_factory=list)
     grid_rotations: tuple = (np.eye(3), np.eye(3))
+    traces: list = field(default_factory=list)
+    """Per subject, the cost before registration and after every accepted step."""
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
         return f"<Alignment of {len(self.warps)} subjects on {self.template.shape[0]} vertices>"
@@ -896,6 +898,7 @@ class Encore:
         threshold: float = 1e-8,
         delta: float = DEFAULT_DELTA,
         derivative: str = "difference",
+        backtracks: int = 4,
     ):
         self.lh_grid = lh_grid
         self.rh_grid = rh_grid
@@ -905,6 +908,7 @@ class Encore:
         self.max_iterations = max_iterations
         self.threshold = threshold
         self.delta = delta
+        self.backtracks = int(backtracks)
 
     def root(self, density):
         """The square-root density, normalized to unit mass."""
@@ -944,8 +948,13 @@ class Encore:
                 break
         return current
 
-    def register(self, target, moving, target_is_root: bool = False, verbose: bool = False):
-        """Warp ``moving`` onto ``target``; returns result, warps and cost."""
+    def register(
+        self, target, moving, target_is_root: bool = False, verbose: bool = False, callback=None
+    ):
+        """Warp ``moving`` onto ``target``; returns result, warps and cost.
+
+        ``callback(iteration, cost)`` is called after every accepted step.
+        """
         lh_warp = SphericalWarp(self.lh_grid, self.delta)
         rh_warp = SphericalWarp(self.rh_grid, self.delta)
 
@@ -959,6 +968,7 @@ class Encore:
         last = (lh_warp, rh_warp)
         n = self.lh_grid.n_vertices
 
+        scale = 1.0  # of self.step: halved when a step fails, doubled back after a success
         for iteration in range(1, self.max_iterations + 1):
             d_e1, d_e2 = self.concon.derivative(image)
             weighted = residual * self.area_product
@@ -966,34 +976,47 @@ class Encore:
             b = (weighted * (2 * d_e2)).sum(axis=1)
             c = (weighted * image).sum(axis=1)
 
-            new = []
-            for grid, warp, lo, hi in (
-                (self.lh_grid, lh_warp, 0, n),
-                (self.rh_grid, rh_warp, n, n + self.rh_grid.n_vertices),
+            moves = []
+            for grid, lo, hi in (
+                (self.lh_grid, 0, n),
+                (self.rh_grid, n, n + self.rh_grid.n_vertices),
             ):
                 gradient = 2 * (
                     a[lo:hi] @ grid.basis[:, :, 0]
                     + b[lo:hi] @ grid.basis[:, :, 1]
                     + c[lo:hi] @ grid.laplacian
                 )
-                size = self.step / (np.linalg.norm(gradient) + 1e-15)
                 direction = (gradient[None, :, None] * grid.basis).sum(axis=1)
-                new.append(warp.compose(size * direction))
-            lh_warp, rh_warp = new
+                moves.append(direction * (self.step / (np.linalg.norm(gradient) + 1e-15)))
 
-            image = self.concon.evaluate_root(source, lh_warp, rh_warp)
-            residual = fixed - image
-            cost = (residual**2 * self.area_product).sum()
-
-            if (last_cost - cost) < self.threshold:
+            # The reference takes one step of fixed length and stops the moment
+            # it fails to lower the cost -- on a small deformation, the very
+            # first step. Halve the length a few times before giving up;
+            # backtracks=0 reproduces the reference (PORTING.md item 4).
+            accepted = False
+            for _attempt in range(self.backtracks + 1):
+                trial = (last[0].compose(scale * moves[0]), last[1].compose(scale * moves[1]))
+                trial_image = self.concon.evaluate_root(source, *trial)
+                trial_residual = fixed - trial_image
+                trial_cost = (trial_residual**2 * self.area_product).sum()
+                if (last_cost - trial_cost) >= self.threshold:
+                    accepted = True
+                    break
+                scale *= 0.5
+            if not accepted:
                 lh_warp, rh_warp = last
                 cost = last_cost
                 if verbose:
                     print(f"converged at iteration {iteration}, cost {cost:.6f}")
                 break
 
+            lh_warp, rh_warp = trial
+            image, residual, cost = trial_image, trial_residual, trial_cost
             last = (lh_warp, rh_warp)
             last_cost = cost
+            scale = min(1.0, 2.0 * scale)
+            if callback is not None:
+                callback(iteration, cost)
 
         result = self.concon.evaluate(moving, lh_warp, rh_warp)
         return result, lh_warp, rh_warp, cost
@@ -1069,6 +1092,7 @@ def align(
     template=None,
     grids=None,
     derivative: str = "difference",
+    backtracks: int = 4,
     verbose: bool = False,
 ) -> Alignment:
     """Estimate a template and register every connectome onto it.
@@ -1099,6 +1123,11 @@ def align(
         interpolant exactly instead. Both converge to the same surface
         gradient; they part company where the density varies at grid scale.
         See :meth:`Concon.derivative`.
+    backtracks
+        How many times a step that fails to lower the cost is halved before
+        the registration stops. The reference stops at the first such step,
+        which on a small deformation is the first step of all; ``0``
+        reproduces that.
 
     Returns
     -------
@@ -1150,6 +1179,7 @@ def align(
         threshold=threshold,
         delta=delta,
         derivative=derivative,
+        backtracks=backtracks,
     )
 
     if template is None:
@@ -1164,12 +1194,19 @@ def align(
     for index, density in enumerate(densities):
         if verbose:
             print(f"registering subject {index + 1} of {len(densities)}")
+        start = ((template - encore.root(density)) ** 2 * encore.area_product).sum()
+        trace = [float(start)]
+
+        def record(_iteration, value, trace=trace):
+            trace.append(float(value))
+
         aligned, lh_warp, rh_warp, cost = encore.register(
-            template, density, target_is_root=True, verbose=verbose
+            template, density, target_is_root=True, verbose=verbose, callback=record
         )
         result.warps.append(
             Warp(lh_warp.vertices, lh_warp.jacobian, rh_warp.vertices, rh_warp.jacobian)
         )
         result.aligned.append(aligned)
         result.costs.append(float(cost))
+        result.traces.append(np.asarray(trace))
     return result

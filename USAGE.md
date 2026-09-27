@@ -450,7 +450,10 @@ result.warps[0].save("sub-001_warp.npz")
 matrices several times over; budget tens of GB of memory and hours for a
 cohort, and start with a small `max_iterations` to see the cost falling.
 
-Two things to know before trusting the numbers:
+`result.traces` holds each subject's cost before registration and after every
+accepted step.
+
+Three things to know before trusting the numbers:
 
 - **The bundled grid is rotated first.** The Jacobian is built in `(theta, phi)`
   coordinates and closes with a factor of `sin(theta)`, so a vertex on the
@@ -462,6 +465,12 @@ Two things to know before trusting the numbers:
   at 1e-10 loses six of sixteen digits; the reference's own derivative moves by
   2% of its range between adjacent step sizes. Pass `delta=1e-10` to reproduce
   the reference's conditioning exactly. PORTING.md item 4 has the measurements.
+- **A step that fails is halved, not fatal.** The reference moves by a fixed
+  length and stops the first time the cost does not fall, which on two similar
+  subjects is the first step: it returns the identity having done nothing. The
+  port halves the step up to `backtracks=4` times first, and on a known
+  one-degree deformation undoes 59% of it where the reference undoes none
+  (PORTING.md item 4); `backtracks=0` reproduces the reference.
 
 ## Aligning by endpoints (ConSEAL)
 ENCORE moves a smoothed density. ConSEAL moves the streamline endpoints
@@ -499,10 +508,19 @@ seconds per 100,000 streamlines rather than minutes. Three things to know:
   all four, and does so to the digits of the MATLAB reference run.
 - **Rigid initialization is off by default**, as in the reference's own
   example; `init_rotation=True` runs the multi-shell rotation search first.
-![ConSEAL cost per iteration](docs/figures/conseal_cost.png)
+- **The stopping threshold is absolute.** The public default of 1e-4 is a
+  quarter of the whole cost when two subjects are alike, and stops the
+  registration after a few iterations; `threshold=1e-7` lets it converge. On
+  a known deformation the public defaults undo a third of it, the paper's
+  update rule four fifths (PORTING.md item 7).
+![Alignment with a known answer](docs/figures/alignment_recovery.png)
 
-*`sbci.endpoints_align` registering one synthetic subject onto another for five
-iterations: the cost falls at every step.*
+*A synthetic subject's endpoints moved by a known smooth warp (a degree on
+average, four at most) and registered back onto the original: how far each
+endpoint still is from where it started, and the cost per iteration. ConSEAL
+with the paper's update (`delta=0.1, step_clamp=inf, viscosity=0`) and a
+stopping threshold of 1e-7 puts the endpoints back to within 0.17 degrees on
+average; ENCORE, undone through the inverse of its warp, to within 0.40.*
 
 ## Writing the exchange file
 

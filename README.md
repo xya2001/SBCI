@@ -151,6 +151,19 @@ onto a common template, `aligned_endpoints(i)` hands them back, and
 `smooth()` turns them into aligned connectomes (USAGE.md shows the three
 lines). Timings are for four cores.
 
+**Alignment, with a known answer.** A subject's endpoints were moved by a
+known smooth warp, a degree on average and four at most, and the deformed
+copy was registered back onto the original. ConSEAL puts the endpoints back
+to within 0.17 degrees of where they started, undoing 82% of the displacement
+and 99% of the cost, with the paper's update rule and a stopping threshold of
+1e-7; with the public code's defaults it stops after ten iterations at 0.47
+degrees. ENCORE, whose warp is undone through its inverse, reaches 0.40
+degrees. The public ENCORE code would have done nothing on this pair: its
+fixed step overshoots a small deformation at the first try and it stops, so
+the port halves the step instead (PORTING.md item 4).
+
+![Alignment with a known answer](docs/figures/alignment_recovery.png)
+
 ![The planted bundle](docs/figures/cohort_truth.png)
 
 *The planted bundle, `cohort.truth`: the field whose weight was scaled with
