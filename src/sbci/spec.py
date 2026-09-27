@@ -53,7 +53,7 @@ number. See ``SPEC_QUESTIONS.md`` item 2 -- WP1 must confirm.
 DTYPE = "float32"
 
 N_UPPER = N_VERTICES * (N_VERTICES - 1) // 2
-"""Length of the condensed connectivity vector: 13,122,006 float32 ~= 50 MB."""
+"""Length of the condensed connectivity vector: 13,125,126 float32 ~= 50 MB."""
 
 # --- Streamline endpoints --------------------------------------------------
 

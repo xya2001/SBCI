@@ -79,7 +79,7 @@ fc = ContinuousConnectome.load("/work/users/x/y/xya/sbci-derivatives/sub-example
 
 ```
 sc                ContinuousConnectome(modality='sc', n_vertices=5124)
-stored form       (13122006,) float32, the strict upper triangle
+stored form       (13125126,) float32, the strict upper triangle
 area weights      (5124,), sum 327,684
 cortex mask       4,685 of 5,124 vertices
 ```

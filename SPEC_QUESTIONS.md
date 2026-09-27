@@ -19,7 +19,7 @@ where `src/sbci/spec.py` currently carries a **provisional** value, marked
    and is empty.
 
    So nothing is lost either way for SC, and this package's strict upper
-   triangle (`k=1`, 13,122,006 entries) is safe. **What remains is a
+   triangle (`k=1`, 13,125,126 entries) is safe. **What remains is a
    convention choice**, not a data question: adopt `k=1` and state that the
    diagonal is never stored, or adopt `k=0` to mirror the pipeline byte for
    byte. FC is the case that would decide it, since `import_legacy.py` found
