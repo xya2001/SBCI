@@ -139,6 +139,17 @@ def test_supplying_the_start_makes_the_fit_deterministic(cohort):
     np.testing.assert_allclose(first.scales, second.scales)
 
 
+def test_reduce_is_deterministic_by_default(cohort):
+    """The start is drawn from seed 0 unless told otherwise, so a run repeats exactly."""
+    matrices, _ = cohort
+    first = reduce(list(matrices), rank=3)
+    second = reduce(list(matrices), rank=3)
+    np.testing.assert_allclose(first.basis, second.basis)
+    np.testing.assert_allclose(first.scores, second.scores)
+    fresh = reduce(list(matrices), rank=3, seed=None)  # a fresh draw is still allowed
+    assert fresh.basis.shape == first.basis.shape
+
+
 def test_reduce_accepts_a_cohort_of_arrays(cohort):
     matrices, _ = cohort
     result = reduce(list(matrices), rank=3, seed=0)

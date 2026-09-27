@@ -39,6 +39,19 @@ to 1, then jumps to 3.98 -- the maximum the penalty admits -- at 5, with the
 explained fraction collapsing from 0.83 to 0.01. The reference's default of
 ``1e-10`` is far below the turn, so this only bites someone who raises it.
 
+The fit is a local optimum
+--------------------------
+Each component starts from a random vector, put through thirty power
+iterations on the mode-1 Gram matrix and then the alternating updates; the
+reference draws that vector from ``normrnd`` and stops at the first stationary
+point it reaches. On the synthetic cohort (ten subjects, 20,000 streamlines,
+rank 4) twelve seeds agree to the last digit on the first three components
+and differ in the fourth, and one start in about fifteen misses a component
+that the others all find. So the start matters at the margin: ``seed`` is
+fixed by default so that a run can be repeated, ``explained`` says how much
+the fit captured, and a component that matters should not be trusted to a
+single start when a second seed does not reproduce it.
+
 A bug in the reference
 ----------------------
 ``ConConBasis.Fit`` as published cannot run: at line 260 it reads
@@ -309,7 +322,7 @@ def fit_basis(
     max_inner: int = 30,
     tol_outer: float = 1e-3,
     tol_inner: float = 1e-3,
-    seed=None,
+    seed=0,
     start=None,
     copy: bool = True,
 ) -> Reduction:
@@ -332,9 +345,16 @@ def fit_basis(
     support
         Keep only this many non-zero entries per component, using the sparse
         power iteration. ``None`` leaves components dense.
+    seed
+        Each component starts from a random vector drawn from this seed, as
+        the reference draws one from ``normrnd``. The default ``0`` makes
+        repeated runs identical; ``None`` draws a fresh start every run. The
+        fit is a local optimum, and which of several similar-sized components
+        comes out, and in what order, can depend on the start (see the module
+        notes).
     start
-        ``(n, rank)`` initial vectors, one per component. Supplying them makes
-        the fit deterministic; otherwise they are drawn from ``seed``.
+        ``(n, rank)`` initial vectors, one per component, used instead of the
+        random draws.
     copy
         Work on a copy of ``matrices`` (the default). ``False`` deflates the
         given array in place, which :func:`reduce` uses so that the cohort is

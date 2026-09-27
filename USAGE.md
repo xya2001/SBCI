@@ -391,8 +391,15 @@ rank-K separable approximation:
 sc.reduce(rank=10)
 ```
 
-Two things to know:
+Three things to know:
 
+- **The fit is a local optimum, and the start is fixed.** Each component
+  begins from a random vector, as in the reference; `seed=0` by default, so a
+  run repeats exactly, and `seed=None` draws afresh. On the synthetic cohort
+  twelve seeds agree on the first three components and differ in the fourth,
+  and about one start in fifteen misses a component the others find. If a
+  component matters, check that a second seed reproduces it, and read
+  `explained` before trusting a rank.
 - **`alpha` is a roughness penalty with a turning point.** Components are
   chosen by largest *magnitude* eigenvalue and the penalty enters negatively,
   so once it outweighs the data the fit returns the *roughest* direction
