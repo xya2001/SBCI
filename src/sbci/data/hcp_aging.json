@@ -1,0 +1,18 @@
+{
+  "cohort": "hcp-aging",
+  "description": "Ten HCP-Aging subjects, five women and five men chosen across the age range, converted from the SBCI pipeline's output by tools/build_hcp_cohort.py: one SC file with the streamline endpoints and one FC file per subject, on the ico4 grid. Ages are given as five-year bins.",
+  "host": "google-drive",
+  "release": "",
+  "subjects": [
+    {"subject": "sub-HCA6924080", "sex": "F", "age_bin": "36-40", "files": {"sc": {"drive_id": "", "bytes": 0, "sha256": ""}, "fc": {"drive_id": "", "bytes": 0, "sha256": ""}}},
+    {"subject": "sub-HCA7253064", "sex": "M", "age_bin": "41-45", "files": {"sc": {"drive_id": "", "bytes": 0, "sha256": ""}, "fc": {"drive_id": "", "bytes": 0, "sha256": ""}}},
+    {"subject": "sub-HCA7627786", "sex": "F", "age_bin": "46-50", "files": {"sc": {"drive_id": "", "bytes": 0, "sha256": ""}, "fc": {"drive_id": "", "bytes": 0, "sha256": ""}}},
+    {"subject": "sub-HCA9061974", "sex": "M", "age_bin": "46-50", "files": {"sc": {"drive_id": "", "bytes": 0, "sha256": ""}, "fc": {"drive_id": "", "bytes": 0, "sha256": ""}}},
+    {"subject": "sub-HCA8702577", "sex": "F", "age_bin": "51-55", "files": {"sc": {"drive_id": "", "bytes": 0, "sha256": ""}, "fc": {"drive_id": "", "bytes": 0, "sha256": ""}}},
+    {"subject": "sub-HCA8980404", "sex": "M", "age_bin": "56-60", "files": {"sc": {"drive_id": "", "bytes": 0, "sha256": ""}, "fc": {"drive_id": "", "bytes": 0, "sha256": ""}}},
+    {"subject": "sub-HCA8191679", "sex": "F", "age_bin": "61-65", "files": {"sc": {"drive_id": "", "bytes": 0, "sha256": ""}, "fc": {"drive_id": "", "bytes": 0, "sha256": ""}}},
+    {"subject": "sub-HCA7415973", "sex": "M", "age_bin": "66-70", "files": {"sc": {"drive_id": "", "bytes": 0, "sha256": ""}, "fc": {"drive_id": "", "bytes": 0, "sha256": ""}}},
+    {"subject": "sub-HCA6125050", "sex": "F", "age_bin": "71-75", "files": {"sc": {"drive_id": "", "bytes": 0, "sha256": ""}, "fc": {"drive_id": "", "bytes": 0, "sha256": ""}}},
+    {"subject": "sub-HCA9033868", "sex": "M", "age_bin": "81-85", "files": {"sc": {"drive_id": "", "bytes": 0, "sha256": ""}, "fc": {"drive_id": "", "bytes": 0, "sha256": ""}}}
+  ]
+}

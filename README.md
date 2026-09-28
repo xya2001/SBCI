@@ -97,13 +97,25 @@ cc.plot(p)                             # inflated-surface figure
 cc.to_cifti("sub-100307_sc.dconn.nii") # opens in Workbench; 16.9 GB
 ```
 
-`sbci download hcp-ya --subject 100307` will fetch a subject once the data
-release exists (SPEC_QUESTIONS.md item 6); until then, convert existing
-pipeline output with `tools/import_legacy.py` (see *Using legacy pipeline
-output*). Running the lines above on a machine none of us configured, from a
-blank environment, in under five minutes is the acceptance criterion for this
-package. It is encoded in `tests/test_five_minute_start.py`, which skips until
-the release exists.
+The example cohort, the ten HCP-Aging subjects the figures are drawn from, is
+hosted on a public Google Drive and fetched by the package:
+
+```bash
+sbci download hcp-aging                          # all ten subjects, SC and FC, about 1 GB
+sbci download hcp-aging --subject sub-HCA6924080 --sc-only   # one 56 MB file
+```
+
+Each file is verified against the SHA-256 in the package's manifest
+(`src/sbci/data/hcp_aging.json`, which also gives each subject's sex and
+five-year age bin), and a re-run skips what is already present. The SC files
+carry the streamline endpoints, so `smooth()` and `endpoints_align()` run on
+them; `scripts/hcp_figures.py hcp-aging docs/figures` regenerates every figure
+from the download. Existing pipeline output converts with
+`tools/import_legacy.py` (see *Using legacy pipeline output*). Running the
+lines above on a machine none of us configured, from a blank environment, in
+under five minutes is the acceptance criterion for this package; it is
+encoded in `tests/test_five_minute_start.py`, which runs against the first
+subject when `SBCI_DOWNLOAD=1` or `SBCI_HCP_DIR` is set and skips otherwise.
 
 ## The documents
 
@@ -130,6 +142,7 @@ the release exists.
 | `.to_cifti(path)` | implemented; fsLR-32k dense connectome, 16.9 GB |
 | `sbci validate <file>` | implemented |
 | `.smooth(kernel=..., bandwidth=..., eigenpairs=...)` | implemented for all three kernels. `shk` is the default and reproduces `concon` at r = 1.000000 across five subjects; `rdk` matches MATLAB to 3.25 float32-eps, `matern` is checked against its closed form (no MATLAB reference exists), and both find the Laplace-Beltrami basis via `$SBCI_LBO_DIR` (PORTING.md items 1 and 6) |
+| `sbci download hcp-aging` / `sbci.download.fetch_cohort` | implemented; fetches the ten-subject example cohort from its public Google Drive and verifies every file against the manifest |
 | `sbci.migrate_warp(warp, to="fs_LR_32k")` | implemented; carries an ENCORE or ConSEAL warp to fs_LR (MSMAll's sphere) or full-resolution fsaverage and writes it as a deformed sphere for Workbench (USAGE.md) |
 | `.reduce(rank=K)` / `sbci.reduce(cc_list, rank=K)` | implemented; matches the MATLAB reference to float64 rounding (PORTING.md item 5) |
 | `sbci.align(cc_list, method="encore")` | implemented; geometry and template match MATLAB to float64 rounding, the registration to r = 0.99999979 (PORTING.md item 4) |

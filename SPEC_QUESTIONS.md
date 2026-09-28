@@ -109,11 +109,16 @@ where `src/sbci/spec.py` currently carries a **provisional** value, marked
    brief's five-minute test cannot pass as written -- its second line assumes
    an open download. The criterion itself needs rewording.
 
-   **What is still needed**, and is now a decision rather than a question: a
-   tutorial subject that *can* be released. It does not have to be HCP. One
-   subject's smoothed connectome is 20 MB, carries no identifiable data, and
-   would make the five-minute test real. Either designate one, or change the
-   acceptance criterion to start from a file the user already holds.
+   **Decided (28 September): the example cohort is ten HCP-Aging subjects,
+   hosted by the lab on a public Google Drive.** `sbci download hcp-aging`
+   fetches them from the ids in `src/sbci/data/hcp_aging.json` and verifies
+   each file's SHA-256; the manifest gives each subject's sex and a five-year
+   age bin, not the exact age, and the files' metadata carry no age. Whether
+   HCP-Aging's NDA data-use terms permit this public hosting of derived
+   connectomes is the lab's responsibility and was affirmed by the lab; this
+   entry records that the group's SBCI_Datasets page says otherwise for the
+   earlier cohorts. The five-minute test runs against the first subject when
+   asked (`SBCI_DOWNLOAD=1`). `sbci download hcp-ya` is not offered.
 
 7. **License holder.** `LICENSE` says "The SBCI developers". Replace with the
    institutional holder before the first tagged release.

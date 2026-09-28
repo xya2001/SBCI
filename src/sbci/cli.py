@@ -19,11 +19,16 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     download = subparsers.add_parser(
-        "download", help="fetch a released cohort or tutorial subject (pending the data release)"
+        "download", help="fetch the example cohort (ten HCP-Aging subjects) from its public host"
     )
-    download.add_argument("cohort", help="cohort name, e.g. hcp-ya")
-    download.add_argument("--subject", help="single subject id, e.g. 100307")
-    download.add_argument("--out", default=".", help="destination directory")
+    download.add_argument("cohort", help="cohort name: hcp-aging")
+    download.add_argument(
+        "--subject", action="append", help="one subject id, e.g. sub-HCA6924080; repeatable"
+    )
+    download.add_argument("--out", default="hcp-aging", help="destination directory")
+    download.add_argument("--sc-only", action="store_true", help="structural files only")
+    download.add_argument("--fc-only", action="store_true", help="functional files only")
+    download.add_argument("--force", action="store_true", help="re-download files already present")
 
     validate = subparsers.add_parser("validate", help="check a file against the spec")
     validate.add_argument("path", help="path to a .h5 computational file")
@@ -87,11 +92,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "download":
-        raise SystemExit(
-            "`sbci download` needs the WP1 data release: a stable URL and a "
-            "checksum manifest for the tutorial subject and the HCP-YA cohort. "
-            "Neither exists yet -- see SPEC_QUESTIONS.md item 6."
-        )
+        from .download import fetch_cohort
+
+        modalities = ("sc",) if args.sc_only else ("fc",) if args.fc_only else ("sc", "fc")
+        try:
+            written = fetch_cohort(
+                args.out,
+                cohort=args.cohort,
+                subjects=args.subject,
+                modalities=modalities,
+                force=args.force,
+            )
+        except (ValueError, OSError, RuntimeError) as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        print(f"{len(written)} file(s) in {args.out}")
+        return 0
 
     return 0  # pragma: no cover - unreachable, subcommand is required
 

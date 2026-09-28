@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from sbci.cli import main
 from sbci.io import write_hdf5
@@ -73,9 +72,27 @@ def test_cli_exits_non_zero_on_failure(tmp_path, connectome, capsys):
     assert "[FAIL] grid" in capsys.readouterr().out
 
 
-def test_cli_download_explains_what_is_missing():
-    with pytest.raises(SystemExit, match="WP1 data release"):
-        main(["download", "hcp-ya", "--subject", "100307"])
+def test_cli_download_explains_what_is_missing(tmp_path, capsys, monkeypatch):
+    """Before the files are uploaded the manifest has no ids, and the command says so."""
+    from sbci import download
+
+    manifest = {
+        "cohort": "hcp-aging",
+        "subjects": [
+            {
+                "subject": "sub-A",
+                "sex": "F",
+                "age_bin": "36-40",
+                "files": {"sc": {"drive_id": "", "bytes": 0, "sha256": ""}},
+            }
+        ],
+    }
+    monkeypatch.setattr(download, "load_manifest", lambda cohort="hcp-aging": manifest)
+    assert main(["download", "hcp-aging", "--out", str(tmp_path)]) == 1
+    assert "not been released" in capsys.readouterr().err
+    monkeypatch.undo()
+    assert main(["download", "hcp-ya", "--out", str(tmp_path)]) == 1
+    assert "cohort" in capsys.readouterr().err
 
 
 def test_non_finite_values_fail(tmp_path, connectome):

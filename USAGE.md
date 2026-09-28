@@ -68,6 +68,33 @@ Both pass every validator check. To convert more, use
 > `FileNotFoundError` mentioning `...`, an ellipsis placeholder was pasted as a
 > real path.
 
+## Getting the example cohort
+
+Ten HCP-Aging subjects, five women and five men across the age range, each
+as an SC file that carries its streamline endpoints and an FC file, converted
+from the SBCI pipeline's output by `tools/build_hcp_cohort.py` and hosted on
+a public Google Drive. The package ships the manifest, not the data:
+
+```bash
+sbci download hcp-aging                    # everything into ./hcp-aging, about 1 GB
+sbci download hcp-aging --sc-only          # the ten SC files, 40 to 56 MB each
+sbci download hcp-aging --subject sub-HCA6924080 --out data
+```
+
+```python
+from sbci.download import fetch_cohort, load_manifest
+paths = fetch_cohort("hcp-aging")                      # the same, from Python
+load_manifest()["subjects"][0]                         # subject, sex, age_bin, files
+```
+
+Every file is checked against its SHA-256 from the manifest; a file that
+fails is removed and the error says so. A re-run verifies and skips what is
+present, so the command is safe to repeat. The manifest gives ages as
+five-year bins, which is what `scripts/hcp_figures.py` uses when it draws the
+cohort figures from a downloaded copy. Google Drive answers with a page
+instead of a file when the file is not shared with anyone who has the link;
+the error names the file id.
+
 ## Loading
 
 ```python
