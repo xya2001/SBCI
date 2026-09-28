@@ -1164,10 +1164,12 @@ onto that one subject reshapes the bundles enough to remove a fivefold weight
 difference, while the same update onto the mean of the square-root densities
 keeps it, as does the public code's clamp and viscosity onto the one subject.
 With the reference start instead of `candidates=6`, alignment *lowers* the
-chance of finding the bundle at rank 4 (six seeds: unaligned 0, 4 and 6 of 6
-at the three spreads; after the paper's ConSEAL 0, 0 and 1 of 6), because
-the aligned cohort's Gram spectrum is flatter still; rank 8 with the
-reference start finds it unaligned in 5, 6 and 6 of 6.
+chance of finding the bundle at rank 4 (six seeds, spreads 0.05, 0.04 and
+0.03: unaligned 0, 4 and 6 of 6; after ENCORE 1, 0 and 4 of 6; after the
+paper's ConSEAL 0, 0 and 1 of 6), because the aligned cohort's Gram spectrum
+is flatter still. Rank 8 with the reference start finds it unaligned in 5, 6
+and 6 of 6 and after ENCORE in 4, 6 and 6 of 6; after the paper's ConSEAL in
+1, 3 and 6 of 6.
 
 ### Still open
 
