@@ -150,6 +150,34 @@ def test_reduce_is_deterministic_by_default(cohort):
     assert fresh.basis.shape == first.basis.shape
 
 
+def test_candidate_starts_are_deterministic_and_keep_the_larger_component(cohort):
+    """Starting from the leading Gram eigenvectors and keeping the best repeats, and is no worse."""
+    matrices, _ = cohort
+    n = matrices.shape[1]
+    reference = fit_basis(matrices, np.eye(n), rank=2, seed=0)
+    first = fit_basis(matrices, np.eye(n), rank=2, candidates=3)
+    second = fit_basis(matrices, np.eye(n), rank=2, candidates=3)
+    np.testing.assert_allclose(first.basis, second.basis)
+    np.testing.assert_allclose(first.scores, second.scores)
+    assert first.scales[0] >= reference.scales[0] * (1 - 1e-9)
+    assert first.explained[-1] > 0
+
+
+def test_candidates_must_be_positive(cohort):
+    matrices, _ = cohort
+    with pytest.raises(ValueError, match="candidates"):
+        fit_basis(matrices, np.eye(matrices.shape[1]), rank=1, candidates=0)
+
+
+def test_a_supplied_start_overrides_the_candidates(cohort):
+    matrices, _ = cohort
+    n = matrices.shape[1]
+    start = np.linalg.qr(np.random.default_rng(5).standard_normal((n, n)))[0][:, :2]
+    plain = fit_basis(matrices, np.eye(n), rank=2, start=start)
+    with_candidates = fit_basis(matrices, np.eye(n), rank=2, start=start, candidates=4)
+    np.testing.assert_allclose(plain.basis, with_candidates.basis)
+
+
 def test_reduce_accepts_a_cohort_of_arrays(cohort):
     matrices, _ = cohort
     result = reduce(list(matrices), rank=3, seed=0)

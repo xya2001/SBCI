@@ -397,9 +397,13 @@ Three things to know:
   begins from a random vector, as in the reference; `seed=0` by default, so a
   run repeats exactly, and `seed=None` draws afresh. On the synthetic cohort
   twelve seeds agree on the first three components and differ in the fourth,
-  and about one start in fifteen misses a component the others find. If a
-  component matters, check that a second seed reproduces it, and read
-  `explained` before trusting a rank.
+  and about one start in fifteen misses a component the others find; with
+  more anatomical variation it can miss the largest component altogether
+  (PORTING.md item 5). `candidates=6` starts each component from the six
+  leading eigenvectors of the mode-1 Gram matrix and keeps the largest, at
+  about three times the cost. If a component matters, check that a second
+  seed or `candidates=6` reproduces it, and read `explained` before trusting
+  a rank.
 - **`alpha` is a roughness penalty with a turning point.** Components are
   chosen by largest *magnitude* eigenvalue and the penalty enters negatively,
   so once it outweighs the data the fit returns the *roughest* direction

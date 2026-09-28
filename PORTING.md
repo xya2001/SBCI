@@ -412,6 +412,41 @@ diagonalization. A full `eigh` on the 5124-vertex grid would cost hours for a
 single vector. ARPACK is the library MATLAB's `eigs` itself calls, so the large
 case is if anything closer to the reference; the two paths agree to 5.3e-15.
 
+### A second divergence, off by default: where each component starts
+
+The reference starts each component from a random vector (`normrnd`) put
+through thirty power iterations on the mode-1 Gram matrix `sum_s R_s R_s'`,
+then stops at the first stationary point of the alternating updates. The port
+does the same by default, now from `seed=0` so that a run repeats. Measured on
+the synthetic cohort (ten subjects, 20,000 streamlines, rank 4):
+
+- twelve seeds agree to the last digit on the first three components and
+  differ in the fourth, and about one start in fifteen misses a component the
+  others find -- two jobs on identical data disagreed about whether the
+  planted bundle was among the four;
+- with the anatomy jittered by three degrees (`anatomy=0.05`) no seed of
+  twelve finds the planted bundle. Started at the bundle, the fit returns it
+  as a component of scale 2.65e-8 against 2.60e-8 for the component the
+  default finds first, with adjusted p 0.0003: it is the largest single
+  component in the data. It is the *sixth* eigenvector of the Gram matrix,
+  whose top six eigenvalues lie within 30% of one another (1.26 down to 0.91
+  e-15), so the power iteration lands on the first. At one and a half degrees
+  it is the third eigenvector (scale 2.67e-8 against 2.46e-8) and the fit
+  finds it only as the second to fourth component.
+
+The Gram matrix ranks patterns by their Frobenius norm across subjects, which
+favours a coherent shift of many bundles over a change of weight in one; the
+objective ranks them by their best separable approximation, and the two
+disagree exactly when several patterns are of similar size. `candidates=k`
+computes the top `k` eigenvectors of the Gram operator by Lanczos (a few
+seconds on ico4), runs the alternating updates from each and keeps the largest
+component; `candidates=6` finds the bundle in both cases -- at three degrees
+as the second component, with the largest scale of the four and adjusted p
+0.0003, the explained fraction rising from 0.182 to 0.194 -- at about three
+times the cost of the default (312 s against 94 s for ten subjects at rank
+4). The default stays at 1 because the reference has no such step; making it
+6 is a WP1 decision.
+
 ### Speed
 
 The fit is bound by memory traffic over the cohort: every application of the

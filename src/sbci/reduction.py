@@ -52,6 +52,24 @@ fixed by default so that a run can be repeated, ``explained`` says how much
 the fit captured, and a component that matters should not be trusted to a
 single start when a second seed does not reproduce it.
 
+It can matter more than the margin. With the cohort's anatomy jittered by
+three degrees the planted bundle is still the largest single component (its
+scale beats anything the default finds, and started there the fit returns it
+with adjusted p 0.0003), but it is the *sixth* eigenvector of the mode-1
+Gram matrix, whose top eigenvalues lie within 30% of each other, so thirty
+power iterations from any of twelve seeds land on the first and the bundle is
+never seen; at one and a half degrees it is the third eigenvector and the fit
+finds it only as the second to fourth component. The Gram matrix ranks
+patterns by their Frobenius norm across subjects, which favours a shift of
+many bundles over a change of weight in one; the objective ranks them by
+their best separable approximation. ``candidates=6`` starts each component
+from the six leading eigenvectors (Lanczos on the operator, a few seconds)
+and keeps the largest component they lead to, which finds the bundle in both
+cases (at three degrees as the second component, with the largest scale of
+the four and adjusted p 0.0003) at about three times the cost. It is off by
+default because the reference does not do it; PORTING.md item 5 has the
+measurements.
+
 A bug in the reference
 ----------------------
 ``ConConBasis.Fit`` as published cannot run: at line 260 it reads
@@ -71,6 +89,9 @@ import numpy as np
 from . import spec
 
 DEFAULT_ALPHA = 1e-10
+
+#: Lanczos tolerance for the candidate starts; they are refined afterwards.
+CANDIDATE_TOLERANCE = 1e-6
 """Roughness penalty. The reference's default, effectively off."""
 
 
@@ -265,6 +286,31 @@ def _mode1_gram(residual):
     return apply
 
 
+def _gram_eigenvectors(residual, count: int, rng) -> list:
+    """The top ``count`` eigenvectors of the mode-1 Gram matrix, largest first.
+
+    Lanczos on the operator: a few dozen applications, each ``2 n^2 S`` flops,
+    against the reference's thirty power iterations that converge on one
+    eigenvector only when it stands clear of the next.
+    """
+    from scipy.sparse.linalg import ArpackNoConvergence, LinearOperator, eigsh
+
+    n = residual.shape[1]
+    operator = LinearOperator((n, n), matvec=_mode1_gram(residual), dtype=np.float64)
+    start = rng.standard_normal(n)
+    try:
+        values, vectors = eigsh(
+            operator, k=min(count, n - 1), which="LA", v0=start, tol=CANDIDATE_TOLERANCE
+        )
+    except ArpackNoConvergence as error:  # pragma: no cover - rare, and recoverable
+        values, vectors = error.eigenvalues, error.eigenvectors
+        if vectors.size == 0:
+            vector = power_iteration(operator, start / np.linalg.norm(start))
+            values, vectors = np.ones(1), vector[:, None] / np.linalg.norm(vector)
+    order = np.argsort(values)[::-1]
+    return [vectors[:, index] for index in order]
+
+
 @dataclass
 class Reduction:
     """The fitted basis, the scores, and how much each component explains."""
@@ -324,6 +370,7 @@ def fit_basis(
     tol_inner: float = 1e-3,
     seed=0,
     start=None,
+    candidates: int = 1,
     copy: bool = True,
 ) -> Reduction:
     """Estimate the shared basis, one component at a time.
@@ -354,7 +401,17 @@ def fit_basis(
         notes).
     start
         ``(n, rank)`` initial vectors, one per component, used instead of the
-        random draws.
+        random draws (and instead of ``candidates``).
+    candidates
+        How many eigenvectors of the mode-1 Gram matrix to try as the start of
+        each component. ``1`` is the reference: a random vector put through
+        ``max_inner`` power iterations, which lands near the leading
+        eigenvector. More than one computes the top ``candidates``
+        eigenvectors by Lanczos, runs the alternating updates from each and
+        keeps the component with the largest scale. On the synthetic cohort
+        the planted bundle is the third or sixth eigenvector and the largest
+        component of all, and the reference start never reaches it (see the
+        module notes); ``candidates=6`` finds it, at about three times the cost.
     copy
         Work on a copy of ``matrices`` (the default). ``False`` deflates the
         given array in place, which :func:`reduce` uses so that the cohort is
@@ -366,6 +423,9 @@ def fit_basis(
     n_subjects, n, _ = matrices.shape
     if rank < 1:
         raise ValueError(f"rank must be at least 1, got {rank}")
+    if int(candidates) < 1:
+        raise ValueError(f"candidates must be at least 1, got {candidates}")
+    candidates = int(candidates)
 
     gram = np.asarray(gram, dtype=np.float64)
     if gram.ndim == 1:
@@ -397,17 +457,10 @@ def fit_basis(
     objective = np.zeros((rank, max_outer))
     inverted_warning_given = False
 
-    for k in range(rank):
-        deflation = _Deflation(components[:, :k] if k else None, gram)
-
-        # Initialise from the leading eigenvector of the mode-1 Gram matrix.
-        if starts is not None:
-            guess = starts[:, k]
-        else:
-            guess = rng.standard_normal(n)
-            guess /= np.linalg.norm(guess)
-        vector = power_iteration(_mode1_gram(residual), guess, max_inner, tol_inner)
-        vector = vector / np.linalg.norm(vector)
+    def refine(vector, deflation):
+        """The alternating updates from ``vector``: the component, its scores and trajectory."""
+        nonlocal inverted_warning_given
+        trajectory = np.zeros(max_outer)
 
         weights = (residual @ vector) @ vector  # v' R_s v for every subject, by BLAS
         norm = np.linalg.norm(weights)
@@ -416,7 +469,7 @@ def fit_basis(
         contracted = np.tensordot(score, residual, axes=(0, 0))
         regularized = contracted if penalty is None else contracted - alpha * penalty
         regularized = (regularized + regularized.T) / 2
-        objective[k, 0] = deflation.quadratic(regularized, vector)
+        trajectory[0] = deflation.quadratic(regularized, vector)
 
         change = np.inf
         step = 0
@@ -437,8 +490,8 @@ def fit_basis(
                 )
                 vector = vector / np.linalg.norm(vector)
 
-            objective[k, step + 1] = deflation.quadratic(regularized, vector)
-            if objective[k, step + 1] < 0 and not inverted_warning_given:
+            trajectory[step + 1] = deflation.quadratic(regularized, vector)
+            if trajectory[step + 1] < 0 and not inverted_warning_given:
                 # The trap described in the module docstring: the penalty (or a
                 # dominant negative mode) has taken over and the component is
                 # the roughest direction, not the smoothest.
@@ -446,14 +499,40 @@ def fit_basis(
                     f"component {k}: the selected eigenvalue is negative, so the fit "
                     "is returning the roughest direction; lower alpha",
                     RuntimeWarning,
-                    stacklevel=2,
+                    stacklevel=3,
                 )
                 inverted_warning_given = True
-            if objective[k, 0] != 0:
-                change = abs((objective[k, step + 1] - objective[k, step]) / objective[k, 0])
+            if trajectory[0] != 0:
+                change = abs((trajectory[step + 1] - trajectory[step]) / trajectory[0])
             step += 1
 
         scale = float(vector @ contracted @ vector)
+        return vector, score, contracted, trajectory, scale
+
+    for k in range(rank):
+        deflation = _Deflation(components[:, :k] if k else None, gram)
+
+        if starts is None and candidates > 1:
+            # Try the leading eigenvectors of the mode-1 Gram matrix in turn and
+            # keep the largest component they lead to.
+            fitted = None
+            for candidate in _gram_eigenvectors(residual, candidates, rng):
+                trial = refine(candidate, deflation)
+                if fitted is None or trial[-1] > fitted[-1]:
+                    fitted = trial
+        else:
+            # The reference: a random start (or the one supplied) put through
+            # the power iteration on the mode-1 Gram matrix.
+            if starts is not None:
+                guess = starts[:, k]
+            else:
+                guess = rng.standard_normal(n)
+                guess /= np.linalg.norm(guess)
+            vector = power_iteration(_mode1_gram(residual), guess, max_inner, tol_inner)
+            fitted = refine(vector / np.linalg.norm(vector), deflation)
+        vector, score, contracted, trajectory, scale = fitted
+        objective[k] = trajectory
+
         # Deflate subject by subject: one n x n temporary instead of a whole
         # cohort-sized one, which on the ico4 grid is the difference between
         # 210 MB and 8 GB per component.
