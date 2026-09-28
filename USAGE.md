@@ -186,6 +186,20 @@ are bundled -- inflated (the default), white, pial and sphere -- all in the
 grid's vertex order and sharing one face list (`SPEC_QUESTIONS.md` items 11
 and 13).
 
+The grid itself has 5124 vertices and draws faceted. For a figure worth
+showing, pass `mesh="fsaverage"`: the map is interpolated onto FreeSurfer's
+fsaverage surface (163,842 vertices per hemisphere), shaded by FreeSurfer's
+own sulcal depth, with the medial wall still flat. The values stay on ico4;
+only the drawing is finer. nilearn fetches fsaverage once into
+`~/nilearn_data` (do that on a login node if compute nodes have no network);
+`mesh="fsaverage5"` (10,242 per hemisphere) ships inside nilearn and needs no
+download. The finest mesh takes about a minute per view to render.
+
+```python
+figure = sc.plot(coupling_map, mesh="fsaverage", cmap="coolwarm")
+figure.savefig("coupling.png", dpi=200)
+```
+
 ## `save` and `sbci validate`
 
 ```python

@@ -24,6 +24,7 @@ import numpy as np  # noqa: E402
 from matplotlib.colors import LinearSegmentedColormap, LogNorm  # noqa: E402
 
 import sbci  # noqa: E402
+from sbci.plotting import display_mesh  # noqa: E402
 
 # One blue for magnitude, orange for a second series, muted ink for text and axes.
 BLUE, ORANGE, INK, MUTED, RULE = "#2a78d6", "#eb6834", "#0b0b0b", "#52514e", "#d9d8d3"
@@ -39,6 +40,9 @@ SURFACE_RAMP = LinearSegmentedColormap.from_list(
 #: so the profile and the region matrix are smooth rather than speckled.
 N_STREAMLINES = 200_000
 VIEWS = ("lateral", "medial")
+#: Surface figures are drawn on FreeSurfer's fsaverage (163,842 vertices per
+#: hemisphere) with the map interpolated onto it, not on the faceted grid.
+DISPLAY_MESH = "fsaverage"
 TITLE_SIZE = 17  # the surface figures are large; a 12-point title reads as a footnote on them
 
 plt.rcParams.update(
@@ -58,7 +62,7 @@ plt.rcParams.update(
 )
 
 
-def save(figure, out: Path, name: str, dpi: int = 125) -> None:
+def save(figure, out: Path, name: str, dpi: int = 200) -> None:
     path = out / name
     figure.savefig(path, dpi=dpi, bbox_inches="tight")
     plt.close(figure)
@@ -71,11 +75,20 @@ SEED = 1234  # a left temporal vertex
 def seed_profile(out: Path, cc) -> None:
     profile = cc.seed(vertex=SEED)
     profile = profile / profile.max()  # unit-mass densities are 1e-10 per pair; show the shape
-    figure = cc.plot(profile, views=VIEWS, cmap=SURFACE_RAMP, threshold=0.02, vmin=0.02, vmax=1.0)
+    figure = cc.plot(
+        profile,
+        views=VIEWS,
+        cmap=SURFACE_RAMP,
+        threshold=0.02,
+        vmin=0.02,
+        vmax=1.0,
+        mesh=DISPLAY_MESH,
+    )
     # Mark the seed on the lateral view of its hemisphere. nilearn recentres
     # each hemisphere on its own mean before drawing, so do the same.
-    left = np.asarray(sbci.load_surface("inflated").vertices[: cc.n_vertices // 2], dtype=float)
-    x, y, z = left[SEED] - left.mean(axis=0)
+    display = display_mesh(DISPLAY_MESH)
+    left = display.geometries["inflated"][0]
+    x, y, z = left[display.nearest[0][SEED]] - left.mean(axis=0)
     lateral = figure.axes[0]
     # A 3-D axes sorts artists by depth and would bury the dot under the mesh;
     # switch to drawing order so the marker sits on top.
@@ -120,7 +133,7 @@ def smoothing_power(out: Path) -> None:
 
     from sbci.atlas import cortex_mask
     from sbci.plotting import _import_nilearn
-    from sbci.surface import sulcal_depth, vertex_normals
+    from sbci.surface import vertex_normals
 
     # The same bundles every time, only the streamlines redrawn: a test-retest pair
     # at the example's default count, and one draw with ten times as many.
@@ -156,13 +169,14 @@ def smoothing_power(out: Path) -> None:
     )
 
     nilearn_plotting = _import_nilearn()
-    mesh = sbci.load_surface("inflated")
-    half = mesh.n_vertices // 2
-    left = mesh.hemisphere("L")
-    vertices, faces = np.array(left.vertices, dtype=float), np.array(left.faces)
+    display = display_mesh(DISPLAY_MESH)
+    half = sbci.load_surface("inflated").n_vertices // 2
+    vertices, faces = display.geometries["inflated"][0], display.faces[0]
     centred = vertices - vertices.mean(axis=0)  # nilearn recentres each hemisphere
     facing = vertex_normals(vertices, faces)[:, 0] < 0  # the lateral view looks from -x
-    depth = np.where(cortex, sulcal_depth(), 0.0)[:half]
+    on_cortex = np.nan_to_num(display.interpolate(cortex.astype(float))[0]) > 0.5
+    depth = np.where(on_cortex, display.sulc[0], 0.0)
+    smooth_hi = [display.interpolate(np.where(cortex, values, np.nan))[0] for values in smooth]
 
     figure, axes = plt.subplots(
         2, 3, figsize=(15, 7.6), subplot_kw={"projection": "3d"}, layout="constrained"
@@ -171,10 +185,9 @@ def smoothing_power(out: Path) -> None:
         for column in range(3):
             axis = axes[row, column]
             if row == 0:
-                surf_map, threshold, vmin, vmax = np.zeros(half), 0.5, 0.0, 1.0
+                surf_map, threshold, vmin, vmax = np.zeros(vertices.shape[0]), 0.5, 0.0, 1.0
             else:
-                surf_map = np.where(cortex, smooth[column], np.nan)[:half]
-                threshold, vmin, vmax = 0.02, 0.02, 1.0
+                surf_map, threshold, vmin, vmax = smooth_hi[column], 0.02, 0.02, 1.0
             nilearn_plotting.plot_surf(
                 surf_mesh=(vertices.copy(), faces.copy()),
                 surf_map=surf_map,
@@ -195,7 +208,8 @@ def smoothing_power(out: Path) -> None:
             if row == 0:
                 # The far ends of the streamlines that touch the vertex, where they
                 # fall on the visible side of this hemisphere.
-                local = partners[column][partners[column] < half]
+                local = partners[column][partners[column] < half]  # left hemisphere
+                local = display.nearest[0][local]  # the mesh vertex nearest each grid vertex
                 local = local[facing[local]]
                 axis.scatter(
                     centred[local, 0],
@@ -211,10 +225,11 @@ def smoothing_power(out: Path) -> None:
                 kind = f"raw: the {touching[column]} streamlines touching the vertex"
             else:
                 kind = "smoothed density"
+            seed_vertex = display.nearest[0][SEED]
             axis.scatter(
-                [centred[SEED, 0]],
-                [centred[SEED, 1]],
-                [centred[SEED, 2]],
+                [centred[seed_vertex, 0]],
+                [centred[seed_vertex, 1]],
+                [centred[seed_vertex, 2]],
                 s=80,
                 color=ORANGE,
                 edgecolor="white",
@@ -282,7 +297,9 @@ def coupling(out: Path, sc, fc) -> None:
     values = sc.coupling(fc)
     # Coupling is high almost everywhere on the synthetic pair, so a symmetric
     # scale would paint the whole surface one shade: run the ramp from zero.
-    figure = sc.plot(values, views=VIEWS, cmap=SURFACE_RAMP, symmetric=False, vmin=0.0)
+    figure = sc.plot(
+        values, views=VIEWS, cmap=SURFACE_RAMP, symmetric=False, vmin=0.0, mesh=DISPLAY_MESH
+    )
     figure.suptitle(
         "Structure-function coupling: at each vertex, the cosine similarity of its SC and FC "
         "profiles",
@@ -306,7 +323,13 @@ def cohort_figures(out: Path) -> None:
     subject = cohort.connectomes[0]
 
     figure = subject.plot(
-        cohort.truth, views=VIEWS, cmap=SURFACE_RAMP, threshold=0.02, vmin=0.02, vmax=1.0
+        cohort.truth,
+        views=VIEWS,
+        cmap=SURFACE_RAMP,
+        threshold=0.02,
+        vmin=0.02,
+        vmax=1.0,
+        mesh=DISPLAY_MESH,
     )
     figure.suptitle(
         "The planted bundle: the field whose weight scales with age (cohort.truth)",
@@ -317,7 +340,9 @@ def cohort_figures(out: Path) -> None:
 
     effect = result.effect_map(reduction, alpha=0.05)
     effect = effect / np.abs(effect).max()
-    figure = subject.plot(effect, views=VIEWS, cmap="coolwarm", symmetric=True, threshold=0.05)
+    figure = subject.plot(
+        effect, views=VIEWS, cmap="coolwarm", symmetric=True, threshold=0.05, mesh=DISPLAY_MESH
+    )
     correlation = np.corrcoef(effect, cohort.truth)[0, 1]
     figure.suptitle(
         "Recovered: the effect map of the component that tracks age\n"
