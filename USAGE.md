@@ -363,6 +363,11 @@ occupy about 520 MB as connectomes and four times that inside `reduce`.
 from the same bundles and weights, for coupling analyses across subjects.
 Every file says `synthetic-cohort` in its `pipeline_version`.
 
+What happens with more anatomical variation, and what aligning first does to
+the analysis, is measured in PORTING.md items 5 and 7: at three degrees the
+FPCA needs `candidates=6` to reach the planted bundle, ENCORE puts it first,
+and ConSEAL keeps it with the public update but not with the paper's.
+
 ## Reducing a cohort to a handful of numbers
 
 A connectome is thirteen million numbers. FPCA finds a small set of surface
@@ -504,7 +509,7 @@ Without lab data, two synthetic subjects will do:
 takes about a minute on four cores, and both costs fall at every step.
 **This is a batch job too**, though a lighter one: the heat kernel at the
 published bandwidth has 89 nonzeros per row on ico4, so an iteration costs
-seconds per 100,000 streamlines rather than minutes. Three things to know:
+seconds per 100,000 streamlines rather than minutes. Six things to know:
 - **The defaults are the public code's, not the paper's.** Step 0.05, up to
   100 iterations, threshold 1e-4, a 0.2 clamp on the largest displacement and
   5% Laplacian smoothing of the velocity field every step. The paper's own
@@ -524,6 +529,25 @@ seconds per 100,000 streamlines rather than minutes. Three things to know:
   registration after a few iterations; `threshold=1e-7` lets it converge. On
   a known deformation the public defaults undo a third of it, the paper's
   update rule four fifths (PORTING.md item 7).
+- **The Karcher median can be one subject.** With `template=None` the median
+  starts at the subject nearest the mean and takes Weiszfeld steps until one
+  is shorter than 0.005, as `get_template` does. When the subjects sit evenly
+  around the mean the first step is already that short and the template *is*
+  that subject: its cost is 0, it takes no iterations, and everyone else is
+  registered onto its bundles. On the synthetic cohort this happens at three
+  degrees of anatomical spread (every subject 10 to 11 Fisher-Rao degrees
+  from the mean) and not at two. Pass `template=` a subject index or a
+  precomputed square-root density -- the normalized mean of the subjects'
+  `q_transform(kernel)` arrays, for one -- to choose.
+- **The paper's unregularized update onto one subject can align away a real
+  difference.** With `delta=0.1, step_clamp=inf, viscosity=0` and the template
+  collapsed onto a subject, the planted bundle of
+  `sbci.example_cohort(anatomy=0.05)` is gone from a rank-4 FPCA that finds it
+  unaligned, after ENCORE, after the same update onto the mean template, and
+  after the public update (clamp 0.2, viscosity 0.05) onto that same subject:
+  an unclamped, unsmoothed warp can match one subject's bundles exactly.
+  Either a chosen template or the public regularization keeps the difference
+  (PORTING.md item 7).
 ![Alignment with a known answer](docs/figures/alignment_recovery.png)
 
 *A synthetic subject's endpoints moved by a known smooth warp (a degree on

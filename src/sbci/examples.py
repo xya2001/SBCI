@@ -73,8 +73,9 @@ COHORT_WEIGHT_SPREAD = 0.10
 #: ... and the bundle centres are displaced by a smooth random tangent field of
 #: about this many radians (a degree), so subjects differ in anatomy while a
 #: bundle stays a bundle. Calibrated so that a rank-4 FPCA of ten subjects still
-#: finds the planted effect; at 0.05 (three degrees) it no longer does, which
-#: is what the alignment methods are for.
+#: finds the planted effect from its default start; at 0.05 (three degrees) that
+#: start misses it although it is still the largest component, and
+#: ``reduce(candidates=6)`` finds it (PORTING.md item 5).
 COHORT_ANATOMY_SPREAD = 0.02
 
 
@@ -403,8 +404,10 @@ def example_cohort(
     (adjusted p about 1e-4), and its :meth:`~sbci.stats.LocalTest.effect_map`
     correlates above 0.8 with :attr:`Cohort.truth`. The effect is one source of
     variance among the individual variation, not the largest -- at ``effect=0.5``
-    a rank-4 FPCA misses it, and with ``anatomy=0.05`` (three degrees) so does
-    ``effect=0.7``, which is the case the alignment methods exist for. Nothing
+    a rank-4 FPCA misses it. With ``anatomy=0.05`` (three degrees) the bundle
+    is still the largest single component but the fit's default start no
+    longer reaches it; ``sbci.reduce(..., candidates=6)`` does, and after
+    :func:`sbci.align` it comes out first (PORTING.md items 5 and 7). Nothing
     here was measured from anyone; the metadata says so.
 
     Parameters

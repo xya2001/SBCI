@@ -1138,6 +1138,37 @@ property of the problem, not a fault of the port. ENCORE on the same pair,
 with its inverse applied to the endpoints, reaches 0.40 degrees, 59% undone
 (item 4).
 
+### Measured on the synthetic cohort
+
+`sbci.example_cohort(n_subjects=10, n_streamlines=20000, anatomy=a)` plants
+one bundle whose weight rises with age and jitters every subject's anatomy by
+a smooth field of spread `a`. Aligning the cohort and then fitting a rank-4
+FPCA with `candidates=6` (so that the fit reaches the largest component, item
+5) measures what each method does to a real between-subject difference:
+
+| cohort | unaligned | after ENCORE (10 it) | after ConSEAL, paper's update, Karcher median (30 it) | after ConSEAL, public update, Karcher median | after ConSEAL, paper's update, mean template |
+| --- | --- | --- | --- | --- | --- |
+| `anatomy=0.03` | found, first component, r = 0.94 | found first, 0.94 | found first, 0.94 | found first, 0.94 | not run |
+| `anatomy=0.04` | found first, 0.93 | found first, 0.95 | found first, 0.95 | not run | not run |
+| `anatomy=0.05` | found second, 0.92 | found first, 0.94 | **not found** | found second, 0.94 | found first, 0.94 |
+
+(`r` is the correlation of the component with the planted bundle; every
+"found" has adjusted p below 0.001.) Three things follow. ENCORE never
+removes the effect and brings it to the front. The Karcher median is one
+subject at three degrees: the Weiszfeld iteration starts at the subject
+nearest the mean and stops when a step is shorter than 0.005, and with every
+subject 10 to 11 Fisher-Rao degrees from the mean the first step already is,
+so subject 1 becomes the template (cost 0, no iterations) and the others are
+registered onto its bundles. And the paper's update (no clamp, no viscosity)
+onto that one subject reshapes the bundles enough to remove a fivefold weight
+difference, while the same update onto the mean of the square-root densities
+keeps it, as does the public code's clamp and viscosity onto the one subject.
+With the reference start instead of `candidates=6`, alignment *lowers* the
+chance of finding the bundle at rank 4 (six seeds: unaligned 0, 4 and 6 of 6
+at the three spreads; after the paper's ConSEAL 0, 0 and 1 of 6), because
+the aligned cohort's Gram spectrum is flatter still; rank 8 with the
+reference start finds it unaligned in 5, 6 and 6 of 6.
+
 ### Still open
 
 - The port follows the public code. Reproducing the paper's experiments

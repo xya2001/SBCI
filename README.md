@@ -164,6 +164,17 @@ the port halves the step instead (PORTING.md item 4).
 
 ![Alignment with a known answer](docs/figures/alignment_recovery.png)
 
+**Alignment and the analysis.** Turn the cohort's anatomical spread up to
+three degrees (`example_cohort(anatomy=0.05)`) and the planted bundle is
+still the largest single component of the cohort, but the FPCA's default
+start, a power iteration inherited from the reference, no longer reaches it;
+`sbci.reduce(..., candidates=6)` does. Aligned with ENCORE first, the bundle
+comes out as the first component at every spread tried. ConSEAL keeps it too,
+except with the paper's unregularized update onto a template that has
+collapsed onto one subject, which can align the difference away; the public
+regularization or a mean template keeps it. PORTING.md items 5 and 7 have the
+table.
+
 ![The planted bundle](docs/figures/cohort_truth.png)
 
 *The planted bundle, `cohort.truth`: the field whose weight was scaled with
