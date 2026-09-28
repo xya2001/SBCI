@@ -25,4 +25,4 @@ there is nothing to see.
 | `cohort_truth.png` | the planted bundle of `sbci.example_cohort()`, the field whose weight scales with age |
 | `cohort_effect.png` | what `reduce` and `local_test` recover: the effect map of the significant component |
 | `cohort_scores.png` | that component's scores against the synthetic age, with the fitted line and the adjusted p-value |
-| `alignment_recovery.png` | a subject's endpoints moved by a known smooth warp and registered back onto the original by ConSEAL and by ENCORE: how far each endpoint still is from where it started, and the cost per iteration |
+| `alignment_recovery.png` | a subject's endpoints moved by a known smooth warp and registered back onto the original by ENCORE and by ConSEAL: how far each endpoint still is from where it started, and the cost per iteration |

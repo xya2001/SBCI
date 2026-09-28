@@ -232,23 +232,6 @@ def alignment_recovery(out: Path) -> None:
     before = np.r_[angles(original[0], moved[0]), angles(original[1], moved[1])]
 
     t = time.time()
-    conseal = sbci.endpoints_align(
-        [subject, deformed],
-        template=0,
-        max_iterations=60,
-        threshold=1e-7,
-        delta=0.1,
-        step_clamp=float("inf"),
-        viscosity=0.0,
-    )
-    back = endpoint_positions(conseal.aligned_endpoints(1))
-    after_conseal = np.r_[angles(original[0], back[0]), angles(original[1], back[1])]
-    print(
-        f"  ConSEAL in {time.time() - t:.0f}s: {before.mean():.2f} -> {after_conseal.mean():.2f}",
-        flush=True,
-    )
-
-    t = time.time()
     grids, rotations = _hemisphere_grids(DEFAULT_WARP_ORDER, return_rotations=True)
     encore = align(
         [subject, deformed],
@@ -276,12 +259,30 @@ def alignment_recovery(out: Path) -> None:
         flush=True,
     )
 
+    t = time.time()
+    conseal = sbci.endpoints_align(
+        [subject, deformed],
+        template=0,
+        max_iterations=60,
+        threshold=1e-7,
+        delta=0.1,
+        step_clamp=float("inf"),
+        viscosity=0.0,
+    )
+    back = endpoint_positions(conseal.aligned_endpoints(1))
+    after_conseal = np.r_[angles(original[0], back[0]), angles(original[1], back[1])]
+    print(
+        f"  ConSEAL in {time.time() - t:.0f}s: "
+        f"{before.mean():.2f} -> {after_conseal.mean():.2f} deg",
+        flush=True,
+    )
+
     figure, (left, right) = plt.subplots(1, 2, figsize=(11.5, 4.2))
     bins = np.linspace(0, 3.0, 61)
     for values, color, label in (
         (before, MUTED, "as deformed"),
-        (after_conseal, BLUE, "after ConSEAL"),
-        (after_encore, ORANGE, "after ENCORE"),
+        (after_encore, BLUE, "after ENCORE"),
+        (after_conseal, ORANGE, "after ConSEAL"),
     ):
         left.hist(
             values,
@@ -296,8 +297,8 @@ def alignment_recovery(out: Path) -> None:
     left.set_title("Endpoints moved by a known warp, and put back", loc="left")
     left.legend(frameon=False)
     for trace, color, label in (
-        (np.asarray(conseal.costs[1]), BLUE, "ConSEAL"),
-        (np.asarray(encore.traces[1]), ORANGE, "ENCORE"),
+        (np.asarray(encore.traces[1]), BLUE, "ENCORE"),
+        (np.asarray(conseal.costs[1]), ORANGE, "ConSEAL"),
     ):
         relative = trace / trace[0]
         right.plot(range(len(relative)), relative, color=color, linewidth=2, label=label)

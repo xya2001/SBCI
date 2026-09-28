@@ -153,14 +153,11 @@ lines). Timings are for four cores.
 
 **Alignment, with a known answer.** A subject's endpoints were moved by a
 known smooth warp, a degree on average and four at most, and the deformed
-copy was registered back onto the original. ConSEAL puts the endpoints back
-to within 0.17 degrees of where they started, undoing 82% of the displacement
-and 99% of the cost, with the paper's update rule and a stopping threshold of
-1e-7; with the public code's defaults it stops after ten iterations at 0.47
-degrees. ENCORE, whose warp is undone through its inverse, reaches 0.40
-degrees. The public ENCORE code would have done nothing on this pair: its
-fixed step overshoots a small deformation at the first try and it stops, so
-the port halves the step instead (PORTING.md item 4).
+copy was registered back onto the original. ENCORE, whose warp is undone
+through its inverse, puts the endpoints back to within 0.40 degrees of where
+they started, undoing 59% of the displacement; ConSEAL, with the paper's
+update rule and a stopping threshold of 1e-7, to within 0.17 degrees, undoing
+82% of the displacement and 99% of the cost (PORTING.md items 4 and 7).
 
 ![Alignment with a known answer](docs/figures/alignment_recovery.png)
 
@@ -170,10 +167,10 @@ still the largest single component of the cohort, but the FPCA's default
 start, a power iteration inherited from the reference, no longer reaches it;
 `sbci.reduce(..., candidates=6)` does. Aligned with ENCORE first, the bundle
 comes out as the first component at every spread tried. ConSEAL keeps it too,
-except with the paper's unregularized update onto a template that has
-collapsed onto one subject, which can align the difference away; the public
-regularization or a mean template keeps it. PORTING.md items 5 and 7 have the
-table.
+except with an unregularized update (no clamp, no viscosity) onto a template
+that has collapsed onto one subject, which can align the difference away; the
+default regularization or a mean template keeps it. PORTING.md items 5 and 7
+have the table.
 
 ![The planted bundle](docs/figures/cohort_truth.png)
 

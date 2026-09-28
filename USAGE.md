@@ -552,10 +552,11 @@ seconds per 100,000 streamlines rather than minutes. Six things to know:
 
 *A synthetic subject's endpoints moved by a known smooth warp (a degree on
 average, four at most) and registered back onto the original: how far each
-endpoint still is from where it started, and the cost per iteration. ConSEAL
-with the paper's update (`delta=0.1, step_clamp=inf, viscosity=0`) and a
-stopping threshold of 1e-7 puts the endpoints back to within 0.17 degrees on
-average; ENCORE, undone through the inverse of its warp, to within 0.40.*
+endpoint still is from where it started, and the cost per iteration. ENCORE,
+undone through the inverse of its warp, puts the endpoints back to within
+0.40 degrees on average; ConSEAL with the paper's update (`delta=0.1,
+step_clamp=inf, viscosity=0`) and a stopping threshold of 1e-7, to within
+0.17.*
 
 ## Writing the exchange file
 
