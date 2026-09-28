@@ -63,6 +63,22 @@ left temporal cortex) and that vertex, relative to the strongest, on the
 inflated surface shaded by sulcal depth. More figures, all from the synthetic
 data, are in [docs/figures](docs/figures/README.md).*
 
+**What smoothing does.** Tractography gives endpoints. With 20,000
+streamlines, six of them touch vertex 1234 in one draw of the synthetic
+subject and ten in another, and the two draws share nothing: across the
+cortex their raw counts correlate at r = 0.00. Smoothing spreads each endpoint
+with the kernel and turns those handfuls into densities that agree at
+r = 0.89, and the first agrees at r = 0.93 with a draw of 200,000
+streamlines. That is what makes two subjects, or two sessions, comparable
+vertex by vertex.
+
+![Smoothing, from endpoints to a comparable map](docs/figures/smoothing_power.png)
+
+*Top: the far ends of the streamlines that touch the vertex (blue dots), in
+two independent draws of 20,000 streamlines and one of 200,000. Bottom: the
+smoothed density of the same vertex in each draw, relative to its strongest
+vertex.*
+
 ## With real data
 
 ```python

@@ -100,6 +100,152 @@ def seed_profile(out: Path, cc) -> None:
     save(figure, out, "seed_profile.png")
 
 
+#: Streamlines per draw in the smoothing figure: the example's default, and a
+#: tenth of the single-subject figures.
+SMOOTHING_DRAWS = 20_000
+
+
+def _partners(cc, vertex: int) -> np.ndarray:
+    """Global vertex index of the far end of every streamline touching ``vertex``."""
+    ends = cc.endpoints
+    first = ends.vtx_in + ends.n_per_hemi * ends.surf_in.astype(np.int64)
+    second = ends.vtx_out + ends.n_per_hemi * ends.surf_out.astype(np.int64)
+    return np.r_[second[first == vertex], first[second == vertex]]
+
+
+def smoothing_power(out: Path) -> None:
+    """The endpoints touching one vertex against its smoothed density, in three draws."""
+    from matplotlib.cm import ScalarMappable
+    from matplotlib.colors import Normalize
+
+    from sbci.atlas import cortex_mask
+    from sbci.plotting import _import_nilearn
+    from sbci.surface import sulcal_depth, vertex_normals
+
+    # The same bundles every time, only the streamlines redrawn: a test-retest pair
+    # at the example's default count, and one draw with ten times as many.
+    still = {"effect": 0.0, "variation": 0.0, "anatomy": 0.0}
+    draws = sbci.example_cohort(n_subjects=3, seed=0, n_streamlines=SMOOTHING_DRAWS, **still)
+    reference = sbci.example_cohort(n_subjects=1, seed=0, n_streamlines=N_STREAMLINES, **still)
+    subjects = [draws.connectomes[1], draws.connectomes[2], reference.connectomes[0]]
+    columns = [
+        f"draw A, {SMOOTHING_DRAWS:,} streamlines",
+        f"draw B, {SMOOTHING_DRAWS:,} streamlines",
+        f"{N_STREAMLINES:,} streamlines",
+    ]
+    cortex = cortex_mask()
+    partners = [_partners(cc, SEED) for cc in subjects]
+    counts = [
+        np.bincount(p, minlength=cc.n_vertices) for p, cc in zip(partners, subjects, strict=True)
+    ]
+    smooth = [cc.seed(vertex=SEED) for cc in subjects]
+    smooth = [values / values.max() for values in smooth]
+
+    def correlation(a, b):
+        return round(float(np.corrcoef(a[cortex], b[cortex])[0, 1]), 2) + 0.0
+
+    r_raw = correlation(counts[0], counts[1])
+    r_smooth = correlation(smooth[0], smooth[1])
+    r_reference = correlation(smooth[0], smooth[2])
+    touching = [int(p.size) for p in partners]
+    print(
+        f"  vertex {SEED}: {touching} streamlines touch it; r between draws: raw {r_raw:.2f}, "
+        f"smoothed {r_smooth:.2f}; smoothed draw A against the {N_STREAMLINES:,} map: "
+        f"{r_reference:.2f}",
+        flush=True,
+    )
+
+    nilearn_plotting = _import_nilearn()
+    mesh = sbci.load_surface("inflated")
+    half = mesh.n_vertices // 2
+    left = mesh.hemisphere("L")
+    vertices, faces = np.array(left.vertices, dtype=float), np.array(left.faces)
+    centred = vertices - vertices.mean(axis=0)  # nilearn recentres each hemisphere
+    facing = vertex_normals(vertices, faces)[:, 0] < 0  # the lateral view looks from -x
+    depth = np.where(cortex, sulcal_depth(), 0.0)[:half]
+
+    figure, axes = plt.subplots(
+        2, 3, figsize=(15, 7.6), subplot_kw={"projection": "3d"}, layout="constrained"
+    )
+    for row in range(2):
+        for column in range(3):
+            axis = axes[row, column]
+            if row == 0:
+                surf_map, threshold, vmin, vmax = np.zeros(half), 0.5, 0.0, 1.0
+            else:
+                surf_map = np.where(cortex, smooth[column], np.nan)[:half]
+                threshold, vmin, vmax = 0.02, 0.02, 1.0
+            nilearn_plotting.plot_surf(
+                surf_mesh=(vertices.copy(), faces.copy()),
+                surf_map=surf_map,
+                hemi="left",
+                view="lateral",
+                cmap=SURFACE_RAMP,
+                threshold=threshold,
+                vmin=vmin,
+                vmax=vmax,
+                colorbar=False,
+                axes=axis,
+                figure=figure,
+                bg_map=depth,
+                bg_on_data=True,
+                alpha=1.0,
+            )
+            axis.computed_zorder = False  # markers above the mesh, in drawing order
+            if row == 0:
+                # The far ends of the streamlines that touch the vertex, where they
+                # fall on the visible side of this hemisphere.
+                local = partners[column][partners[column] < half]
+                local = local[facing[local]]
+                axis.scatter(
+                    centred[local, 0],
+                    centred[local, 1],
+                    centred[local, 2],
+                    s=34,
+                    color=BLUE,
+                    edgecolor="white",
+                    linewidth=0.8,
+                    zorder=9,
+                    depthshade=False,
+                )
+                kind = f"raw: the {touching[column]} streamlines touching the vertex"
+            else:
+                kind = "smoothed density"
+            axis.scatter(
+                [centred[SEED, 0]],
+                [centred[SEED, 1]],
+                [centred[SEED, 2]],
+                s=80,
+                color=ORANGE,
+                edgecolor="white",
+                linewidth=1.5,
+                zorder=10,
+                depthshade=False,
+            )
+            axis.set_title(f"{columns[column]}\n{kind}", fontsize=13, y=0.92)
+    bar = figure.colorbar(
+        ScalarMappable(norm=Normalize(vmin=0.02, vmax=1.0), cmap=SURFACE_RAMP),
+        ax=axes.ravel().tolist(),
+        shrink=0.45,
+        pad=0.02,
+        format="%g",
+    )
+    bar.set_label("smoothed density, relative to the strongest vertex", color=MUTED)
+    bar.outline.set_visible(False)
+    figure.suptitle(
+        "Smoothing: from a handful of endpoints to a map you can compare\n"
+        f"vertex {SEED} (orange dot) in three draws of one synthetic subject, left hemisphere",
+        fontsize=TITLE_SIZE,
+    )
+    figure.supxlabel(
+        f"Draws A and B agree across the cortex at r = {r_raw:.2f} as raw counts and "
+        f"r = {r_smooth:.2f} once smoothed;\nsmoothed draw A matches the "
+        f"{N_STREAMLINES:,}-streamline map at r = {r_reference:.2f}.",
+        fontsize=13,
+    )
+    save(figure, out, "smoothing_power.png")
+
+
 def region_matrix(out: Path, cc) -> None:
     atlas = sbci.load_atlas("Desikan")
     matrix = cc.to_atlas(atlas, how="mass")
@@ -360,6 +506,7 @@ def main(argv: list[str]) -> int:
     print("single subject", flush=True)
     sc, fc = sbci.example("sc", n_streamlines=N_STREAMLINES), sbci.example("fc")
     seed_profile(out, sc)
+    smoothing_power(out)
     region_matrix(out, sc)
     coupling(out, sc, fc)
     print("kernel", flush=True)

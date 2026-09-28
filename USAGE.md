@@ -317,6 +317,15 @@ files. `spherical_heat_kernel(..., quantized=False)` gives the closed-form
 series the tables approximate. Only the ~31 vertices inside the 12.2-degree
 cutoff are visited per endpoint, found with a KD-tree.
 
+![Smoothing, from endpoints to a comparable map](docs/figures/smoothing_power.png)
+
+*Why the density and not the counts: the far ends of the streamlines touching
+vertex 1234 (blue dots) in two independent draws of 20,000 streamlines from
+one synthetic subject and one draw of 200,000, and the smoothed density of the
+same vertex in each. Across the cortex the two 20,000 draws correlate at
+r = 0.00 as raw counts and r = 0.89 once smoothed; smoothed draw A matches the
+200,000 map at r = 0.93.*
+
 ## A synthetic cohort, end to end
 
 `sbci.example()` gives one subject; `sbci.example_cohort()` gives a cohort
