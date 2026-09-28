@@ -55,29 +55,35 @@ plotting stack -- and never a basis for a claim about brains. Its metadata
 records `pipeline_version` as `synthetic-example` and says the endpoints were
 drawn, not tracked.
 
+The figures in this README are not from the synthetic example. They are drawn
+from ten HCP-Aging subjects, 38 to 83 years old, converted from the lab's
+pipeline output with `tools/build_hcp_cohort.py` and drawn on FreeSurfer's
+fsaverage surface with `plot(mesh="fsaverage")`; `scripts/hcp_figures.py`
+regenerates them, and [docs/figures](docs/figures/README.md) describes each.
+
 ![The connectivity of one vertex over the cortex](docs/figures/seed_profile.png)
 
-*`cc.plot(cc.seed(vertex=1234))`: where one vertex connects to. The value at
-each vertex is the density of streamlines between the seed (the orange dot,
-left temporal cortex) and that vertex, relative to the strongest, on the
-inflated surface shaded by sulcal depth. More figures, all from the synthetic
-data, are in [docs/figures](docs/figures/README.md).*
+*`cc.plot(cc.seed(vertex=1234), mesh="fsaverage")`: where one vertex of one
+subject connects to. The value at each vertex is the density of streamlines
+between the seed (the orange dot, left temporal cortex) and that vertex,
+relative to the strongest, on the inflated surface shaded by sulcal depth.*
 
-**What smoothing does.** Tractography gives endpoints. With 20,000
-streamlines, six of them touch vertex 1234 in one draw of the synthetic
-subject and ten in another, and the two draws share nothing: across the
-cortex their raw counts correlate at r = 0.00. Smoothing spreads each endpoint
-with the kernel and turns those handfuls into densities that agree at
-r = 0.89, and the first agrees at r = 0.93 with a draw of 200,000
-streamlines. That is what makes two subjects, or two sessions, comparable
-vertex by vertex.
+**What smoothing does.** Tractography gives endpoints. One subject's 903,797
+streamlines were split into two random halves; 576 of them touch vertex 1234
+in one half and 569 in the other. With this many streamlines a single vertex
+is already well sampled, so the two halves' raw counts agree across the
+cortex at r = 0.96; once smoothed they agree at r = 1.00, and each half's
+map matches the map from all streamlines at r = 0.98. The synthetic example
+shows the other regime: with 20,000 streamlines only six and ten touch the
+vertex, the two draws' raw counts share nothing (r = 0.00), and smoothing
+still brings their maps to r = 0.89. Either way, smoothing is what makes two
+subjects, or two sessions, comparable vertex by vertex.
 
 ![Smoothing, from endpoints to a comparable map](docs/figures/smoothing_power.png)
 
 *Top: the far ends of the streamlines that touch the vertex (blue dots), in
-two independent draws of 20,000 streamlines and one of 200,000. Bottom: the
-smoothed density of the same vertex in each draw, relative to its strongest
-vertex.*
+the two halves and in the whole set. Bottom: the smoothed density of the same
+vertex from each, relative to its strongest vertex.*
 
 ## With real data
 
@@ -168,13 +174,17 @@ onto a common template, `aligned_endpoints(i)` hands them back, and
 `smooth()` turns them into aligned connectomes (USAGE.md shows the three
 lines). Timings are for four cores.
 
-**Alignment, with a known answer.** A subject's endpoints were moved by a
-known smooth warp, a degree on average and four at most, and the deformed
-copy was registered back onto the original. ENCORE, whose warp is undone
-through its inverse, puts the endpoints back to within 0.40 degrees of where
-they started, undoing 59% of the displacement; ConSEAL, with the paper's
-update rule and a stopping threshold of 1e-7, to within 0.17 degrees, undoing
-82% of the displacement and 99% of the cost (PORTING.md items 4 and 7).
+**Alignment, with a known answer.** One HCP-Aging subject's 903,797
+endpoints were moved by a known smooth warp, a degree on average and four at
+most, and the deformed copy was registered back onto the original. ENCORE
+halves its cost, but the warp it finds points only half the way of the
+deformation (cosine 0.50 with the true field), so undone through its inverse
+it brings the endpoints back only from 0.95 to 0.92 degrees. ConSEAL, with
+the paper's update rule and a stopping threshold of 1e-7, brings them to
+within 0.13 degrees, undoing 86% of the displacement and 99% of the cost. On
+the synthetic subject, with 20,000 streamlines, ENCORE's field agrees with
+the truth at cosine 0.86 and undoes 59%, ConSEAL 82% (PORTING.md items 4
+and 7).
 
 ![Alignment with a known answer](docs/figures/alignment_recovery.png)
 
@@ -189,19 +199,38 @@ that has collapsed onto one subject, which can align the difference away; the
 default regularization or a mean template keeps it. PORTING.md items 5 and 7
 have the table.
 
-![The planted bundle](docs/figures/cohort_truth.png)
+**The same pipeline on the ten HCP-Aging subjects.** A rank-4 FPCA with
+`candidates=6` and `local_test` against the subjects' ages find no
+association: the adjusted p-value is 0.72 for every component, and the
+scores' correlations with age run from -0.15 to 0.37. That is the expected
+answer for ten subjects, and it is why the synthetic cohort, with its planted
+effect, is where the pipeline is checked; the real cohort shows what the
+outputs look like.
 
-*The planted bundle, `cohort.truth`: the field whose weight was scaled with
-age.*
+![The leading component of the real cohort](docs/figures/cohort_component.png)
 
-![The recovered effect map](docs/figures/cohort_effect.png)
+*The FPCA component most associated with age in the ten subjects (component
+1 of 4), relative to its largest value: a small occipital field, and not
+significant.*
 
-*What the analysis recovers: the effect map of the one component `local_test`
-found significant, which correlates 0.94 with the planted field.*
+![Each component's scores against age](docs/figures/cohort_scores.png)
 
-![The significant component's scores against age](docs/figures/cohort_scores.png)
+*The four components' scores against age, with the least-squares fit and the
+adjusted p-value of each.*
 
-*That component's scores against the synthetic age.*
+**Aligning the ten subjects.** Registered onto a template estimated from the
+cohort, the subjects grow more alike: the mean correlation between two
+subjects' connectomes rises from 0.700 to 0.754 after ten ENCORE iterations
+and to 0.789 after thirty ConSEAL iterations, and the cost falls for every
+subject. Ten subjects at roughly 800,000 streamlines each take twelve
+minutes with ENCORE and under two hours with ConSEAL on four cores.
+
+![Aligning the ten subjects](docs/figures/cohort_alignment.png)
+
+*Left: each subject's registration cost per iteration, relative to its start,
+for ENCORE and ConSEAL. Right: the correlation between the connectomes of
+each of the 45 pairs of subjects before alignment and after each method, with
+the mean.*
 
 ## Getting around the package
 

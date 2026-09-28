@@ -125,7 +125,7 @@ areas, giving a density comparable across regions of different size; this
 reproduces `parcellate_sc.m`. FC is aggregated through Fisher-z automatically,
 because averaging correlations directly is biased.
 
-![The Desikan region matrix of the synthetic subject](docs/figures/region_matrix.png)
+![The Desikan region matrix of an HCP-Aging subject](docs/figures/region_matrix.png)
 
 *`cc.to_atlas("Desikan")` on the synthetic subject: 68 regions, left hemisphere
 first, mass on a log scale.*
@@ -334,11 +334,13 @@ cutoff are visited per endpoint, found with a KD-tree.
 ![Smoothing, from endpoints to a comparable map](docs/figures/smoothing_power.png)
 
 *Why the density and not the counts: the far ends of the streamlines touching
-vertex 1234 (blue dots) in two independent draws of 20,000 streamlines from
-one synthetic subject and one draw of 200,000, and the smoothed density of the
-same vertex in each. Across the cortex the two 20,000 draws correlate at
-r = 0.00 as raw counts and r = 0.89 once smoothed; smoothed draw A matches the
-200,000 map at r = 0.93.*
+vertex 1234 (blue dots) in two random halves of one HCP-Aging subject's
+903,797 streamlines and in the whole set, and the smoothed density of the
+same vertex from each. The halves' raw counts already agree across the cortex
+at r = 0.96, because a single vertex is well sampled by this many streamlines;
+smoothed they agree at r = 1.00, and each matches the map from all
+streamlines at r = 0.98. On the synthetic example, with 20,000 streamlines,
+the raw counts of two draws agree at r = 0.00 and the smoothed maps at 0.89.*
 
 ## A synthetic cohort, end to end
 
@@ -573,13 +575,14 @@ seconds per 100,000 streamlines rather than minutes. Six things to know:
   (PORTING.md item 7).
 ![Alignment with a known answer](docs/figures/alignment_recovery.png)
 
-*A synthetic subject's endpoints moved by a known smooth warp (a degree on
-average, four at most) and registered back onto the original: how far each
-endpoint still is from where it started, and the cost per iteration. ENCORE,
-undone through the inverse of its warp, puts the endpoints back to within
-0.40 degrees on average; ConSEAL with the paper's update (`delta=0.1,
-step_clamp=inf, viscosity=0`) and a stopping threshold of 1e-7, to within
-0.17.*
+*An HCP-Aging subject's 903,797 endpoints moved by a known smooth warp (a
+degree on average, four at most) and registered back onto the original: how
+far each endpoint still is from where it started, and the cost per iteration.
+ConSEAL with the paper's update (`delta=0.1, step_clamp=inf, viscosity=0`)
+and a stopping threshold of 1e-7 puts the endpoints back to within 0.13
+degrees on average; ENCORE halves its cost with a warp that only half agrees
+with the deformation, and undone through its inverse brings them from 0.95 to
+0.92. On the synthetic subject the same test gives 0.17 and 0.40 degrees.*
 
 ## Carrying a warp to another template
 

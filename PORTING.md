@@ -1138,6 +1138,19 @@ property of the problem, not a fault of the port. ENCORE on the same pair,
 with its inverse applied to the endpoints, reaches 0.40 degrees, 59% undone
 (item 4).
 
+The same test on a real subject (HCP-Aging, 903,797 streamlines, the same
+warp: 0.95 degrees on average) separates the methods further. ConSEAL with
+the paper's update and threshold 1e-7 reaches 0.13 degrees, 86% undone, cost
+to 1%, in 60 iterations. ENCORE halves its cost in 27 accepted steps with a
+warp of the right size (1.06 degrees at the grid vertices against 1.01 true),
+but the warp's direction agrees with the true field only at cosine 0.50
+(0.86 on the synthetic subject), and undone through its inverse it brings
+the endpoints from 0.95 to 0.92 degrees. Step lengths from 0.05 to 1.0 give
+the same result and 2.0 never accepts a step. With this many streamlines the
+density has structure at the kernel's scale everywhere, and the density cost
+has many ways down that are not the inverse deformation; the endpoints
+constrain ConSEAL where the density does not constrain ENCORE.
+
 ### Measured on the synthetic cohort
 
 `sbci.example_cohort(n_subjects=10, n_streamlines=20000, anatomy=a)` plants
