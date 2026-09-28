@@ -499,9 +499,29 @@ def cohort_figures(out: Path, subjects, ages, conseal: bool = True) -> None:
     after_conseal = None
     conseal_costs = None
     if conseal:
+        # ConSEAL's Karcher median settles on one subject when the subjects sit
+        # evenly around the mean, which on this cohort it does (USAGE, ConSEAL
+        # caveats); register onto the mean of the square-root densities instead
+        # so that every subject moves, as with ENCORE's template.
+        from sbci.conseal import (
+            DEFAULT_KERNEL_DEGREE,
+            DEFAULT_SIGMA,
+            EndpointConnectome,
+            HeatKernelBuilder,
+            default_grids,
+        )
+
+        lh, rh = default_grids()
+        kernel = HeatKernelBuilder(lh, rh, DEFAULT_KERNEL_DEGREE).compute(
+            DEFAULT_SIGMA, derivative=True
+        )[0]
+        carriers = [EndpointConnectome.from_endpoints(s.endpoints, lh, rh) for s in subjects]
+        mean_template = sum(c.q_transform(kernel) for c in carriers) / len(carriers)
+        mean_template /= np.sqrt((mean_template**2).sum())
         t = time.time()
         registration = sbci.endpoints_align(
-            subjects,
+            carriers,
+            template=mean_template,
             max_iterations=30,
             threshold=1e-7,
             delta=0.1,

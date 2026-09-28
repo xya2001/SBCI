@@ -222,7 +222,12 @@ adjusted p-value of each.*
 cohort, the subjects grow more alike: the mean correlation between two
 subjects' connectomes rises from 0.700 to 0.754 after ten ENCORE iterations
 and to 0.789 after thirty ConSEAL iterations, and the cost falls for every
-subject. Ten subjects at roughly 800,000 streamlines each take twelve
+subject. One caveat on this run: ConSEAL's Karcher median settled on one of
+the ten subjects (its distance to that subject was 0.001 degrees, 25 to 31
+to the others), so the other nine were registered onto that subject's
+connectome, while ENCORE's median stayed clear of every subject. The USAGE
+notes explain why the median can do this and how to pass the cohort mean
+instead. Ten subjects at roughly 800,000 streamlines each take twelve
 minutes with ENCORE and under two hours with ConSEAL on four cores.
 
 ![Aligning the ten subjects](docs/figures/cohort_alignment.png)
