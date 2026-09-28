@@ -581,6 +581,49 @@ undone through the inverse of its warp, puts the endpoints back to within
 step_clamp=inf, viscosity=0`) and a stopping threshold of 1e-7, to within
 0.17.*
 
+## Carrying a warp to another template
+
+ENCORE and ConSEAL estimate a warp of the sphere the grid lives on. Data
+registered to another template -- HCP's fs_LR, where MSMAll-aligned surfaces
+live, or fsaverage at full resolution -- sit on a different sphere, related
+to the grid's by a registration. `sbci.migrate_warp` carries the warp across:
+each template vertex is taken back to the grid's sphere, moved by the warp,
+and taken forward again, so the deformation is the same one seen from the
+other template.
+
+```python
+alignment = sbci.align(subjects)                              # ENCORE
+moved = sbci.migrate_warp(alignment.warps[0], to="fs_LR_32k",
+                          grid_rotations=alignment.grid_rotations)
+registration = sbci.endpoints_align(subjects)                 # ConSEAL
+moved = sbci.migrate_warp(registration.warps[0], to="fs_LR_32k")
+
+moved.lh_vertices           # (32492, 3): where each fs_LR vertex lands
+moved.lh_jacobian           # area ratio at each vertex
+moved.apply(points, "L")    # any fs_LR-sphere points, moved
+moved.to_gifti("sub-001")   # sub-001.L.sphere.surf.gii and R: deformed spheres
+                            # that Connectome Workbench takes as a registration
+moved.save("sub-001_fslr_warp.npz")
+```
+
+Three things to know:
+
+- **Two frames, and they differ.** The bundled `sphere` is the pipeline's own
+  parameterization, not FreeSurfer's standard sphere: the grid's vertices are
+  fsaverage vertices, but their sphere coordinates sit 119 degrees from the
+  standard sphere's on median. The package carries the standard-sphere
+  coordinates of every grid vertex and maps between the two first.
+- **fs_LR is reached through HCP's deformed sphere.** `fs_LR-deformed_to-fsaverage`
+  places every fs_LR-32k vertex on the standard sphere; with the fs_LR sphere
+  itself that is the registration (`tools/build_template_spheres.py`). MSMSulc
+  and MSMAll differ per subject, not in the group sphere, so a group warp lands
+  on fs_LR either way; a subject's own sphere pair adds one more step:
+  `sbci.SphereMap.from_gifti(native_sphere, msmall_sphere)`.
+- **The maps are piecewise linear.** Each step is a barycentric lookup, so a
+  point carried to fs_LR and back returns within 0.3 degrees, and the identity
+  warp migrates to the identity within the same. Pass an ENCORE warp with its
+  `grid_rotations`: ENCORE works on a rotated copy of the grid.
+
 ## Writing the exchange file
 
 ```python

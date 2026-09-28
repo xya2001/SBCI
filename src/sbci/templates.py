@@ -1,0 +1,329 @@
+"""Carrying a warp from the grid's sphere to another template's sphere.
+
+ENCORE and ConSEAL estimate a warp of the sphere the grid lives on: the image
+of every grid vertex, with a Jacobian. Data registered to another template --
+HCP's fs_LR for MSMAll-aligned surfaces, or fsaverage at full resolution --
+live on a different sphere, related to the grid's by a registration. The same
+deformation on that sphere is the conjugate ``g o phi o g^-1``: carry a
+template vertex back to the grid's sphere, apply the warp, carry the result
+forward. Every step here is a barycentric lookup between two spherical meshes
+that share a vertex set, which is what :class:`SphereMap` is.
+
+Two frames are involved, and they are not the same:
+
+- The grid's bundled ``sphere`` is the pipeline's own parameterization. Its
+  vertices are fsaverage vertices (each within half a millimetre of one on the
+  inflated surface), but their sphere coordinates are not those of FreeSurfer's
+  standard sphere: at matched vertices the two differ by 119 degrees on median.
+  ``fsaverage_sphere_ico4.npz`` holds the standard-sphere coordinates of each
+  grid vertex, found by that anatomical match, and :func:`grid_to_fsaverage`
+  is the map between the two parameterizations.
+- HCP's ``fs_LR-deformed_to-fsaverage`` sphere places every fs_LR-32k vertex
+  on FreeSurfer's standard sphere, and its standard ``sphere.32k_fs_LR`` gives
+  the same vertices' fs_LR positions; together they are
+  :func:`fsaverage_to_fslr`. MSMSulc and MSMAll differ per subject, not in the
+  group sphere, so a group warp lands on fs_LR either way; a subject's own
+  MSMAll sphere pair can be appended as one more :class:`SphereMap`.
+
+The migrated warp is returned on the target template's vertices and can be
+written as a deformed sphere in GIFTI, the form in which Connectome Workbench
+takes a registration.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from functools import lru_cache
+from importlib import resources
+from pathlib import Path
+
+import numpy as np
+
+from . import spec
+from .alignment import MeshQuery, normalize_rows, voronoi_areas
+from .surface import load_surface
+
+#: Templates a warp can be carried to.
+TEMPLATES = ("fsaverage", "fs_LR_32k")
+#: Radius HCP and FreeSurfer spheres are written with.
+SPHERE_RADIUS = 100.0
+
+
+def _interpolate(points, base, images, faces, query: MeshQuery | None = None):
+    """Barycentric transport: where ``points`` on the ``base`` mesh land under ``images``."""
+    query = MeshQuery(base, faces) if query is None else query
+    weights, indices = query.query(normalize_rows(np.asarray(points, dtype=np.float64)))
+    return normalize_rows(np.einsum("nk,nkj->nj", weights, images[indices]))
+
+
+class SphereMap:
+    """A piecewise-linear bijection between two spherical meshes sharing a vertex set.
+
+    ``source`` and ``target`` are the same vertices' unit positions on the two
+    spheres, ``faces`` the shared triangles. :meth:`forward` locates a point in
+    the source mesh and carries its barycentric weights to the target;
+    :meth:`inverse` does the reverse. Maps compose with ``+``.
+    """
+
+    def __init__(self, source, target, faces):
+        self.source = normalize_rows(np.asarray(source, dtype=np.float64))
+        self.target = normalize_rows(np.asarray(target, dtype=np.float64))
+        self.faces = np.asarray(faces, dtype=np.int64)
+        if self.source.shape != self.target.shape or self.source.shape[1] != 3:
+            raise ValueError(
+                f"source and target must be the same (n, 3) vertex set, got "
+                f"{self.source.shape} and {self.target.shape}"
+            )
+        self._forward: MeshQuery | None = None
+        self._inverse: MeshQuery | None = None
+
+    @classmethod
+    def from_gifti(cls, source_path, target_path) -> SphereMap:
+        """Two sphere surfaces of one mesh as GIFTI, e.g. a subject's native and MSMAll spheres."""
+        import nibabel as nib
+
+        source = nib.load(str(source_path))
+        target = nib.load(str(target_path))
+        faces = np.asarray(source.darrays[1].data, dtype=np.int64)
+        if not np.array_equal(faces, np.asarray(target.darrays[1].data, dtype=np.int64)):
+            raise ValueError("the two spheres do not share a face list, so they are not one mesh")
+        return cls(source.darrays[0].data, target.darrays[0].data, faces)
+
+    def forward(self, points) -> np.ndarray:
+        """Source-sphere points carried to the target sphere."""
+        if self._forward is None:
+            self._forward = MeshQuery(self.source, self.faces)
+        return _interpolate(points, self.source, self.target, self.faces, self._forward)
+
+    def inverse(self, points) -> np.ndarray:
+        """Target-sphere points carried back to the source sphere."""
+        if self._inverse is None:
+            self._inverse = MeshQuery(self.target, self.faces)
+        return _interpolate(points, self.target, self.source, self.faces, self._inverse)
+
+    def __add__(self, other) -> SphereChain:
+        return SphereChain([self]) + other
+
+
+class SphereChain:
+    """Several :class:`SphereMap` applied in order."""
+
+    def __init__(self, maps):
+        self.maps = list(maps)
+
+    def __add__(self, other) -> SphereChain:
+        if isinstance(other, SphereChain):
+            return SphereChain(self.maps + other.maps)
+        return SphereChain(self.maps + [other])
+
+    def forward(self, points) -> np.ndarray:
+        """Points carried through every map in order."""
+        for step in self.maps:
+            points = step.forward(points)
+        return np.asarray(points)
+
+    def inverse(self, points) -> np.ndarray:
+        """Points carried back through every map in reverse order."""
+        for step in reversed(self.maps):
+            points = step.inverse(points)
+        return np.asarray(points)
+
+
+@lru_cache(maxsize=1)
+def _fsaverage_at_grid() -> np.ndarray:
+    """FreeSurfer's standard-sphere coordinates of the grid's vertices, ``(5124, 3)``."""
+    path = resources.files("sbci.data.surfaces") / "fsaverage_sphere_ico4.npz"
+    with np.load(str(path)) as data:
+        return np.asarray(data["vertices"], dtype=np.float64)
+
+
+@lru_cache(maxsize=1)
+def _fslr_spheres() -> dict:
+    """HCP's fs_LR-32k spheres: standard, deformed to fsaverage, and the faces, per hemisphere."""
+    path = resources.files("sbci.data.templates") / "fslr32k_spheres.npz"
+    with np.load(str(path)) as data:
+        return {key: np.asarray(data[key]) for key in data.files}
+
+
+def grid_to_fsaverage() -> tuple[SphereMap, SphereMap]:
+    """From the grid's bundled sphere to FreeSurfer's standard fsaverage sphere, per hemisphere."""
+    sphere = load_surface("sphere")
+    standard = _fsaverage_at_grid()
+    half = spec.N_VERTICES_PER_HEMI
+    maps = []
+    for side, letter in enumerate("LR"):
+        hemisphere = sphere.hemisphere(letter)
+        block = slice(side * half, (side + 1) * half)
+        maps.append(SphereMap(hemisphere.vertices, standard[block], hemisphere.faces))
+    return maps[0], maps[1]
+
+
+def fsaverage_to_fslr() -> tuple[SphereMap, SphereMap]:
+    """From FreeSurfer's standard sphere to HCP's fs_LR-32k sphere, per hemisphere."""
+    spheres = _fslr_spheres()
+    return tuple(
+        SphereMap(spheres[f"{h}_deformed"], spheres[f"{h}_standard"], spheres[f"{h}_faces"])
+        for h in "LR"
+    )
+
+
+def template_mesh(template: str) -> tuple:
+    """The target template's sphere vertices and faces, per hemisphere."""
+    if template == "fs_LR_32k":
+        spheres = _fslr_spheres()
+        return tuple(
+            (np.asarray(spheres[f"{h}_standard"], dtype=np.float64), spheres[f"{h}_faces"])
+            for h in "LR"
+        )
+    if template == "fsaverage":
+        from .plotting import _fsaverage_files
+
+        files = _fsaverage_files("fsaverage")
+        return tuple(
+            (normalize_rows(files["geometries"]["sphere"][side]), files["faces"][side])
+            for side in (0, 1)
+        )
+    raise ValueError(f"template must be one of {TEMPLATES}, got {template!r}")
+
+
+def chain_to(template: str) -> tuple[SphereChain, SphereChain]:
+    """The maps from the grid's sphere to ``template``, per hemisphere."""
+    first = grid_to_fsaverage()
+    if template == "fsaverage":
+        return SphereChain([first[0]]), SphereChain([first[1]])
+    if template == "fs_LR_32k":
+        second = fsaverage_to_fslr()
+        return first[0] + second[0], first[1] + second[1]
+    raise ValueError(f"template must be one of {TEMPLATES}, got {template!r}")
+
+
+@dataclass
+class TemplateWarp:
+    """A warp carried to another template: the image of each of its sphere vertices.
+
+    ``lh_vertices``/``rh_vertices`` are unit positions on the template's sphere,
+    ``lh_jacobian``/``rh_jacobian`` the ratio of each vertex's Voronoi area
+    after and before, and ``faces`` the template's triangles.
+    """
+
+    template: str
+    lh_vertices: np.ndarray
+    lh_jacobian: np.ndarray
+    rh_vertices: np.ndarray
+    rh_jacobian: np.ndarray
+    faces: tuple
+
+    def apply(self, points, hemisphere: str) -> np.ndarray:
+        """Where template-sphere ``points`` on one hemisphere land under the warp."""
+        base, faces = template_mesh(self.template)[0 if hemisphere == "L" else 1]
+        images = self.lh_vertices if hemisphere == "L" else self.rh_vertices
+        return _interpolate(points, base, images, faces)
+
+    def save(self, path) -> Path:
+        """Write the warp to ``.npz``."""
+        path = Path(path)
+        np.savez_compressed(
+            path,
+            template=self.template,
+            lh_vertices=self.lh_vertices,
+            lh_jacobian=self.lh_jacobian,
+            rh_vertices=self.rh_vertices,
+            rh_jacobian=self.rh_jacobian,
+            lh_faces=self.faces[0],
+            rh_faces=self.faces[1],
+        )
+        return path
+
+    @classmethod
+    def load(cls, path) -> TemplateWarp:
+        """Read a warp written by :meth:`save`."""
+        with np.load(Path(path)) as data:
+            return cls(
+                template=str(data["template"]),
+                lh_vertices=data["lh_vertices"],
+                lh_jacobian=data["lh_jacobian"],
+                rh_vertices=data["rh_vertices"],
+                rh_jacobian=data["rh_jacobian"],
+                faces=(data["lh_faces"], data["rh_faces"]),
+            )
+
+    def to_gifti(self, prefix) -> tuple[Path, Path]:
+        """Write the warp as two deformed sphere surfaces, ``<prefix>.L.sphere.surf.gii`` and R.
+
+        A deformed sphere is how Connectome Workbench takes a registration: it is
+        the template's mesh with every vertex moved to where the warp sends it,
+        at radius 100 like HCP's own spheres.
+        """
+        import nibabel as nib
+        from nibabel import gifti
+
+        written = []
+        for letter, vertices, faces in (
+            ("L", self.lh_vertices, self.faces[0]),
+            ("R", self.rh_vertices, self.faces[1]),
+        ):
+            coordinates = gifti.GiftiDataArray(
+                np.asarray(vertices * SPHERE_RADIUS, dtype=np.float32),
+                intent="NIFTI_INTENT_POINTSET",
+                datatype="NIFTI_TYPE_FLOAT32",
+            )
+            triangles = gifti.GiftiDataArray(
+                np.asarray(faces, dtype=np.int32),
+                intent="NIFTI_INTENT_TRIANGLE",
+                datatype="NIFTI_TYPE_INT32",
+            )
+            image = gifti.GiftiImage(darrays=[coordinates, triangles])
+            path = Path(f"{prefix}.{letter}.sphere.surf.gii")
+            nib.save(image, str(path))
+            written.append(path)
+        return written[0], written[1]
+
+
+def migrate_warp(warp, to: str = "fs_LR_32k", grid_rotations=None) -> TemplateWarp:
+    """Carry an ENCORE or ConSEAL warp of the grid to another template's sphere.
+
+    Parameters
+    ----------
+    warp
+        :class:`~sbci.alignment.Warp` from :func:`sbci.align` or
+        :class:`~sbci.conseal.EndpointWarp` from :func:`sbci.endpoints_align`:
+        anything with ``lh_vertices`` and ``rh_vertices``, the images of the
+        grid's vertices.
+    to
+        ``"fs_LR_32k"`` (HCP's sphere, where MSMAll-aligned data live) or
+        ``"fsaverage"`` (FreeSurfer's standard sphere at full resolution,
+        fetched by nilearn on first use).
+    grid_rotations
+        For an ENCORE warp, ``Alignment.grid_rotations``: ENCORE works on a
+        rotated copy of the grid and its warps are in that frame. ConSEAL's
+        are in the grid's own frame and need none.
+
+    Returns
+    -------
+    :class:`TemplateWarp` on the template's vertices, with Jacobians.
+    """
+    sphere = load_surface("sphere")
+    chains = chain_to(to)
+    meshes = template_mesh(to)
+    rotations = (np.eye(3), np.eye(3)) if grid_rotations is None else grid_rotations
+    out = {}
+    for side, letter in enumerate("LR"):
+        hemisphere = sphere.hemisphere(letter)
+        base = normalize_rows(np.asarray(hemisphere.vertices, dtype=np.float64))
+        images = np.asarray(getattr(warp, f"{letter.lower()}h_vertices"), dtype=np.float64)
+        images = normalize_rows(images @ np.asarray(rotations[side], dtype=np.float64))
+        target_vertices, target_faces = meshes[side]
+        back = chains[side].inverse(target_vertices)
+        moved = _interpolate(back, base, images, hemisphere.faces)
+        landed = chains[side].forward(moved)
+        before = voronoi_areas(target_vertices, target_faces)
+        after = voronoi_areas(landed, target_faces)
+        out[letter] = (landed, after / before)
+    return TemplateWarp(
+        template=to,
+        lh_vertices=out["L"][0],
+        lh_jacobian=out["L"][1],
+        rh_vertices=out["R"][0],
+        rh_jacobian=out["R"][1],
+        faces=(meshes[0][1], meshes[1][1]),
+    )

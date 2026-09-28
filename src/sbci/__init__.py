@@ -65,6 +65,9 @@ _LAZY: dict[str, str] = {
     "Encore": "alignment",
     "Warp": "alignment",
     "endpoints_align": "conseal",
+    "migrate_warp": "templates",
+    "SphereMap": "templates",
+    "TemplateWarp": "templates",
     "EndpointAlignment": "conseal",
     "EndpointConnectome": "conseal",
     "EndpointWarp": "conseal",
@@ -116,6 +119,7 @@ if TYPE_CHECKING:  # pragma: no cover - for type checkers only
     from .reduction import Reduction, fit_basis, project, reduce
     from .smoothing import KERNELS, Endpoints, smooth
     from .stats import LocalTest, benjamini_hochberg, local_test
+    from .templates import SphereMap, TemplateWarp, migrate_warp
     from .validate import validate_file
 
 
@@ -162,6 +166,9 @@ __all__ = [
     "Encore",
     "Warp",
     "endpoints_align",
+    "migrate_warp",
+    "SphereMap",
+    "TemplateWarp",
     "EndpointAlignment",
     "EndpointConnectome",
     "EndpointWarp",

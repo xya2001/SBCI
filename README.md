@@ -124,6 +124,7 @@ the release exists.
 | `.to_cifti(path)` | implemented; fsLR-32k dense connectome, 16.9 GB |
 | `sbci validate <file>` | implemented |
 | `.smooth(kernel=..., bandwidth=..., eigenpairs=...)` | implemented for all three kernels. `shk` is the default and reproduces `concon` at r = 1.000000 across five subjects; `rdk` matches MATLAB to 3.25 float32-eps, `matern` is checked against its closed form (no MATLAB reference exists), and both find the Laplace-Beltrami basis via `$SBCI_LBO_DIR` (PORTING.md items 1 and 6) |
+| `sbci.migrate_warp(warp, to="fs_LR_32k")` | implemented; carries an ENCORE or ConSEAL warp to fs_LR (MSMAll's sphere) or full-resolution fsaverage and writes it as a deformed sphere for Workbench (USAGE.md) |
 | `.reduce(rank=K)` / `sbci.reduce(cc_list, rank=K)` | implemented; matches the MATLAB reference to float64 rounding (PORTING.md item 5) |
 | `sbci.align(cc_list, method="encore")` | implemented; geometry and template match MATLAB to float64 rounding, the registration to r = 0.99999979 (PORTING.md item 4) |
 | `sbci.endpoints_align(cc_list)` | implemented; ConSEAL, which warps the streamline endpoints themselves. Every stage matches the public MATLAB to the single precision it carries; four errors in that reference are corrected by default and reproducible with `strict_upstream=True` (PORTING.md item 7) |
