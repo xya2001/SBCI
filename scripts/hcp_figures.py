@@ -1,7 +1,8 @@
 """Draw the documentation figures from the ten-subject HCP-Aging example cohort.
 
     python scripts/hcp_figures.py /path/to/cohort docs/figures \
-        [--skip-cohort | --only-cohort | --surfaces-only | --only-recovery]
+        [--skip-cohort | --only-cohort | --surfaces-only | --only-recovery | --only-migration]
+        [--timeseries /path/to/fc_ts.npz] [--full-cohort DIR [--rank 20] [--candidates 1]]
 
 The cohort directory holds ``manifest.csv`` (subject, age_years, sex) and one
 ``<subject>_sc.h5`` (with endpoints) and ``<subject>_fc.h5`` per subject, as
@@ -34,6 +35,7 @@ from make_figures import (  # noqa: E402
     DISPLAY_ENGINE,
     DISPLAY_MESH,
     DOT_SIZE,
+    INK,
     MUTED,
     ORANGE,
     SEED,
@@ -255,22 +257,21 @@ def smoothing_power(out: Path, cc) -> None:
     save(figure, out, "smoothing_power.png")
 
 
-#: The known warp of the recovery figure: a random tangent field of harmonic
+#: The known warp of the recovery figures: a random tangent field of harmonic
 #: order WARP_ORDER, scaled so that its largest displacement is WARP_AMPLITUDE
 #: radians; and the order of the tangent basis ENCORE searches over.
 WARP_ORDER, WARP_AMPLITUDE, ENCORE_ORDER = 4, 0.07, 6
 
 
-def alignment_recovery(out: Path, subject) -> None:
-    """Deform a real subject by a known smooth warp and measure how much each method undoes.
+def known_warp_experiment(subject) -> dict:
+    """Deform a real subject's endpoints by a known smooth warp and register back with ENCORE.
 
     The undeformed copy is the subject's own endpoints through the package's
     smoother, so that the deformation is the only difference between the two.
+    Shared by the recovery figure and the warp-migration figure.
     """
     from sbci.alignment import Encore, MeshQuery, _hemisphere_grids, normalize_rows
-    from sbci.atlas import cortex_mask
     from sbci.conseal import EndpointConnectome, StationaryWarp, default_grids
-    from sbci.smoothing import endpoint_positions
 
     lh, rh = default_grids()
     rng = np.random.default_rng(7)
@@ -312,16 +313,37 @@ def alignment_recovery(out: Path, subject) -> None:
             )
             placed[pick] = normalize_rows(np.einsum("nk,nkj->nj", weights, grid.vertices[indices]))
         fixed_points.append(placed)
-    after_encore = np.r_[angles(original[0], fixed_points[0]), angles(original[1], fixed_points[1])]
+    after = np.r_[angles(original[0], fixed_points[0]), angles(original[1], fixed_points[1])]
     print(
-        f"  ENCORE in {time.time() - t:.0f}s: {before.mean():.2f} -> {after_encore.mean():.2f} "
+        f"  ENCORE in {time.time() - t:.0f}s: {before.mean():.2f} -> {after.mean():.2f} "
         f"deg, cost {trace[0]:.4f} -> {trace[-1]:.4f} in {len(trace) - 1} steps",
         flush=True,
     )
+    return {
+        "grids": (lh, rh),
+        "true": (lh_true, rh_true),
+        "deformed": deformed,
+        "original": original,
+        "before": before,
+        "after_encore": after,
+        "encore": (lh_warp, rh_warp),
+        "rotations": rotations,
+        "trace": np.asarray(trace),
+    }
+
+
+def alignment_recovery(out: Path, subject, experiment: dict | None = None) -> None:
+    """How far the endpoints still are from where they started, after each method."""
+    from sbci.atlas import cortex_mask
+    from sbci.smoothing import endpoint_positions
+
+    experiment = known_warp_experiment(subject) if experiment is None else experiment
+    original, before = experiment["original"], experiment["before"]
+    after_encore, trace = experiment["after_encore"], experiment["trace"]
 
     t = time.time()
     conseal = sbci.endpoints_align(
-        [subject, deformed],
+        [subject, experiment["deformed"]],
         template=0,
         max_iterations=60,
         threshold=1e-7,
@@ -398,7 +420,7 @@ def alignment_recovery(out: Path, subject) -> None:
     left.set_title("Endpoints moved by a known warp, and put back", loc="left")
     left.legend(frameon=False)
     for values, color, label in (
-        (np.asarray(trace), BLUE, "ENCORE"),
+        (trace, BLUE, "ENCORE"),
         (np.asarray(conseal.costs[1]), ORANGE, "ConSEAL"),
     ):
         relative = values / values[0]
@@ -423,6 +445,193 @@ def alignment_recovery(out: Path, subject) -> None:
         fontsize=14,
     )
     save(figure, out, "alignment_recovery.png")
+
+
+def migration_power(out: Path, subject, experiment: dict, timeseries: Path) -> None:
+    """ENCORE's warp, found on the grid, carried to fsaverage and applied to a 163,842-vertex map.
+
+    The map is the subject's own resting-state connectivity of the seed vertex,
+    from the pipeline's time series on fsaverage. The known warp moves it; the
+    migrated ENCORE warp puts it back.
+    """
+    from types import SimpleNamespace
+
+    from sbci.alignment import MeshQuery, Warp, normalize_rows
+    from sbci.atlas import cortex_mask
+    from sbci.plotting import sulcal_depth
+    from sbci.templates import migrate_warp, template_mesh
+
+    lh_true, rh_true = experiment["true"]
+    lh_warp, rh_warp = experiment["encore"]
+    rotations = experiment["rotations"]
+    display = display_mesh("fsaverage")
+    meshes = template_mesh("fsaverage")
+    queries = [MeshQuery(vertices, faces) for vertices, faces in meshes]
+
+    def sample(fields, points):
+        """A per-vertex field on the fsaverage sphere, read at other points of it."""
+        out = []
+        for field, at, query in zip(fields, points, queries, strict=True):
+            weights, indices = query.query(normalize_rows(at))
+            out.append((weights * field[indices]).sum(axis=1))
+        return out
+
+    # The subject's resting-state map of the seed, at fsaverage resolution.
+    t = time.time()
+    seed = int(display.nearest[0][SEED])
+    with np.load(timeseries) as loaded:
+        series = [
+            np.asarray(loaded[key], dtype=np.float32)
+            for key in ("lh_time_series", "rh_time_series")
+        ]
+    centred = [s - s.mean(axis=1, keepdims=True) for s in series]
+    scale = [np.sqrt((c * c).sum(axis=1)) for c in centred]
+    reference = centred[0][seed] / scale[0][seed]
+    fc_map = [
+        np.where(sd > 0, (c @ reference) / np.where(sd > 0, sd, 1.0), np.nan)
+        for c, sd in zip(centred, scale, strict=True)
+    ]
+    del series, centred
+    print(
+        f"  seed map from {series_shape(timeseries)} time points in {time.time() - t:.0f}s; "
+        f"r at the seed {fc_map[0][seed]:.2f}",
+        flush=True,
+    )
+
+    # The warps on fsaverage: the known warp, its inverse, and ENCORE's.
+    t = time.time()
+    to_fs = lambda lh, rh, **kw: migrate_warp(  # noqa: E731
+        SimpleNamespace(lh_vertices=lh, rh_vertices=rh), to="fsaverage", **kw
+    )
+    true_fs = to_fs(lh_true.vertices, rh_true.vertices)
+    inverse_fs = to_fs(lh_true.copy().invert().vertices, rh_true.copy().invert().vertices)
+    encore_fs = migrate_warp(
+        Warp(lh_warp.vertices, lh_warp.jacobian, rh_warp.vertices, rh_warp.jacobian),
+        to="fsaverage",
+        grid_rotations=rotations,
+    )
+    moved_map = sample(fc_map, (inverse_fs.lh_vertices, inverse_fs.rh_vertices))
+    recovered_map = sample(moved_map, (encore_fs.lh_vertices, encore_fs.rh_vertices))
+    sphere = [vertices for vertices, _ in meshes]
+    deformation = [angles(sphere[0], true_fs.lh_vertices), angles(sphere[1], true_fs.rh_vertices)]
+    found = [angles(sphere[0], encore_fs.lh_vertices), angles(sphere[1], encore_fs.rh_vertices)]
+    residual = [
+        angles(true_fs.lh_vertices, encore_fs.lh_vertices),
+        angles(true_fs.rh_vertices, encore_fs.rh_vertices),
+    ]
+    lh_grid, _ = experiment["grids"]
+    on_grid = angles(lh_grid.vertices, normalize_rows(lh_warp.vertices @ rotations[0]))
+
+    def correlation(a, b):
+        keep = np.isfinite(a) & np.isfinite(b)
+        return float(np.corrcoef(a[keep], b[keep])[0, 1])
+
+    both = lambda maps: np.concatenate(maps)  # noqa: E731
+    r_moved = correlation(both(moved_map), both(fc_map))
+    r_back = correlation(both(recovered_map), both(fc_map))
+    print(
+        f"  migrated in {time.time() - t:.0f}s: deformation "
+        f"{np.concatenate(deformation).mean():.2f} deg on fsaverage; ENCORE's warp "
+        f"{np.concatenate(residual).mean():.2f} deg from the true one there; "
+        f"map r {r_moved:.3f} moved, {r_back:.3f} put back",
+        flush=True,
+    )
+
+    # Draw: the map's three states above, the warps below, left hemisphere.
+    cortex = cortex_mask()
+    on_cortex = np.nan_to_num(display.interpolate(cortex.astype(float))[0]) > 0.5
+    vertices, faces = display.geometries["inflated"][0], display.faces[0]
+    grey = render.shade(display.sulc[0], on_cortex)
+    grid_surface = sbci.load_surface("inflated").hemisphere("L")
+    grid_vertices = np.asarray(grid_surface.vertices, dtype=np.float64)
+    half = cortex.size // 2
+    grid_grey = render.shade(np.where(cortex[:half], sulcal_depth()[:half], 0.0), cortex[:half])
+    vmax_map = 0.6
+    vmax_warp = float(np.ceil(np.nanpercentile(deformation[0], 99) * 2) / 2)
+
+    figure = plt.figure(figsize=(15, 9.8), layout="constrained")
+    top, bottom = figure.subfigures(2, 1)
+    axes = top.subplots(1, 3)
+    panels = (
+        (
+            fc_map[0],
+            "the subject's resting-state map of vertex 1234\non fsaverage, 163,842 vertices",
+        ),
+        (moved_map[0], f"moved by the known warp\n(r = {r_moved:.2f} with the original)"),
+        (
+            recovered_map[0],
+            "put back by ENCORE's warp carried from the grid\n"
+            f"(r = {r_back:.2f} with the original)",
+        ),
+    )
+    for axis, (values, label) in zip(axes, panels, strict=True):
+        shown = np.where(on_cortex, values, np.nan)
+        rgb = render.colour(shown, grey, "coolwarm", -vmax_map, vmax_map, 0.1, True)
+        image = render.render_view(vertices, faces, rgb, "lateral", "L")
+        axis.imshow(render.trim(image), interpolation="lanczos")
+        axis.set_axis_off()
+        axis.set_title(label, fontsize=12)
+    bar = top.colorbar(
+        ScalarMappable(norm=Normalize(-vmax_map, vmax_map), cmap="coolwarm"),
+        ax=axes.tolist(),
+        shrink=0.7,
+        pad=0.02,
+    )
+    bar.set_label("correlation with the seed's time series", fontsize=11)
+    bar.outline.set_visible(False)
+
+    axes = bottom.subplots(1, 3)
+    warps = (
+        (
+            grid_vertices,
+            grid_surface.faces,
+            grid_grey,
+            on_grid,
+            f"ENCORE's warp on the grid, 5,124 vertices\n(mean {on_grid.mean():.2f} deg)",
+        ),
+        (
+            vertices,
+            faces,
+            grey,
+            found[0],
+            "the same warp carried to fsaverage, 163,842 vertices\n"
+            f"(mean {found[0].mean():.2f} deg)",
+        ),
+        (
+            vertices,
+            faces,
+            grey,
+            deformation[0],
+            f"the known warp on fsaverage (mean {deformation[0].mean():.2f} deg);\n"
+            f"ENCORE's is {residual[0].mean():.2f} deg from it",
+        ),
+    )
+    for axis, (mesh_vertices, mesh_faces, shading, values, label) in zip(axes, warps, strict=True):
+        rgb = render.colour(values, shading, "Reds", 0.0, vmax_warp)
+        image = render.render_view(mesh_vertices, mesh_faces, rgb, "lateral", "L")
+        axis.imshow(render.trim(image), interpolation="lanczos")
+        axis.set_axis_off()
+        axis.set_title(label, fontsize=12)
+    bar = bottom.colorbar(
+        ScalarMappable(norm=Normalize(0.0, vmax_warp), cmap="Reds"),
+        ax=axes.tolist(),
+        shrink=0.7,
+        pad=0.02,
+    )
+    bar.set_label("displacement (degrees)", fontsize=11)
+    bar.outline.set_visible(False)
+    figure.suptitle(
+        "Carrying a warp between templates: a warp found from connectivity on 5,124 vertices, "
+        "restated on fsaverage, puts a 163,842-vertex map back",
+        fontsize=14,
+    )
+    save(figure, out, "migration_power.png")
+
+
+def series_shape(timeseries: Path) -> int:
+    """How many time points the pipeline's fsaverage series hold."""
+    with np.load(timeseries) as loaded:
+        return int(loaded["lh_time_series"].shape[1])
 
 
 # --- the cohort ----------------------------------------------------------------------
@@ -547,6 +756,136 @@ def cohort_figures(out: Path, subjects, conseal: bool = True) -> None:
     save(figure, out, "cohort_alignment.png")
 
 
+def cohort_age(out: Path, directory: Path, rank: int = 20, candidates: int = 1) -> None:
+    """FPCA of the full cohort against age: the components' scores, and the effect on the surface.
+
+    ``directory`` holds the full cohort's SC files and ``manifest.csv`` with
+    ``subject, sex, age_bin``; age enters as the bin's midpoint and sex as a
+    covariate. The dense matrices of 528 subjects are 111 GB and the fit works
+    on them, so this is a large-memory batch job; the fitted basis and scores
+    are saved beside the data (``fpca_rank<rank>_c<candidates>.npz``) and
+    reused on the next run, so the figures can be redrawn without refitting.
+    """
+    from sbci.reduction import Reduction
+
+    rows = list(csv.DictReader(open(directory / "manifest.csv")))
+    age = np.array([np.mean([int(v) for v in row["age_bin"].split("-")]) for row in rows])
+    female = np.array([row["sex"] == "F" for row in rows], dtype=float)
+    saved = directory.parent / f"fpca_rank{rank}_c{candidates}.npz"
+    first = sbci.load(directory / f"{rows[0]['subject']}_sc.h5")
+    if saved.exists():
+        with np.load(saved) as fit:
+            reduction = Reduction(
+                basis=fit["basis"],
+                scores=fit["scores"],
+                scales=fit["scales"],
+                explained=fit["explained"],
+                objective=np.zeros((rank, 1)),
+            )
+            count = fit["count"]
+        print(f"  reusing {saved.name}: explained {reduction.explained[-1]:.3f}", flush=True)
+    else:
+        t = time.time()
+        subjects = [sbci.load(directory / f"{row['subject']}_sc.h5") for row in rows]
+        count = np.array([float(s.metadata.get("streamline_count") or 0) for s in subjects])
+        print(f"  loaded {len(subjects)} subjects in {time.time() - t:.0f}s", flush=True)
+        t = time.time()
+        reduction = sbci.reduce(subjects, rank=rank, candidates=candidates)
+        del subjects
+        print(
+            f"  FPCA rank {rank} (candidates={candidates}) in {time.time() - t:.0f}s: "
+            f"explained {reduction.explained[-1]:.3f}",
+            flush=True,
+        )
+        np.savez(
+            saved,
+            basis=reduction.basis,
+            scores=reduction.scores,
+            scales=reduction.scales,
+            explained=reduction.explained,
+            count=count,
+            age=age,
+            female=female,
+        )
+    print(
+        f"  {len(rows)} subjects: ages {age.min():.0f}-{age.max():.0f} (bin midpoints), "
+        f"{int(female.sum())} F",
+        flush=True,
+    )
+
+    def r_with(values):
+        return [float(np.corrcoef(reduction.scores[:, k], values)[0, 1]) for k in range(rank)]
+
+    alone = sbci.local_test(reduction.scores, age)
+    result = sbci.local_test(reduction.scores, np.column_stack([age, female]), terms=[1])
+    found = result.significant()
+    correlations = r_with(age)
+    print(f"  age alone: adjusted p {np.round(alone.adjusted, 4).tolist()}", flush=True)
+    print(
+        f"  age with sex as a covariate: adjusted p {np.round(result.adjusted, 4).tolist()}, "
+        f"significant {found.tolist()}",
+        flush=True,
+    )
+    for name, values in (("age", age), ("sex", female), ("streamline count", count)):
+        print(f"  r(score, {name}): {np.round(r_with(values), 3).tolist()}", flush=True)
+
+    # Scores against age for the components most associated with it.
+    shown = np.argsort(result.adjusted)[:4]
+    figure, axes = plt.subplots(1, 4, figsize=(16.8, 3.9), layout="constrained")
+    for axis, k in zip(axes, shown, strict=True):
+        scores = reduction.scores[:, k]
+        jitter = np.random.default_rng(int(k)).uniform(-1.5, 1.5, size=age.size)
+        for mask, color, label in ((female == 1, ORANGE, "F"), (female == 0, BLUE, "M")):
+            axis.scatter(
+                age[mask] + jitter[mask],
+                scores[mask],
+                s=11,
+                color=color,
+                alpha=0.5,
+                linewidths=0,
+                label=label,
+            )
+        slope, intercept = np.polyfit(age, scores, 1)
+        grid = np.linspace(age.min(), age.max(), 2)
+        axis.plot(grid, slope * grid + intercept, color=INK, linewidth=2)
+        axis.set_title(
+            f"component {k + 1}: r = {correlations[k]:.2f}, adjusted p = {result.adjusted[k]:.2g}",
+            fontsize=11,
+        )
+        axis.set_xlabel("age (bin midpoint, years)")
+    axes[0].set_ylabel("score")
+    axes[0].legend(frameon=False, markerscale=2)
+    figure.suptitle(
+        f"FPCA of {len(rows)} HCP-Aging subjects, rank {rank}: the four components most "
+        "associated with age (sex as a covariate)",
+        fontsize=14,
+    )
+    save(figure, out, "cohort_age_scores.png")
+
+    if not found.size:
+        print("  no component reaches significance; no effect map drawn", flush=True)
+        return
+    effect = result.effect_map(reduction, alpha=0.05)
+    effect = effect / np.abs(effect).max()
+    figure = first.plot(
+        effect,
+        views=VIEWS,
+        cmap="coolwarm",
+        symmetric=True,
+        threshold=0.05,
+        mesh=DISPLAY_MESH,
+        engine=DISPLAY_ENGINE,
+    )
+    figure.suptitle(
+        f"Where age shows in the structural connectome of {len(rows)} HCP-Aging subjects: the "
+        f"effect over the {found.size} significant component(s) of {rank},\nrelative to its "
+        "largest value (positive: connectivity rising with age)",
+        fontsize=TITLE_SIZE,
+        y=1.11,
+    )
+    save(figure, out, "cohort_age_effect.png")
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 3:
         print(__doc__)
@@ -556,7 +895,24 @@ def main(argv: list[str]) -> int:
     only_cohort = "--only-cohort" in argv
     no_conseal = "--no-conseal" in argv
     surfaces_only = "--surfaces-only" in argv  # the rendered surface figures, no registrations
-    only_recovery = "--only-recovery" in argv  # the known-warp figure alone
+    only_recovery = "--only-recovery" in argv  # the known-warp figures alone
+    only_migration = "--only-migration" in argv  # the warp-migration figure alone
+    # --full-cohort DIR: the full cohort's SC files and manifest; draws the FPCA-against-age
+    # figures from them and nothing else.
+    if "--full-cohort" in argv:
+        directory = Path(argv[argv.index("--full-cohort") + 1])
+        rank = int(argv[argv.index("--rank") + 1]) if "--rank" in argv else 20
+        candidates = int(argv[argv.index("--candidates") + 1]) if "--candidates" in argv else 1
+        out.mkdir(parents=True, exist_ok=True)
+        print("full cohort", flush=True)
+        cohort_age(out, directory, rank=rank, candidates=candidates)
+        return 0
+    # --timeseries PATH: the pipeline's fc_ts.npz of the first subject (its resting-state
+    # time series on fsaverage), for the warp-migration figure; skipped without it.
+    timeseries = None
+    if "--timeseries" in argv:
+        timeseries = Path(argv[argv.index("--timeseries") + 1])
+        argv = [a for a in argv if a not in ("--timeseries", str(timeseries))]
     out.mkdir(parents=True, exist_ok=True)
     subjects, functional, ages = load_cohort(cohort_dir)
     print(f"loaded {len(subjects)} subjects, ages {ages.min():.0f}-{ages.max():.0f}", flush=True)
@@ -567,9 +923,14 @@ def main(argv: list[str]) -> int:
         coupling(out, first, sbci.load(functional[0]))
         smoothing_power(out, first)
         return 0
-    if only_recovery:
-        print("alignment recovery", flush=True)
-        alignment_recovery(out, first)
+    if only_recovery or only_migration:
+        experiment = known_warp_experiment(first)
+        if only_recovery:
+            print("alignment recovery", flush=True)
+            alignment_recovery(out, first, experiment)
+        if timeseries is not None:
+            print("warp migration", flush=True)
+            migration_power(out, first, experiment, timeseries)
         return 0
     if not only_cohort:
         print("single subject", flush=True)
@@ -579,7 +940,11 @@ def main(argv: list[str]) -> int:
         print("smoothing", flush=True)
         smoothing_power(out, first)
         print("alignment recovery", flush=True)
-        alignment_recovery(out, first)
+        experiment = known_warp_experiment(first)
+        alignment_recovery(out, first, experiment)
+        if timeseries is not None:
+            print("warp migration", flush=True)
+            migration_power(out, first, experiment, timeseries)
     if not skip_cohort:
         print("cohort", flush=True)
         cohort_figures(out, subjects, conseal=not no_conseal)

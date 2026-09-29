@@ -127,6 +127,18 @@ where `src/sbci/spec.py` currently carries a **provisional** value, marked
    hcp-aging` fetched and verified all twenty from a machine with no
    Google account.
 
+   **The full cohort (29 September).** Every HCP-Aging subject with complete
+   pipeline output, 528 of the 726 in the lab's copy (295 women, 233 men, 36
+   to 100 years), was converted the same way (1,056 files, all passing
+   validation, 43 GB) and bundled for Zenodo, whose records take at most a
+   hundred files: 44 zip bundles of twenty-four subjects per modality and a
+   listing with every member's SHA-256 (`tools/bundle_hcp_cohort.py`). The
+   lab uploads them (`tools/zenodo_upload.py` stops short of publishing), and
+   `sbci download hcp-aging-full` reads them from the manifest
+   `src/sbci/data/hcp_aging_full.json`, filled in from the published record;
+   until then the command says the cohort has not been released. The same
+   data-use question as above applies at this scale.
+
 7. **License holder.** `LICENSE` says "The SBCI developers". Replace with the
    institutional holder before the first tagged release.
 

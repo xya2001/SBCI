@@ -16,5 +16,7 @@ changes (PORTING.md says which item each belongs to).
 | `build_fslr_surfaces.py` | fsLR-32k anatomical surfaces from fsaverage, for viewing the exchange file |
 | `import_legacy.py` | converts legacy pipeline `.mat` output (SC, FC, endpoints) into the package's HDF5 files |
 | `build_hcp_cohort.py` | builds the ten-subject HCP-Aging example cohort from the lab's pipeline output: SC with endpoints and FC per subject, converted as `import_legacy.py` does and validated; takes a manifest of subjects and ages |
+| `bundle_hcp_cohort.py` | the full cohort's release: `bundle` zips the 528 subjects' files into bundles of twenty-four per modality for Zenodo (at most a hundred files per record) with `bundles.json`; `manifest` turns that and the published record id into `src/sbci/data/hcp_aging_full.json` |
+| `zenodo_upload.py` | uploads the bundles to a Zenodo deposition through the API with a token from the environment, sets the record's metadata, and stops short of publishing so the owner can review; `--sandbox` for a dry run on sandbox.zenodo.org |
 | `encore_probe.py` | nothing to bundle: measures ENCORE's cost landscape around a known warp of a real subject (the oracle, the smoother floor, ConSEAL's answer in ENCORE's cost) and its recovery over the warp's smoothness, the basis order and the reference; PORTING.md item 4 records the results |
 | `md2pdf.py` | renders a project markdown document as a typeset PDF |

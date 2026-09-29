@@ -1,15 +1,27 @@
-"""Fetching the example cohort: ten HCP-Aging subjects hosted on a public Google Drive.
+"""Fetching the released cohorts: the ten-subject example and the full HCP-Aging cohort.
 
-The files are too large for the repository (40 to 56 MB each, about a
-gigabyte for the cohort), so the repository carries a manifest instead:
-``data/hcp_aging.json`` lists every subject's SC and FC file with its Google
-Drive id, size and SHA-256. :func:`fetch_cohort` downloads what is asked for,
-verifies each file against the manifest, and skips files already present and
-correct, so it can be re-run. ``sbci download hcp-aging`` is the command form.
+The files are too large for the repository (40 to 56 MB each), so the
+repository carries manifests instead, one per cohort:
+
+- ``data/hcp_aging.json``, the example cohort: ten subjects on a public
+  Google Drive, one file per subject and modality with its Drive id, size
+  and SHA-256.
+- ``data/hcp_aging_full.json``, the full cohort: every HCP-Aging subject with
+  complete pipeline output (528), on Zenodo. A Zenodo record holds at most a
+  hundred files, so the 1,056 files travel in zip bundles of twenty-four
+  subjects, one bundle per modality; the manifest lists each bundle's URL,
+  size and SHA-256 and, for every file, its bundle and its own SHA-256.
+
+:func:`fetch_cohort` downloads what is asked for, verifies every file against
+the manifest, and skips files already present and correct, so it can be
+re-run; ``sbci download <cohort>`` is the command form. For the full cohort a
+subject costs its two bundles (about two gigabytes), which are removed once
+their files are out unless ``keep_bundles`` is set.
 
 Google Drive serves a public file at ``drive.usercontent.google.com`` with
 ``confirm=t``; for files it will not scan for viruses it answers with an HTML
-page carrying a ``uuid`` token, which is read and sent back once.
+page carrying a ``uuid`` token, which is read and sent back once. Zenodo
+serves plain HTTPS with range requests, so an interrupted bundle resumes.
 """
 
 from __future__ import annotations
@@ -18,12 +30,13 @@ import hashlib
 import json
 import re
 import shutil
+import zipfile
 from collections.abc import Callable, Iterable
 from importlib import resources
 from pathlib import Path
 
-COHORTS = ("hcp-aging",)
-MANIFESTS = {"hcp-aging": "hcp_aging.json"}
+COHORTS = ("hcp-aging", "hcp-aging-full")
+MANIFESTS = {"hcp-aging": "hcp_aging.json", "hcp-aging-full": "hcp_aging_full.json"}
 DRIVE_URL = "https://drive.usercontent.google.com/download?id={id}&export=download&confirm=t"
 CHUNK = 1 << 20
 
@@ -82,6 +95,76 @@ def _fetch_drive(file_id: str, destination: Path, report: Callable[[str], None])
     raise OSError(f"Google Drive kept answering with a page for file {file_id}")
 
 
+def _fetch_https(url: str, destination: Path, report: Callable[[str], None]) -> None:
+    """Download ``url`` to ``destination``, resuming a partial file with a range request."""
+    from urllib.error import HTTPError
+    from urllib.request import Request, urlopen
+
+    partial = destination.with_suffix(destination.suffix + ".part")
+    have = partial.stat().st_size if partial.exists() else 0
+    headers = {"User-Agent": "sbci"}
+    if have:
+        headers["Range"] = f"bytes={have}-"
+    try:
+        response = urlopen(Request(url, headers=headers), timeout=120)
+    except HTTPError as error:
+        if error.code == 416 and have:  # the partial file is already complete
+            partial.replace(destination)
+            return
+        raise
+    with response:
+        resumed = response.status == 206
+        if have and not resumed:
+            have = 0
+        total = response.headers.get("Content-Length")
+        expected = have + int(total) if total else None
+        with open(partial, "ab" if resumed else "wb") as handle:
+            done = have
+            last = -1
+            for block in iter(lambda: response.read(CHUNK), b""):
+                handle.write(block)
+                done += len(block)
+                if expected and done * 20 // expected != last:
+                    last = done * 20 // expected
+                    report(f"    {destination.name}: {done / 1e6:.0f} of {expected / 1e6:.0f} MB")
+    partial.replace(destination)
+
+
+def _verify(destination: Path, digest: str) -> None:
+    """Remove ``destination`` and raise when its SHA-256 is not ``digest``."""
+    found = sha256_of(destination)
+    if found != digest:
+        destination.unlink(missing_ok=True)
+        raise OSError(
+            f"{destination.name}: SHA-256 {found[:16]}... does not match the manifest's "
+            f"{digest[:16]}...; the download was removed. Try again, and if it repeats the "
+            "hosted file has changed."
+        )
+
+
+def _check_request(manifest: dict, subjects, modalities) -> tuple[set | None, tuple]:
+    wanted = None if subjects is None else set(subjects)
+    known = {entry["subject"] for entry in manifest["subjects"]}
+    if wanted is not None and not wanted <= known:
+        raise ValueError(
+            f"unknown subjects {sorted(wanted - known)}; the cohort has {len(known)} subjects"
+        )
+    modalities = tuple(modalities)
+    for modality in modalities:
+        if modality not in ("sc", "fc"):
+            raise ValueError(f"modalities are 'sc' and 'fc', got {modality!r}")
+    return wanted, modalities
+
+
+def _write_manifest_copy(manifest: dict, out: Path) -> None:
+    manifest_copy = out / "manifest.csv"
+    if not manifest_copy.exists():
+        with open(manifest_copy, "w", encoding="utf-8") as handle:
+            handle.write("subject,sex,age_bin\n")
+            for entry in manifest["subjects"]:
+                handle.write(f"{entry['subject']},{entry['sex']},{entry['age_bin']}\n")
+
+
 def fetch_cohort(
     out,
     cohort: str = "hcp-aging",
@@ -90,26 +173,33 @@ def fetch_cohort(
     force: bool = False,
     fetcher: Callable[[str, Path, Callable[[str], None]], None] | None = None,
     report: Callable[[str], None] = print,
+    keep_bundles: bool = False,
 ) -> list[Path]:
-    """Download the cohort (or some subjects) into ``out`` and verify every file.
+    """Download a cohort (or some of its subjects) into ``out`` and verify every file.
 
     Parameters
     ----------
     out
         Destination directory; created if needed.
     cohort
-        ``"hcp-aging"``.
+        ``"hcp-aging"`` (the ten-subject example, one file at a time from
+        Google Drive) or ``"hcp-aging-full"`` (all 528 subjects, in zip
+        bundles from Zenodo).
     subjects
-        Subject ids to fetch (``sub-HCA...``), or ``None`` for all ten.
+        Subject ids to fetch (``sub-HCA...``), or ``None`` for the whole cohort.
     modalities
         ``"sc"``, ``"fc"``, or both.
     force
         Re-download files that are already present and correct.
     fetcher
-        ``fetcher(file_id, destination, report)`` doing the transfer; the
-        default fetches from Google Drive. Tests pass their own.
+        ``fetcher(source, destination, report)`` doing the transfer, where
+        ``source`` is a Drive file id for the example cohort and a URL for the
+        full one. Tests pass their own.
     report
         Where progress lines go.
+    keep_bundles
+        Keep the downloaded zip bundles of the full cohort next to the files
+        instead of removing them once their files are out.
 
     Returns
     -------
@@ -117,20 +207,23 @@ def fetch_cohort(
     not match the manifest is removed and reported as an error.
     """
     manifest = load_manifest(cohort)
-    fetcher = _fetch_drive if fetcher is None else fetcher
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
-    wanted = None if subjects is None else set(subjects)
-    known = {entry["subject"] for entry in manifest["subjects"]}
-    if wanted is not None and not wanted <= known:
-        raise ValueError(
-            f"unknown subjects {sorted(wanted - known)}; the cohort has {sorted(known)}"
+    wanted, modalities = _check_request(manifest, subjects, modalities)
+    if manifest.get("host") == "zenodo":
+        written = _fetch_bundled(
+            manifest, out, wanted, modalities, force, fetcher or _fetch_https, report, keep_bundles
         )
-    modalities = tuple(modalities)
-    for modality in modalities:
-        if modality not in ("sc", "fc"):
-            raise ValueError(f"modalities are 'sc' and 'fc', got {modality!r}")
+    else:
+        written = _fetch_files(
+            manifest, out, wanted, modalities, force, fetcher or _fetch_drive, report
+        )
+    _write_manifest_copy(manifest, out)
+    return written
 
+
+def _fetch_files(manifest, out, wanted, modalities, force, fetcher, report) -> list[Path]:
+    """The example cohort: one hosted file per subject and modality."""
     written = []
     for entry in manifest["subjects"]:
         subject = entry["subject"]
@@ -152,19 +245,54 @@ def fetch_cohort(
                 continue
             report(f"  fetching {destination.name}")
             fetcher(record["drive_id"], destination, report)
-            digest = sha256_of(destination)
-            if digest != record["sha256"]:
-                destination.unlink(missing_ok=True)
-                raise OSError(
-                    f"{destination.name}: SHA-256 {digest[:16]}... does not match the manifest's "
-                    f"{record['sha256'][:16]}...; the download was removed. Try again, and if it "
-                    "repeats the hosted file has changed."
-                )
+            _verify(destination, record["sha256"])
             written.append(destination)
-    manifest_copy = out / "manifest.csv"
-    if not manifest_copy.exists():
-        with open(manifest_copy, "w", encoding="utf-8") as handle:
-            handle.write("subject,sex,age_bin\n")
-            for entry in manifest["subjects"]:
-                handle.write(f"{entry['subject']},{entry['sex']},{entry['age_bin']}\n")
     return written
+
+
+def _fetch_bundled(manifest, out, wanted, modalities, force, fetcher, report, keep) -> list[Path]:
+    """The full cohort: zip bundles, each holding one modality of a run of subjects."""
+    if not manifest.get("record"):
+        raise RuntimeError(
+            "the manifest names no Zenodo record yet; the cohort has not been released"
+        )
+    bundles = {bundle["name"]: bundle for bundle in manifest["bundles"]}
+    # Which files are asked for, in manifest order, and which bundles they need.
+    asked: list[tuple[str, str, dict]] = []
+    for entry in manifest["subjects"]:
+        if wanted is not None and entry["subject"] not in wanted:
+            continue
+        for modality in modalities:
+            record = entry["files"].get(modality)
+            if record is not None:
+                asked.append((entry["subject"], modality, record))
+    written: dict[tuple[str, str], Path] = {}
+    pending: dict[str, list[tuple[str, str, dict]]] = {}
+    for subject, modality, record in asked:
+        destination = out / f"{subject}_{modality}.h5"
+        if destination.exists() and not force and sha256_of(destination) == record["sha256"]:
+            report(f"  {destination.name}: present and verified")
+            written[(subject, modality)] = destination
+        else:
+            pending.setdefault(record["bundle"], []).append((subject, modality, record))
+    for name in sorted(pending):
+        bundle = bundles[name]
+        archive = out / name
+        if archive.exists() and sha256_of(archive) == bundle["sha256"]:
+            report(f"  {name}: present and verified")
+        else:
+            report(f"  fetching {name} ({bundle['bytes'] / 1e9:.2f} GB)")
+            fetcher(bundle["url"], archive, report)
+            _verify(archive, bundle["sha256"])
+        with zipfile.ZipFile(archive) as opened:
+            for subject, modality, record in pending[name]:
+                member = f"{subject}_{modality}.h5"
+                destination = out / member
+                with opened.open(member) as source, open(destination, "wb") as handle:
+                    shutil.copyfileobj(source, handle, CHUNK)
+                _verify(destination, record["sha256"])
+                report(f"    {member}: extracted and verified")
+                written[(subject, modality)] = destination
+        if not keep:
+            archive.unlink()
+    return [written[(subject, modality)] for subject, modality, _ in asked]

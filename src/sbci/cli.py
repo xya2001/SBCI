@@ -19,9 +19,11 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     download = subparsers.add_parser(
-        "download", help="fetch the example cohort (ten HCP-Aging subjects) from its public host"
+        "download",
+        help="fetch a released cohort: hcp-aging (ten example subjects, about 1 GB) or "
+        "hcp-aging-full (528 subjects in zip bundles, about 46 GB)",
     )
-    download.add_argument("cohort", help="cohort name: hcp-aging")
+    download.add_argument("cohort", help="cohort name: hcp-aging or hcp-aging-full")
     download.add_argument(
         "--subject", action="append", help="one subject id, e.g. sub-HCA6924080; repeatable"
     )
@@ -29,6 +31,11 @@ def build_parser() -> argparse.ArgumentParser:
     download.add_argument("--sc-only", action="store_true", help="structural files only")
     download.add_argument("--fc-only", action="store_true", help="functional files only")
     download.add_argument("--force", action="store_true", help="re-download files already present")
+    download.add_argument(
+        "--keep-bundles",
+        action="store_true",
+        help="keep the full cohort's zip bundles after extracting their files",
+    )
 
     validate = subparsers.add_parser("validate", help="check a file against the spec")
     validate.add_argument("path", help="path to a .h5 computational file")
@@ -102,6 +109,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 subjects=args.subject,
                 modalities=modalities,
                 force=args.force,
+                keep_bundles=args.keep_bundles,
             )
         except (ValueError, OSError, RuntimeError) as error:
             print(f"error: {error}", file=sys.stderr)

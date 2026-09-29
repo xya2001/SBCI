@@ -80,7 +80,7 @@ data release exists.
 | Line | Status | Waiting on |
 | --- | --- | --- |
 | install the package | wheel builds, installs clean, imports elsewhere | publishing to PyPI; the name is free |
-| download a subject | implemented: `sbci download hcp-aging` from the lab's public Google Drive, verified by manifest | Q6 decided: ten HCP-Aging subjects, hosted by the lab |
+| download a subject | implemented: `sbci download hcp-aging` (ten subjects) from the lab's public Google Drive, and `sbci download hcp-aging-full` (528, in zip bundles) from Zenodo once the record is published; verified by manifest | Q6 decided: ten HCP-Aging subjects, hosted by the lab |
 | load a connectome | works, validated on real data | — |
 | aggregate to an atlas | works, exactly 200×200 on real data | — |
 | take a seed profile | works | — |
