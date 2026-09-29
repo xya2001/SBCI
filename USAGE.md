@@ -73,7 +73,8 @@ Both pass every validator check. To convert more, use
 Ten HCP-Aging subjects, five women and five men across the age range, each
 as an SC file that carries its streamline endpoints and an FC file, converted
 from the SBCI pipeline's output by `tools/build_hcp_cohort.py` and hosted on
-a public Google Drive. The package ships the manifest, not the data:
+a public Google Drive ([the folder](https://drive.google.com/drive/folders/1cC4vvF8XqixaRr6X1tJ6FsraDVArsQAP)). The package ships the
+manifest, not the data:
 
 ```bash
 sbci download hcp-aging                    # everything into ./hcp-aging, about 1 GB

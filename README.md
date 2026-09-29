@@ -99,7 +99,8 @@ cc.to_cifti("sub-100307_sc.dconn.nii") # opens in Workbench; 16.9 GB
 ```
 
 The example cohort, the ten HCP-Aging subjects the figures are drawn from, is
-hosted on a public Google Drive and fetched by the package:
+hosted on a public Google Drive ([the folder](https://drive.google.com/drive/folders/1cC4vvF8XqixaRr6X1tJ6FsraDVArsQAP), for browsing) and
+fetched by the package:
 
 ```bash
 sbci download hcp-aging                          # all ten subjects, SC and FC, about 1 GB

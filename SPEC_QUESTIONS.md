@@ -120,6 +120,13 @@ where `src/sbci/spec.py` currently carries a **provisional** value, marked
    earlier cohorts. The five-minute test runs against the first subject when
    asked (`SBCI_DOWNLOAD=1`). `sbci download hcp-ya` is not offered.
 
+   **Released (28 September).** The twenty files are in the lab's folder,
+   https://drive.google.com/drive/folders/1cC4vvF8XqixaRr6X1tJ6FsraDVArsQAP, shared with anyone who has the link. Their Drive ids, sizes and
+   SHA-256 digests are in the manifest; Drive's own SHA-256 of every upload
+   matched the digest of the file built on Longleaf, and `sbci download
+   hcp-aging` fetched and verified all twenty from a machine with no
+   Google account.
+
 7. **License holder.** `LICENSE` says "The SBCI developers". Replace with the
    institutional holder before the first tagged release.
 
