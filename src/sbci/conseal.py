@@ -1455,8 +1455,15 @@ def endpoints_align(
         barycentric positions, :class:`~sbci.smoothing.Endpoints`, or
         :class:`EndpointConnectome` built on ``grids``.
     template
-        A subject index to register everyone to, a precomputed square-root
-        density, or ``None`` for the Karcher median of the cohort.
+        What every subject is registered onto. ``None``, the default,
+        estimates it first: the Karcher median of the subjects' square-root
+        densities (up to ``template_iterations`` Weiszfeld steps), so that no
+        subject is the reference. An integer registers everyone onto that
+        subject's own density, which then stays where it is. A square-root
+        density array registers onto that: an earlier run's
+        :attr:`EndpointAlignment.template`, or the normalized mean of the
+        subjects' ``q_transform(kernel)`` arrays when the median would settle
+        on one subject (USAGE.md, the ConSEAL caveats).
     sigma, kernel_degree
         Heat-kernel bandwidth and truncation degree (0.005 and 30 in the paper).
     order, delta, max_iterations, threshold, step_clamp, viscosity

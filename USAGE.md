@@ -528,6 +528,24 @@ result.costs             # final cost per subject
 result.warps[0].save("sub-001_warp.npz")
 ```
 
+**How it is used.** `align` registers every connectome in the list onto one
+template and hands back the warps and the warped connectomes. With no
+`template=`, which is the default, it estimates the template first: the
+Karcher median of the subjects' square-root densities (ten Weiszfeld steps
+from the subject nearest the mean), so that no subject is the reference and
+every subject moves. That is the cohort study's setting. Pass `template=` a
+square-root density of unit mass to register onto that instead: an earlier
+run's `result.template`, to bring a new subject onto a cohort's template
+without re-estimating it, or one subject's own
+`sbci.alignment.Encore(*grids).root(cc.dense())`, to register one subject
+onto another. A given template needs no second connectome in the list.
+
+```python
+new = sbci.align([late_subject], template=result.template)   # onto the cohort's template
+pair = sbci.align([moving], template=sbci.alignment.Encore(*grids).root(fixed.dense()),
+                  grids=grids)                                # one subject onto another
+```
+
 **This is a batch job.** On the ico4 grid each iteration multiplies 5124 x 5124
 matrices several times over; budget tens of GB of memory and hours for a
 cohort, and start with a small `max_iterations` to see the cost falling.
@@ -570,6 +588,15 @@ result.costs[0]                               # the cost trace of subject 1
 result.warps[0].save("sub-001_conseal_warp.npz")
 aligned = result.aligned_endpoints(0)         # an Endpoints object: re-smooth it, count it
 ```
+It is used the same way as `align`. With no `template=`, the default, it
+estimates the Karcher median of the subjects' square-root densities first
+(up to 100 Weiszfeld steps) and registers every subject onto it. `template=2`
+registers every subject onto subject 3's own density, which stays where it
+is; `template=` a square-root density array registers onto that, whether an
+earlier run's `result.template` or the normalized mean of the subjects'
+`q_transform(kernel)` arrays, which the caveat below on the median explains
+when to prefer.
+
 Without lab data, two synthetic subjects will do:
 `sbci.endpoints_align([sbci.example(seed=0), sbci.example(seed=1)], max_iterations=5)`
 takes about a minute on four cores, and both costs fall at every step.
@@ -637,6 +664,37 @@ to the grid's by a registration. `sbci.migrate_warp` carries the warp across:
 each template vertex is taken back to the grid's sphere, moved by the warp,
 and taken forward again, so the deformation is the same one seen from the
 other template.
+
+**When you would want this.** ENCORE has aligned ten subjects' structural
+connectomes on the grid, and the same subjects have MSMAll-registered
+resting-state or myelin maps on fs_LR 32k. The warp that made subject 4's
+connectivity line up with the cohort is an anatomical correspondence, and it
+applies to those maps too, but they live on a different sphere. `migrate_warp`
+restates the warp on fs_LR and writes it as a deformed sphere; Workbench then
+resamples any 32k map through it, and the map is aligned the way
+`alignment.aligned[3]` is:
+
+```python
+alignment = sbci.align(subjects)                                 # ENCORE on the grid
+warp = sbci.migrate_warp(alignment.warps[3], to="fs_LR_32k",
+                         grid_rotations=alignment.grid_rotations)
+warp.to_gifti("sub-004_encore")        # sub-004_encore.L.sphere.surf.gii and .R.
+```
+
+```bash
+wb_command -metric-resample sub-004.L.myelin.32k_fs_LR.func.gii \
+    L.sphere.32k_fs_LR.surf.gii sub-004_encore.L.sphere.surf.gii \
+    BARYCENTRIC sub-004.L.myelin.aligned.func.gii
+```
+
+The order of the two spheres carries the direction, and the two methods
+differ in it. ENCORE's warp is a pull-back: the aligned value at a vertex is
+read from where the warp sends that vertex, so the standard sphere is
+Workbench's current sphere and the deformed one its new sphere, as above.
+ConSEAL's warp is a push-forward: an endpoint moves with the warp, so for a
+ConSEAL warp the deformed sphere is the current one and the standard sphere
+the new one. `warp.apply(points, "L")` gives the same correspondence for
+points you handle yourself.
 
 ```python
 alignment = sbci.align(subjects)                              # ENCORE

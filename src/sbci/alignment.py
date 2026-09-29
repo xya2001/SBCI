@@ -1111,9 +1111,15 @@ def align(
     delta
         Central-difference step; see the conditioning note in this module.
     template
-        Supply a template to register against instead of estimating one: a
-        **square-root** density of unit mass in the area inner product, as
-        :attr:`Alignment.template` is -- not a connectome.
+        What every connectome is registered onto. ``None``, the default,
+        estimates it first: the Karcher median of the connectomes' square-root
+        densities, so that no subject is the reference and every subject
+        moves, which is what a cohort wants. Otherwise a **square-root**
+        density of unit mass in the area inner product, as
+        :attr:`Alignment.template` is (not a connectome): an earlier run's
+        template, to bring a new subject onto it without re-estimating, or
+        one subject's ``Encore(*grids).root(cc.dense())``, to register one
+        subject onto another. With a template given, one connectome is enough.
     grids
         ``(lh_grid, rh_grid)`` to align on, as :class:`SphericalGrid`. Defaults
         to the bundled ico4 sphere, split at the hemisphere boundary.
@@ -1136,8 +1142,13 @@ def align(
     """
     if method not in METHODS:
         raise ValueError(f"method must be one of {METHODS}, got {method!r}")
-    if len(cc_list) < 2:
-        raise ValueError("alignment needs at least two connectomes")
+    if not cc_list:
+        raise ValueError("alignment needs at least one connectome")
+    if template is None and len(cc_list) < 2:
+        raise ValueError(
+            "estimating a template needs at least two connectomes; pass template= to "
+            "register one connectome onto an existing template"
+        )
 
     densities = [
         np.asarray(cc.dense(), dtype=np.float64)

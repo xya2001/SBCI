@@ -337,6 +337,12 @@ def test_align_validates_its_arguments(pair):
         align(densities, method="affine")
     with pytest.raises(ValueError, match="at least two"):
         align(densities[:1])
+    with pytest.raises(ValueError, match="at least one"):
+        align([])
+    # one connectome is enough once there is a template to register it onto
+    template = Encore(grid, grid).root(densities[0])
+    single = align(densities[:1], template=template, grids=(grid, grid), max_iterations=1)
+    assert len(single.warps) == 1 and len(single.aligned) == 1
     with pytest.raises(ValueError, match="different grids"):
         align([densities[0], densities[1][:-2, :-2]])
     with pytest.raises(ValueError, match="but the grid has"):
