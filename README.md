@@ -58,7 +58,8 @@ drawn, not tracked.
 The figures in this README are not from the synthetic example. They are drawn
 from ten HCP-Aging subjects, 38 to 83 years old, converted from the lab's
 pipeline output with `tools/build_hcp_cohort.py` and drawn on FreeSurfer's
-fsaverage surface with `plot(mesh="fsaverage")`; `scripts/hcp_figures.py`
+fsaverage surface, rendered with smooth lighting through PyVista
+(`plot(mesh="fsaverage", engine="pyvista")`); `scripts/hcp_figures.py`
 regenerates them, and [docs/figures](docs/figures/README.md) describes each.
 
 ![The connectivity of one vertex over the cortex](docs/figures/seed_profile.png)
@@ -188,16 +189,20 @@ onto a common template, `aligned_endpoints(i)` hands them back, and
 lines). Timings are for four cores.
 
 **Alignment, with a known answer.** One HCP-Aging subject's 903,797
-endpoints were moved by a known smooth warp, a degree on average and four at
-most, and the deformed copy was registered back onto the original. ENCORE
-halves its cost, but the warp it finds points only half the way of the
-deformation (cosine 0.50 with the true field), so undone through its inverse
-it brings the endpoints back only from 0.95 to 0.92 degrees. ConSEAL, with
-the paper's update rule and a stopping threshold of 1e-7, brings them to
-within 0.13 degrees, undoing 86% of the displacement and 99% of the cost. On
-the synthetic subject, with 20,000 streamlines, ENCORE's field agrees with
-the truth at cosine 0.86 and undoes 59%, ConSEAL 82% (PORTING.md items 4
-and 7).
+endpoints were moved by a known smooth warp, a random field of spherical
+harmonic degree up to four, 1.7 degrees on average and 4 at most, and the
+deformed copy was registered back onto the undeformed subject, both through
+the package's smoother. ENCORE, searching its default degree-6 basis, undoes
+87% of the displacement in eight steps: the endpoints come back from 1.66 to
+0.21 degrees, the cost falls to 0.18 of its start, and the warp it finds
+agrees with the true field at cosine 0.96. ConSEAL, with the paper's update
+rule and a stopping threshold of 1e-7, brings them to within 0.10 degrees, 94%, in sixty iterations. The figure
+shows, vertex by vertex, how far the endpoints still are from where they
+started. An earlier version of this test had ENCORE undoing almost nothing,
+for two reasons PORTING.md item 4 measures: the reference was the pipeline's
+stored density, which sits further from its own re-smoothed endpoints than
+the warp moves anything, and the warp had structure at the grid scale, which
+a smoothed density cannot see.
 
 ![Alignment with a known answer](docs/figures/alignment_recovery.png)
 
@@ -212,35 +217,21 @@ that has collapsed onto one subject, which can align the difference away; the
 default regularization or a mean template keeps it. PORTING.md items 5 and 7
 have the table.
 
-**The same pipeline on the ten HCP-Aging subjects.** A rank-4 FPCA with
-`candidates=6` and `local_test` against the subjects' ages find no
-association: the adjusted p-value is 0.72 for every component, and the
-scores' correlations with age run from -0.15 to 0.37. That is the expected
-answer for ten subjects, and it is why the synthetic cohort, with its planted
-effect, is where the pipeline is checked; the real cohort shows what the
-outputs look like.
-
-![The leading component of the real cohort](docs/figures/cohort_component.png)
-
-*The FPCA component most associated with age in the ten subjects (component
-1 of 4), relative to its largest value: a small occipital field, and not
-significant.*
-
-![Each component's scores against age](docs/figures/cohort_scores.png)
-
-*The four components' scores against age, with the least-squares fit and the
-adjusted p-value of each.*
+**The same pipeline on the ten HCP-Aging subjects** finds no association
+with age, which is the expected answer for ten subjects, so the real cohort
+illustrates alignment only; the synthetic cohort, with its planted effect, is
+where the analysis is checked.
 
 **Aligning the ten subjects.** Registered onto a template estimated from the
-cohort, the subjects grow more alike: the mean correlation between two
-subjects' connectomes rises from 0.700 to 0.754 after ten ENCORE iterations
-and to 0.780 after thirty ConSEAL iterations, and the cost falls for every
-subject. ENCORE registers onto its Karcher median, which stayed clear of
+cohort, with every density from the package's smoother, the subjects grow
+more alike: the mean correlation between two subjects' connectomes rises from
+0.704 to 0.758 after ten ENCORE iterations and to 0.780 after thirty
+ConSEAL iterations, and the cost falls for every subject. ENCORE registers onto its Karcher median, which stayed clear of
 every subject. ConSEAL's median settled on one of the ten subjects (0.001
 degrees from it, 25 to 31 from the others), which would have registered the
 other nine onto that subject's connectome, so the figure registers onto the
 mean of the square-root densities instead; onto the one subject the mean
-correlation reaches 0.789, a little higher, for the wrong reason. The USAGE
+correlation comes out a little higher, for the wrong reason. The USAGE
 notes explain when the median does this and how to pass a template. Ten
 subjects at roughly 800,000 streamlines each take five minutes with ENCORE
 and an hour with ConSEAL on four cores.

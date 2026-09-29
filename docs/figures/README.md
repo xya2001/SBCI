@@ -17,8 +17,10 @@ each; on a cluster, run it in a batch job. `scripts/make_figures.py` draws the
 same set from the synthetic example instead, for a machine without the data.
 
 Every surface is drawn on FreeSurfer's fsaverage (163,842 vertices per
-hemisphere) with the map interpolated onto it (`plot(mesh="fsaverage")`),
-shaded by FreeSurfer's sulcal depth (dark in the sulci); the medial wall,
+hemisphere) with the map interpolated onto it and rendered through PyVista
+with smooth normals, a light kit and a specular highlight
+(`plot(mesh="fsaverage", engine="pyvista")`, the `render` extra), shaded by
+FreeSurfer's sulcal depth (dark in the sulci); the medial wall,
 which is the cut surface between the hemispheres and carries no cortex, is
 left flat gray. Maps are thresholded at a few percent of their peak so that
 the shading shows where there is nothing to see.
@@ -30,7 +32,5 @@ the shading shows where there is nothing to see.
 | `region_matrix.png` | `cc.to_atlas("Desikan")`: the same subject collapsed to 68 regions, on a log scale |
 | `coupling.png` | `sc.coupling(fc)`: structure-function coupling of the subject's SC and FC, one value per vertex |
 | `spherical_kernel.png` | the kernel `smooth(kernel="shk")` applies, at the released bandwidth and twice it, with its cutoffs |
-| `cohort_component.png` | the FPCA component of the ten subjects most associated with age (not significantly), relative to its largest value |
-| `cohort_scores.png` | each of the four components' scores against age, with the fitted line and the adjusted p-value |
-| `cohort_alignment.png` | registering the ten subjects with ENCORE (onto its Karcher median) and with ConSEAL (onto the mean square-root density, since its median settles on one subject): each subject's cost per iteration, and the correlation between each pair of subjects' connectomes before and after (mean 0.700, then 0.754 after ENCORE and 0.780 after ConSEAL) |
-| `alignment_recovery.png` | one subject's 903,797 endpoints moved by a known smooth warp and registered back onto the original by ENCORE and by ConSEAL: how far each endpoint still is from where it started (0.95 degrees as deformed; 0.92 after ENCORE, 0.13 after ConSEAL), and the cost per iteration |
+| `cohort_alignment.png` | registering the ten subjects with ENCORE (onto its Karcher median) and with ConSEAL (onto the mean square-root density, since its median settles on one subject), every density from the package's smoother: each subject's cost per iteration, and the correlation between each pair of subjects' connectomes before and after (mean 0.704, then 0.758 after ENCORE and 0.780 after ConSEAL) |
+| `alignment_recovery.png` | one subject's 903,797 endpoints moved by a known smooth warp (degree 4, 1.7 degrees on average) and registered back onto the undeformed subject by ENCORE and by ConSEAL, both through the package's smoother: how far each endpoint still is from where it started, vertex by vertex on the surface and as a histogram (1.66 degrees as deformed; 0.21 after ENCORE, 0.10 after ConSEAL), and the cost per iteration |

@@ -227,6 +227,20 @@ figure = sc.plot(coupling_map, mesh="fsaverage", cmap="coolwarm")
 figure.savefig("coupling.png", dpi=200)
 ```
 
+For a figure to publish, add `engine="pyvista"`: each view is rendered
+off-screen through PyVista (VTK) with smooth per-vertex normals, a
+three-point light kit and a specular highlight, then laid out in the same
+figure with the same colorbar. It needs the `render` extra
+(`pip install 'sbci[render]'`). Four fsaverage views take about ten seconds
+on a laptop and about a minute on a cluster node without a display, where
+VTK 9.4 or later renders in software by itself (an older VTK there needs its
+OSMesa build: `pip install --extra-index-url https://wheels.vtk.org
+vtk-osmesa`).
+
+```python
+figure = sc.plot(coupling_map, mesh="fsaverage", engine="pyvista", cmap="coolwarm")
+```
+
 ## `save` and `sbci validate`
 
 ```python
@@ -602,14 +616,17 @@ seconds per 100,000 streamlines rather than minutes. Six things to know:
   (PORTING.md item 7).
 ![Alignment with a known answer](docs/figures/alignment_recovery.png)
 
-*An HCP-Aging subject's 903,797 endpoints moved by a known smooth warp (a
-degree on average, four at most) and registered back onto the original: how
-far each endpoint still is from where it started, and the cost per iteration.
-ConSEAL with the paper's update (`delta=0.1, step_clamp=inf, viscosity=0`)
-and a stopping threshold of 1e-7 puts the endpoints back to within 0.13
-degrees on average; ENCORE halves its cost with a warp that only half agrees
-with the deformation, and undone through its inverse brings them from 0.95 to
-0.92. On the synthetic subject the same test gives 0.17 and 0.40 degrees.*
+*An HCP-Aging subject's 903,797 endpoints moved by a known smooth warp
+(degree 4, 1.7 degrees on average, 4 at most) and registered back onto the
+undeformed subject, both through the package's smoother. Top: how far the
+endpoints still are from where they started, vertex by vertex. Bottom: the
+same as a histogram, and the cost per iteration. ENCORE, with its default
+degree-6 basis, brings the endpoints back from 1.66 to 0.21 degrees in eight
+steps; ConSEAL with the paper's update (`delta=0.1, step_clamp=inf,
+viscosity=0`) and a stopping threshold of 1e-7 to 0.10 degrees in sixty. The
+reference has to go through the same smoother as the deformed copy, and the
+warp has to be one a smoothed density can see; PORTING.md item 4 shows what
+happens otherwise.*
 
 ## Carrying a warp to another template
 

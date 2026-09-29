@@ -1,6 +1,7 @@
 """Draw the documentation figures from the ten-subject HCP-Aging example cohort.
 
-    python scripts/hcp_figures.py /path/to/cohort docs/figures [--skip-cohort | --only-cohort]
+    python scripts/hcp_figures.py /path/to/cohort docs/figures \
+        [--skip-cohort | --only-cohort | --surfaces-only | --only-recovery]
 
 The cohort directory holds ``manifest.csv`` (subject, age_years, sex) and one
 ``<subject>_sc.h5`` (with endpoints) and ``<subject>_fc.h5`` per subject, as
@@ -23,24 +24,30 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
-from matplotlib.colors import LogNorm  # noqa: E402
+from matplotlib.cm import ScalarMappable  # noqa: E402
+from matplotlib.colors import LogNorm, Normalize  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from make_figures import (  # noqa: E402
     BLUE,
     BLUE_RAMP,
+    DISPLAY_ENGINE,
     DISPLAY_MESH,
+    DOT_SIZE,
     MUTED,
     ORANGE,
     SEED,
+    SEED_SIZE,
     SURFACE_RAMP,
     TITLE_SIZE,
     VIEWS,
     angles,
+    rendered_map,
     save,
 )
 
 import sbci  # noqa: E402
+from sbci import render  # noqa: E402
 from sbci.connectome import ContinuousConnectome  # noqa: E402
 from sbci.plotting import display_mesh  # noqa: E402
 from sbci.smoothing import Endpoints  # noqa: E402
@@ -78,41 +85,15 @@ def resmoothed(cc: ContinuousConnectome, endpoints: Endpoints) -> ContinuousConn
     return carrier.smooth(kernel="shk", mask_medial_wall=True)
 
 
-def mark_seed(figure, display) -> None:
-    """The orange dot on the first (left lateral) panel."""
-    left = display.geometries["inflated"][0]
-    x, y, z = left[display.nearest[0][SEED]] - left.mean(axis=0)
-    lateral = figure.axes[0]
-    lateral.computed_zorder = False
-    lateral.scatter(
-        [x],
-        [y],
-        [z],
-        s=90,
-        color=ORANGE,
-        edgecolor="white",
-        linewidth=1.5,
-        zorder=10,
-        depthshade=False,
-    )
-
-
 # --- one subject ---------------------------------------------------------------------
 
 
 def seed_profile(out: Path, cc) -> None:
     profile = cc.seed(vertex=SEED)
     profile = profile / profile.max()
-    figure = cc.plot(
-        profile,
-        views=VIEWS,
-        cmap=SURFACE_RAMP,
-        threshold=0.02,
-        vmin=0.02,
-        vmax=1.0,
-        mesh=DISPLAY_MESH,
+    figure = rendered_map(
+        profile, threshold=0.02, vmin=0.02, vmax=1.0, markers=[(0, [SEED], ORANGE, SEED_SIZE)]
     )
-    mark_seed(figure, display_mesh(DISPLAY_MESH))
     figure.suptitle(
         f"Where one vertex connects to: an HCP-Aging subject's density of streamlines between "
         f"vertex {SEED}\n(orange dot, left temporal cortex) and every other vertex, relative to "
@@ -154,7 +135,13 @@ def region_matrix(out: Path, cc) -> None:
 def coupling(out: Path, sc, fc) -> None:
     values = sc.coupling(fc)
     figure = sc.plot(
-        values, views=VIEWS, cmap=SURFACE_RAMP, symmetric=False, vmin=0.0, mesh=DISPLAY_MESH
+        values,
+        views=VIEWS,
+        cmap=SURFACE_RAMP,
+        symmetric=False,
+        vmin=0.0,
+        mesh=DISPLAY_MESH,
+        engine=DISPLAY_ENGINE,
     )
     figure.suptitle(
         "Structure-function coupling in an HCP-Aging subject: at each vertex, the cosine "
@@ -171,7 +158,6 @@ def smoothing_power(out: Path, cc) -> None:
     from matplotlib.colors import Normalize
 
     from sbci.atlas import cortex_mask
-    from sbci.plotting import _import_nilearn
     from sbci.surface import vertex_normals
 
     ends = cc.endpoints
@@ -215,74 +201,36 @@ def smoothing_power(out: Path, cc) -> None:
         flush=True,
     )
 
-    nilearn_plotting = _import_nilearn()
     display = display_mesh(DISPLAY_MESH)
-    half = cc.n_vertices // 2
+    half = sbci.load_surface("inflated").n_vertices // 2
     vertices, faces = display.geometries["inflated"][0], display.faces[0]
-    centred = vertices - vertices.mean(axis=0)
-    facing = vertex_normals(vertices, faces)[:, 0] < 0
+    lift = 1.2 * vertex_normals(vertices, faces)  # markers sit just above the surface
     on_cortex = np.nan_to_num(display.interpolate(cortex.astype(float))[0]) > 0.5
-    depth = np.where(on_cortex, display.sulc[0], 0.0)
+    grey = render.shade(display.sulc[0], on_cortex)
     smooth_hi = [display.interpolate(np.where(cortex, values, np.nan))[0] for values in smooth]
     seed_vertex = display.nearest[0][SEED]
 
-    figure, axes = plt.subplots(
-        2, 3, figsize=(15, 7.6), subplot_kw={"projection": "3d"}, layout="constrained"
-    )
+    figure, axes = plt.subplots(2, 3, figsize=(15, 7.6), layout="constrained")
     for row in range(2):
         for column in range(3):
             axis = axes[row, column]
             if row == 0:
-                surf_map, threshold, vmin, vmax = np.zeros(vertices.shape[0]), 0.5, 0.0, 1.0
-            else:
-                surf_map, threshold, vmin, vmax = smooth_hi[column], 0.02, 0.02, 1.0
-            nilearn_plotting.plot_surf(
-                surf_mesh=(vertices.copy(), faces.copy()),
-                surf_map=surf_map,
-                hemi="left",
-                view="lateral",
-                cmap=SURFACE_RAMP,
-                threshold=threshold,
-                vmin=vmin,
-                vmax=vmax,
-                colorbar=False,
-                axes=axis,
-                figure=figure,
-                bg_map=depth,
-                bg_on_data=True,
-                alpha=1.0,
-            )
-            axis.computed_zorder = False
-            if row == 0:
-                local = partner[column][partner[column] < half]
-                local = display.nearest[0][local]
-                local = np.unique(local[facing[local]])
-                axis.scatter(
-                    centred[local, 0],
-                    centred[local, 1],
-                    centred[local, 2],
-                    s=14,
-                    color=BLUE,
-                    edgecolor="white",
-                    linewidth=0.4,
-                    zorder=9,
-                    depthshade=False,
-                )
+                # The far ends of the streamlines that touch the vertex; the
+                # renderer hides those on the far side of the hemisphere.
+                local = partner[column][partner[column] < half]  # left hemisphere
+                local = np.unique(display.nearest[0][local])
+                rgb = np.repeat(grey[:, None], 3, axis=1)
+                markers = [(vertices[local] + lift[local], BLUE, DOT_SIZE)]
                 kind = f"raw: the {touching[column]:,} streamlines touching the vertex"
             else:
+                rgb = render.colour(smooth_hi[column], grey, SURFACE_RAMP, 0.02, 1.0, 0.02)
+                markers = []
                 kind = "smoothed density"
-            axis.scatter(
-                [centred[seed_vertex, 0]],
-                [centred[seed_vertex, 1]],
-                [centred[seed_vertex, 2]],
-                s=80,
-                color=ORANGE,
-                edgecolor="white",
-                linewidth=1.5,
-                zorder=10,
-                depthshade=False,
-            )
-            axis.set_title(f"{labels[column]}\n{kind}", fontsize=13, y=0.92)
+            markers.append((vertices[[seed_vertex]] + lift[[seed_vertex]], ORANGE, SEED_SIZE))
+            image = render.render_view(vertices, faces, rgb, "lateral", "L", points=markers)
+            axis.imshow(render.trim(image), interpolation="lanczos")
+            axis.set_axis_off()
+            axis.set_title(f"{labels[column]}\n{kind}", fontsize=13)
     bar = figure.colorbar(
         ScalarMappable(norm=Normalize(vmin=0.02, vmax=1.0), cmap=SURFACE_RAMP),
         ax=axes.ravel().tolist(),
@@ -307,10 +255,21 @@ def smoothing_power(out: Path, cc) -> None:
     save(figure, out, "smoothing_power.png")
 
 
+#: The known warp of the recovery figure: a random tangent field of harmonic
+#: order WARP_ORDER, scaled so that its largest displacement is WARP_AMPLITUDE
+#: radians; and the order of the tangent basis ENCORE searches over.
+WARP_ORDER, WARP_AMPLITUDE, ENCORE_ORDER = 4, 0.07, 6
+
+
 def alignment_recovery(out: Path, subject) -> None:
-    """Deform a real subject by a known smooth warp and measure how much each method undoes."""
-    from sbci.alignment import Encore, MeshQuery, _hemisphere_grids, align
-    from sbci.conseal import DEFAULT_WARP_ORDER, EndpointConnectome, StationaryWarp, default_grids
+    """Deform a real subject by a known smooth warp and measure how much each method undoes.
+
+    The undeformed copy is the subject's own endpoints through the package's
+    smoother, so that the deformation is the only difference between the two.
+    """
+    from sbci.alignment import Encore, MeshQuery, _hemisphere_grids, normalize_rows
+    from sbci.atlas import cortex_mask
+    from sbci.conseal import EndpointConnectome, StationaryWarp, default_grids
     from sbci.smoothing import endpoint_positions
 
     lh, rh = default_grids()
@@ -320,11 +279,12 @@ def alignment_recovery(out: Path, subject) -> None:
         warp = StationaryWarp(grid)
         coefficients = rng.standard_normal(grid.basis.shape[1])
         displacement = (coefficients[None, :, None] * grid.basis).sum(axis=1)
-        displacement *= 0.07 / np.linalg.norm(displacement, axis=1).max()
+        displacement *= WARP_AMPLITUDE / np.linalg.norm(displacement, axis=1).max()
         assert warp.compose(displacement)
         return warp
 
-    lh_true, rh_true = known_warp(lh), known_warp(rh)
+    lh_true, rh_true = (known_warp(grid) for grid in default_grids(WARP_ORDER))
+    reference = resmoothed(subject, subject.endpoints)
     carrier = EndpointConnectome.from_endpoints(subject.endpoints, lh, rh)
     original = carrier.positions()
     carrier.warp(lh_true, rh_true)
@@ -333,28 +293,29 @@ def alignment_recovery(out: Path, subject) -> None:
     before = np.r_[angles(original[0], moved[0]), angles(original[1], moved[1])]
 
     t = time.time()
-    grids, rotations = _hemisphere_grids(DEFAULT_WARP_ORDER, return_rotations=True)
-    encore = align(
-        [subject, deformed],
-        template=Encore(*grids).root(subject.dense()),
-        grids=grids,
-        max_iterations=50,
+    grids, rotations = _hemisphere_grids(ENCORE_ORDER, return_rotations=True)
+    engine = Encore(*grids, max_iterations=100)
+    fixed = engine.root(reference.dense())
+    trace = [float(((fixed - engine.root(deformed.dense())) ** 2 * engine.area_product).sum())]
+    _, lh_warp, rh_warp, _ = engine.register(
+        fixed, deformed.dense(), target_is_root=True, callback=lambda _i, c: trace.append(float(c))
     )
-    warp = encore.warps[1]
-    warped = (warp.lh_vertices @ rotations[0], warp.rh_vertices @ rotations[1])
-    fixed = []
+    warped = (lh_warp.vertices @ rotations[0], rh_warp.vertices @ rotations[1])
+    fixed_points = []
     ends = (carrier.hemisphere_in, carrier.hemisphere_out)
     for points, hemispheres in zip(moved, ends, strict=True):
         placed = np.empty_like(points)
         for side, grid in enumerate((lh, rh)):
             pick = np.asarray(hemispheres) == side
-            weights, indices = MeshQuery(warped[side], grid.faces).query(points[pick])
-            combined = np.einsum("nk,nkj->nj", weights, grid.vertices[indices])
-            placed[pick] = combined / np.linalg.norm(combined, axis=1, keepdims=True)
-        fixed.append(placed)
-    after_encore = np.r_[angles(original[0], fixed[0]), angles(original[1], fixed[1])]
+            weights, indices = MeshQuery(normalize_rows(warped[side]), grid.faces).query(
+                points[pick]
+            )
+            placed[pick] = normalize_rows(np.einsum("nk,nkj->nj", weights, grid.vertices[indices]))
+        fixed_points.append(placed)
+    after_encore = np.r_[angles(original[0], fixed_points[0]), angles(original[1], fixed_points[1])]
     print(
-        f"  ENCORE in {time.time() - t:.0f}s: {before.mean():.2f} -> {after_encore.mean():.2f} deg",
+        f"  ENCORE in {time.time() - t:.0f}s: {before.mean():.2f} -> {after_encore.mean():.2f} "
+        f"deg, cost {trace[0]:.4f} -> {trace[-1]:.4f} in {len(trace) - 1} steps",
         flush=True,
     )
 
@@ -376,13 +337,54 @@ def alignment_recovery(out: Path, subject) -> None:
         flush=True,
     )
 
-    figure, (left, right) = plt.subplots(1, 2, figsize=(11.5, 4.2))
-    bins = np.linspace(0, 3.0, 61)
-    for values, color, label in (
-        (before, MUTED, "as deformed"),
-        (after_encore, BLUE, "after ENCORE"),
-        (after_conseal, ORANGE, "after ConSEAL"),
-    ):
+    # Where the endpoints still are, vertex by vertex: the mean over the
+    # endpoints that started at each vertex.
+    endpoints = subject.endpoints
+    vertex = np.r_[
+        endpoints.vtx_in + endpoints.n_per_hemi * endpoints.surf_in.astype(np.int64),
+        endpoints.vtx_out + endpoints.n_per_hemi * endpoints.surf_out.astype(np.int64),
+    ]
+    n_vertices = 2 * endpoints.n_per_hemi
+    counts = np.bincount(vertex, minlength=n_vertices)
+
+    def per_vertex(values):
+        sums = np.bincount(vertex, weights=values, minlength=n_vertices)
+        return np.where(counts > 0, sums / np.maximum(counts, 1), np.nan)
+
+    stages = (
+        ("as deformed", before, MUTED),
+        ("after ENCORE", after_encore, BLUE),
+        ("after ConSEAL", after_conseal, ORANGE),
+    )
+    display = display_mesh(DISPLAY_MESH)
+    vertices, faces = display.geometries["inflated"][0], display.faces[0]
+    cortex = cortex_mask()
+    on_cortex = np.nan_to_num(display.interpolate(cortex.astype(float))[0]) > 0.5
+    grey = render.shade(display.sulc[0], on_cortex)
+    vmax = float(np.ceil(np.nanpercentile(per_vertex(before), 98) * 2) / 2)
+
+    figure = plt.figure(figsize=(15, 9.6), layout="constrained")
+    top, bottom = figure.subfigures(2, 1, height_ratios=[1.2, 1.0])
+    axes = top.subplots(1, 3)
+    for axis, (label, values, _color) in zip(axes, stages, strict=True):
+        surface = display.interpolate(np.where(cortex, per_vertex(values), np.nan))[0]
+        rgb = render.colour(surface, grey, "Reds", 0.0, vmax)
+        image = render.render_view(vertices, faces, rgb, "lateral", "L")
+        axis.imshow(render.trim(image), interpolation="lanczos")
+        axis.set_axis_off()
+        axis.set_title(f"{label}: mean {values.mean():.2f} deg", fontsize=13)
+    bar = top.colorbar(
+        ScalarMappable(norm=Normalize(0.0, vmax), cmap="Reds"),
+        ax=axes.tolist(),
+        shrink=0.7,
+        pad=0.02,
+    )
+    bar.set_label("degrees from where the endpoints started", fontsize=11)
+    bar.outline.set_visible(False)
+
+    left, right = bottom.subplots(1, 2)
+    bins = np.linspace(0, max(3.0, vmax), 61)
+    for label, values, color in stages:
         left.hist(
             values,
             bins=bins,
@@ -395,11 +397,11 @@ def alignment_recovery(out: Path, subject) -> None:
     left.set_ylabel("endpoints")
     left.set_title("Endpoints moved by a known warp, and put back", loc="left")
     left.legend(frameon=False)
-    for trace, color, label in (
-        (np.asarray(encore.traces[1]), BLUE, "ENCORE"),
+    for values, color, label in (
+        (np.asarray(trace), BLUE, "ENCORE"),
         (np.asarray(conseal.costs[1]), ORANGE, "ConSEAL"),
     ):
-        relative = trace / trace[0]
+        relative = values / values[0]
         right.plot(range(len(relative)), relative, color=color, linewidth=2, label=label)
         right.annotate(
             f"{label} {relative[-1]:.2f}",
@@ -416,10 +418,9 @@ def alignment_recovery(out: Path, subject) -> None:
     right.set_title("Cost of the registration", loc="left")
     right.legend(frameon=False, loc="upper right")
     figure.suptitle(
-        "Alignment with a known answer: an HCP-Aging subject registered onto an undeformed copy "
-        "of itself",
+        "Alignment with a known answer: an HCP-Aging subject's endpoints moved by a smooth "
+        "warp and registered back onto the undeformed subject",
         fontsize=14,
-        y=1.03,
     )
     save(figure, out, "alignment_recovery.png")
 
@@ -427,55 +428,13 @@ def alignment_recovery(out: Path, subject) -> None:
 # --- the cohort ----------------------------------------------------------------------
 
 
-def cohort_figures(out: Path, subjects, ages, conseal: bool = True) -> None:
-    """A rank-4 FPCA of the ten subjects against age, and their alignment."""
-    t = time.time()
-    reduction = sbci.reduce(subjects, rank=4, candidates=6)
-    result = sbci.local_test(reduction.scores, ages)
-    found = result.significant()
-    print(
-        f"  FPCA in {time.time() - t:.0f}s: explained {reduction.explained[-1]:.3f}, "
-        f"adjusted p {np.round(result.adjusted, 4).tolist()}, significant {found.tolist()}",
-        flush=True,
-    )
-    lead = int(found[0]) if found.size else int(np.argmin(result.adjusted))
-    component = reduction.basis[:, lead]
-    component = component / np.abs(component).max()
-    figure = subjects[0].plot(
-        component, views=VIEWS, cmap="coolwarm", symmetric=True, threshold=0.05, mesh=DISPLAY_MESH
-    )
-    verdict = f"adjusted p = {result.adjusted[lead]:.3g}, " + (
-        "significant at 0.05" if found.size else "not significant with ten subjects"
-    )
-    figure.suptitle(
-        f"FPCA of ten HCP-Aging subjects: component {lead + 1} of 4, the one most associated "
-        f"with age\n({verdict}); the component's values relative to its largest",
-        fontsize=TITLE_SIZE,
-        y=1.11,
-    )
-    save(figure, out, "cohort_component.png")
+def cohort_figures(out: Path, subjects, conseal: bool = True) -> None:
+    """The alignment of the ten subjects.
 
-    figure, axes = plt.subplots(2, 2, figsize=(9.5, 7.2), layout="constrained")
-    for k, axis in enumerate(axes.ravel()):
-        scores = reduction.scores[:, k]
-        axis.scatter(ages, scores, s=60, color=BLUE, zorder=3, label="subjects")
-        slope, intercept = np.polyfit(ages, scores, 1)
-        grid = np.linspace(ages.min(), ages.max(), 2)
-        axis.plot(
-            grid, slope * grid + intercept, color=ORANGE, linewidth=2, label="least-squares fit"
-        )
-        r = float(np.corrcoef(ages, scores)[0, 1])
-        axis.set_title(
-            f"component {k + 1}: r = {r:.2f}, adjusted p = {result.adjusted[k]:.2g}", fontsize=12
-        )
-        axis.set_xlabel("age (years)")
-        axis.set_ylabel(f"score on component {k + 1}")
-        if k == 0:
-            axis.legend(frameon=False)
-    figure.suptitle(
-        "Each component's scores against age in the ten HCP-Aging subjects", fontsize=14
-    )
-    save(figure, out, "cohort_scores.png")
+    A rank-4 FPCA of ten subjects against their ages finds nothing, as it
+    should with ten subjects, so the real cohort illustrates alignment only;
+    the synthetic cohort, with its planted effect, illustrates the analysis.
+    """
 
     # Alignment: ENCORE on the densities, ConSEAL on the endpoints, and how alike
     # the subjects are before and after.
@@ -484,9 +443,16 @@ def cohort_figures(out: Path, subjects, ages, conseal: bool = True) -> None:
         r = np.corrcoef(data)
         return r[np.triu_indices(len(matrices), 1)]
 
-    before = similarity([s.data for s in subjects])
+    # One smoother for everything compared: the subjects' endpoints through the
+    # package's kernel. The pipeline's stored densities differ from that by more
+    # than a small warp changes them, which would make any comparison across the
+    # two unfair (see alignment_recovery).
     t = time.time()
-    encore = sbci.align(subjects, max_iterations=10, backtracks=4)
+    smoothed = [resmoothed(subject, subject.endpoints) for subject in subjects]
+    print(f"  re-smoothed ten subjects in {time.time() - t:.0f}s", flush=True)
+    before = similarity([s.data for s in smoothed])
+    t = time.time()
+    encore = sbci.align(smoothed, max_iterations=10, backtracks=4)
     from sbci.grid import to_condensed
 
     aligned_encore = [to_condensed(np.asarray(d)) for d in encore.aligned]
@@ -589,10 +555,22 @@ def main(argv: list[str]) -> int:
     skip_cohort = "--skip-cohort" in argv
     only_cohort = "--only-cohort" in argv
     no_conseal = "--no-conseal" in argv
+    surfaces_only = "--surfaces-only" in argv  # the rendered surface figures, no registrations
+    only_recovery = "--only-recovery" in argv  # the known-warp figure alone
     out.mkdir(parents=True, exist_ok=True)
     subjects, functional, ages = load_cohort(cohort_dir)
     print(f"loaded {len(subjects)} subjects, ages {ages.min():.0f}-{ages.max():.0f}", flush=True)
     first = subjects[0]
+    if surfaces_only:
+        print("surface figures", flush=True)
+        seed_profile(out, first)
+        coupling(out, first, sbci.load(functional[0]))
+        smoothing_power(out, first)
+        return 0
+    if only_recovery:
+        print("alignment recovery", flush=True)
+        alignment_recovery(out, first)
+        return 0
     if not only_cohort:
         print("single subject", flush=True)
         seed_profile(out, first)
@@ -604,7 +582,7 @@ def main(argv: list[str]) -> int:
         alignment_recovery(out, first)
     if not skip_cohort:
         print("cohort", flush=True)
-        cohort_figures(out, subjects, ages, conseal=not no_conseal)
+        cohort_figures(out, subjects, conseal=not no_conseal)
     return 0
 
 

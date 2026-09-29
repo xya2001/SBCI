@@ -16,4 +16,5 @@ changes (PORTING.md says which item each belongs to).
 | `build_fslr_surfaces.py` | fsLR-32k anatomical surfaces from fsaverage, for viewing the exchange file |
 | `import_legacy.py` | converts legacy pipeline `.mat` output (SC, FC, endpoints) into the package's HDF5 files |
 | `build_hcp_cohort.py` | builds the ten-subject HCP-Aging example cohort from the lab's pipeline output: SC with endpoints and FC per subject, converted as `import_legacy.py` does and validated; takes a manifest of subjects and ages |
+| `encore_probe.py` | nothing to bundle: measures ENCORE's cost landscape around a known warp of a real subject (the oracle, the smoother floor, ConSEAL's answer in ENCORE's cost) and its recovery over the warp's smoothness, the basis order and the reference; PORTING.md item 4 records the results |
 | `md2pdf.py` | renders a project markdown document as a typeset PDF |

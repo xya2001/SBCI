@@ -24,6 +24,7 @@ import numpy as np  # noqa: E402
 from matplotlib.colors import LinearSegmentedColormap, LogNorm  # noqa: E402
 
 import sbci  # noqa: E402
+from sbci import render  # noqa: E402
 from sbci.plotting import display_mesh  # noqa: E402
 
 # One blue for magnitude, orange for a second series, muted ink for text and axes.
@@ -43,6 +44,10 @@ VIEWS = ("lateral", "medial")
 #: Surface figures are drawn on FreeSurfer's fsaverage (163,842 vertices per
 #: hemisphere) with the map interpolated onto it, not on the faceted grid.
 DISPLAY_MESH = "fsaverage"
+#: Surfaces are rendered through PyVista (smooth normals, lighting, specular highlight).
+DISPLAY_ENGINE = "pyvista"
+#: Marker radii (mm) for the endpoints and the seed on the rendered smoothing figure.
+DOT_SIZE, SEED_SIZE = 1.1, 2.4
 TITLE_SIZE = 17  # the surface figures are large; a 12-point title reads as a footnote on them
 
 plt.rcParams.update(
@@ -72,37 +77,56 @@ def save(figure, out: Path, name: str, dpi: int = 200) -> None:
 SEED = 1234  # a left temporal vertex
 
 
+def rendered_map(
+    values,
+    views=VIEWS,
+    cmap=SURFACE_RAMP,
+    vmin=0.0,
+    vmax=1.0,
+    threshold=None,
+    symmetric=False,
+    markers=(),
+):
+    """Grid ``values`` on the display mesh, drawn as ``plot(engine="pyvista")`` draws them.
+
+    ``markers`` are ``(hemisphere, grid_vertices, colour, radius)`` tuples: lit
+    spheres of ``radius`` mm at those grid vertices (global indices) on
+    hemisphere 0 (left) or 1 (right), which ``plot`` has no option for.
+    """
+    from sbci.atlas import cortex_mask
+    from sbci.surface import vertex_normals
+
+    display = display_mesh(DISPLAY_MESH)
+    cortex = cortex_mask()
+    half = cortex.size // 2
+    values = np.where(cortex, np.asarray(values, dtype=np.float64), np.nan)
+    per_hemisphere = display.interpolate(values)
+    on_cortex = [
+        np.nan_to_num(fraction) > 0.5 for fraction in display.interpolate(cortex.astype(np.float64))
+    ]
+    images = {}
+    for k, side in enumerate("LR"):
+        vertices, faces = display.geometries["inflated"][k], display.faces[k]
+        grey = render.shade(display.sulc[k], on_cortex[k])
+        rgb = render.colour(per_hemisphere[k], grey, cmap, vmin, vmax, threshold, symmetric)
+        lift = 1.2 * vertex_normals(vertices, faces)
+        points = []
+        for hemisphere, grid_vertices, colour, radius in markers:
+            if hemisphere == k:
+                local = np.unique(display.nearest[k][np.asarray(grid_vertices) - k * half])
+                points.append((vertices[local] + lift[local], colour, radius))
+        for view in views:
+            images[(side, view)] = render.render_view(
+                vertices, faces, rgb, view, side, points=points
+            )
+    return render.compose(images, tuple(views), cmap, vmin, vmax)
+
+
 def seed_profile(out: Path, cc) -> None:
     profile = cc.seed(vertex=SEED)
     profile = profile / profile.max()  # unit-mass densities are 1e-10 per pair; show the shape
-    figure = cc.plot(
-        profile,
-        views=VIEWS,
-        cmap=SURFACE_RAMP,
-        threshold=0.02,
-        vmin=0.02,
-        vmax=1.0,
-        mesh=DISPLAY_MESH,
-    )
-    # Mark the seed on the lateral view of its hemisphere. nilearn recentres
-    # each hemisphere on its own mean before drawing, so do the same.
-    display = display_mesh(DISPLAY_MESH)
-    left = display.geometries["inflated"][0]
-    x, y, z = left[display.nearest[0][SEED]] - left.mean(axis=0)
-    lateral = figure.axes[0]
-    # A 3-D axes sorts artists by depth and would bury the dot under the mesh;
-    # switch to drawing order so the marker sits on top.
-    lateral.computed_zorder = False
-    lateral.scatter(
-        [x],
-        [y],
-        [z],
-        s=90,
-        color=ORANGE,
-        edgecolor="white",
-        linewidth=1.5,
-        zorder=10,
-        depthshade=False,
+    figure = rendered_map(
+        profile, threshold=0.02, vmin=0.02, vmax=1.0, markers=[(0, [SEED], ORANGE, SEED_SIZE)]
     )
     figure.suptitle(
         f"Where one vertex connects to: the density of streamlines between vertex {SEED} "
@@ -132,7 +156,6 @@ def smoothing_power(out: Path) -> None:
     from matplotlib.colors import Normalize
 
     from sbci.atlas import cortex_mask
-    from sbci.plotting import _import_nilearn
     from sbci.surface import vertex_normals
 
     # The same bundles every time, only the streamlines redrawn: a test-retest pair
@@ -168,76 +191,36 @@ def smoothing_power(out: Path) -> None:
         flush=True,
     )
 
-    nilearn_plotting = _import_nilearn()
     display = display_mesh(DISPLAY_MESH)
     half = sbci.load_surface("inflated").n_vertices // 2
     vertices, faces = display.geometries["inflated"][0], display.faces[0]
-    centred = vertices - vertices.mean(axis=0)  # nilearn recentres each hemisphere
-    facing = vertex_normals(vertices, faces)[:, 0] < 0  # the lateral view looks from -x
+    lift = 1.2 * vertex_normals(vertices, faces)  # markers sit just above the surface
     on_cortex = np.nan_to_num(display.interpolate(cortex.astype(float))[0]) > 0.5
-    depth = np.where(on_cortex, display.sulc[0], 0.0)
+    grey = render.shade(display.sulc[0], on_cortex)
     smooth_hi = [display.interpolate(np.where(cortex, values, np.nan))[0] for values in smooth]
+    seed_vertex = display.nearest[0][SEED]
 
-    figure, axes = plt.subplots(
-        2, 3, figsize=(15, 7.6), subplot_kw={"projection": "3d"}, layout="constrained"
-    )
+    figure, axes = plt.subplots(2, 3, figsize=(15, 7.6), layout="constrained")
     for row in range(2):
         for column in range(3):
             axis = axes[row, column]
             if row == 0:
-                surf_map, threshold, vmin, vmax = np.zeros(vertices.shape[0]), 0.5, 0.0, 1.0
-            else:
-                surf_map, threshold, vmin, vmax = smooth_hi[column], 0.02, 0.02, 1.0
-            nilearn_plotting.plot_surf(
-                surf_mesh=(vertices.copy(), faces.copy()),
-                surf_map=surf_map,
-                hemi="left",
-                view="lateral",
-                cmap=SURFACE_RAMP,
-                threshold=threshold,
-                vmin=vmin,
-                vmax=vmax,
-                colorbar=False,
-                axes=axis,
-                figure=figure,
-                bg_map=depth,
-                bg_on_data=True,
-                alpha=1.0,
-            )
-            axis.computed_zorder = False  # markers above the mesh, in drawing order
-            if row == 0:
-                # The far ends of the streamlines that touch the vertex, where they
-                # fall on the visible side of this hemisphere.
+                # The far ends of the streamlines that touch the vertex; the
+                # renderer hides those on the far side of the hemisphere.
                 local = partners[column][partners[column] < half]  # left hemisphere
-                local = display.nearest[0][local]  # the mesh vertex nearest each grid vertex
-                local = local[facing[local]]
-                axis.scatter(
-                    centred[local, 0],
-                    centred[local, 1],
-                    centred[local, 2],
-                    s=34,
-                    color=BLUE,
-                    edgecolor="white",
-                    linewidth=0.8,
-                    zorder=9,
-                    depthshade=False,
-                )
-                kind = f"raw: the {touching[column]} streamlines touching the vertex"
+                local = np.unique(display.nearest[0][local])
+                rgb = np.repeat(grey[:, None], 3, axis=1)
+                markers = [(vertices[local] + lift[local], BLUE, DOT_SIZE)]
+                kind = f"raw: the {touching[column]:,} streamlines touching the vertex"
             else:
+                rgb = render.colour(smooth_hi[column], grey, SURFACE_RAMP, 0.02, 1.0, 0.02)
+                markers = []
                 kind = "smoothed density"
-            seed_vertex = display.nearest[0][SEED]
-            axis.scatter(
-                [centred[seed_vertex, 0]],
-                [centred[seed_vertex, 1]],
-                [centred[seed_vertex, 2]],
-                s=80,
-                color=ORANGE,
-                edgecolor="white",
-                linewidth=1.5,
-                zorder=10,
-                depthshade=False,
-            )
-            axis.set_title(f"{columns[column]}\n{kind}", fontsize=13, y=0.92)
+            markers.append((vertices[[seed_vertex]] + lift[[seed_vertex]], ORANGE, SEED_SIZE))
+            image = render.render_view(vertices, faces, rgb, "lateral", "L", points=markers)
+            axis.imshow(render.trim(image), interpolation="lanczos")
+            axis.set_axis_off()
+            axis.set_title(f"{columns[column]}\n{kind}", fontsize=13)
     bar = figure.colorbar(
         ScalarMappable(norm=Normalize(vmin=0.02, vmax=1.0), cmap=SURFACE_RAMP),
         ax=axes.ravel().tolist(),
@@ -298,7 +281,13 @@ def coupling(out: Path, sc, fc) -> None:
     # Coupling is high almost everywhere on the synthetic pair, so a symmetric
     # scale would paint the whole surface one shade: run the ramp from zero.
     figure = sc.plot(
-        values, views=VIEWS, cmap=SURFACE_RAMP, symmetric=False, vmin=0.0, mesh=DISPLAY_MESH
+        values,
+        views=VIEWS,
+        cmap=SURFACE_RAMP,
+        symmetric=False,
+        vmin=0.0,
+        mesh=DISPLAY_MESH,
+        engine=DISPLAY_ENGINE,
     )
     figure.suptitle(
         "Structure-function coupling: at each vertex, the cosine similarity of its SC and FC "
@@ -330,6 +319,7 @@ def cohort_figures(out: Path) -> None:
         vmin=0.02,
         vmax=1.0,
         mesh=DISPLAY_MESH,
+        engine=DISPLAY_ENGINE,
     )
     figure.suptitle(
         "The planted bundle: the field whose weight scales with age (cohort.truth)",
@@ -341,7 +331,13 @@ def cohort_figures(out: Path) -> None:
     effect = result.effect_map(reduction, alpha=0.05)
     effect = effect / np.abs(effect).max()
     figure = subject.plot(
-        effect, views=VIEWS, cmap="coolwarm", symmetric=True, threshold=0.05, mesh=DISPLAY_MESH
+        effect,
+        views=VIEWS,
+        cmap="coolwarm",
+        symmetric=True,
+        threshold=0.05,
+        mesh=DISPLAY_MESH,
+        engine=DISPLAY_ENGINE,
     )
     correlation = np.corrcoef(effect, cohort.truth)[0, 1]
     figure.suptitle(

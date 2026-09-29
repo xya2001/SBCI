@@ -1138,18 +1138,45 @@ property of the problem, not a fault of the port. ENCORE on the same pair,
 with its inverse applied to the endpoints, reaches 0.40 degrees, 59% undone
 (item 4).
 
-The same test on a real subject (HCP-Aging, 903,797 streamlines, the same
-warp: 0.95 degrees on average) separates the methods further. ConSEAL with
-the paper's update and threshold 1e-7 reaches 0.13 degrees, 86% undone, cost
-to 1%, in 60 iterations. ENCORE halves its cost in 27 accepted steps with a
-warp of the right size (1.06 degrees at the grid vertices against 1.01 true),
-but the warp's direction agrees with the true field only at cosine 0.50
-(0.86 on the synthetic subject), and undone through its inverse it brings
-the endpoints from 0.95 to 0.92 degrees. Step lengths from 0.05 to 1.0 give
-the same result and 2.0 never accepts a step. With this many streamlines the
-density has structure at the kernel's scale everywhere, and the density cost
-has many ways down that are not the inverse deformation; the endpoints
-constrain ConSEAL where the density does not constrain ENCORE.
+The same test on a real subject (HCP-Aging, 903,797 streamlines) at first
+seemed to separate the methods. With the same degree-15 warp (0.95 degrees on
+average, 4 at most), ConSEAL with the paper's update and threshold 1e-7
+reached 0.13 degrees, 86% undone, while ENCORE halved its cost with a warp of
+the right size but only half the right direction (cosine 0.50 with the true
+field) and brought the endpoints from 0.95 to 0.92 degrees; step lengths from
+0.05 to 1.0 gave the same result. Two flaws in that experiment, not in the
+port, produced it (`tools/encore_probe.py` makes the measurements):
+
+- **The reference was the pipeline's stored density, the deformed copy was
+  re-smoothed by the package's kernel, and the two smoothers disagree by more
+  than the warp moves anything.** The stored density sits at a cost of 0.028
+  from its own endpoints put through `smooth(kernel="shk")`, out of a starting
+  cost of 0.039; the exact inverse warp, Jacobian included, lowers the cost
+  only to 0.036, and undoing the warp exactly at the endpoint level and
+  re-smoothing still costs 0.028. Even ConSEAL's warp, which agrees with the
+  true field at cosine 0.93, scores 0.035 in that cost. ENCORE's halving was
+  mostly fitting the smoother difference. With the reference put through the
+  same smoother the start is 0.009, the exact endpoint-level undo costs 0.0000,
+  and ENCORE undoes 58% of that warp (cosine 0.79).
+- **A warp with structure at the grid scale is one the smoothed density cannot
+  see.** Deforming the endpoints and then smoothing is not smoothing and then
+  deforming once the local stretch is large, so even against a matching
+  reference the true degree-15 warp costs 0.0095 from a start of 0.0090; no
+  optimizer of that cost can be expected to find it.
+
+On a smooth warp the picture is what it should be. A random field of degree
+4 (1.66 degrees on average, 4 at most) takes the matching-reference cost from
+0.022 to 0.005 at the true warp, and ENCORE with its default degree-6 basis
+undoes 87% of it in eight steps: the endpoints come back from 1.66 to 0.21
+degrees, the cost to 0.18 of its start, and the field it finds agrees with the
+truth at cosine 0.96. A degree-15 basis reaches the same 86% in 43 steps; the
+analytic derivative changes nothing; a warp of 2.8 degrees on average is
+undone 87% and a degree-2 warp 94%; against the stored reference the same
+smooth warp is undone 65%. ConSEAL on the smooth warp reaches 0.10 degrees, 94% undone, in 60 iterations. The
+README's figure uses the smooth warp and the matching reference
+(`scripts/hcp_figures.py`: `WARP_ORDER`, `WARP_AMPLITUDE`, `ENCORE_ORDER`).
+Two rules follow for any comparison: put every density through one smoother,
+and judge a registration by a warp it can represent.
 
 ### Measured on the synthetic cohort
 

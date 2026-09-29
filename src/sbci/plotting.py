@@ -212,6 +212,7 @@ def plot_surface(
     symmetric: bool | None = None,
     shading: bool = True,
     mesh: str = "ico4",
+    engine: str = "matplotlib",
     **kwargs,
 ):
     """Render a per-vertex map on a cortical surface.
@@ -250,6 +251,14 @@ def plot_surface(
         surfaces through the shared spherical registration and shade them by
         FreeSurfer's own sulcal depth. Display only: the values stay on ico4.
         The finest mesh takes about a minute per view to render.
+    engine
+        ``"matplotlib"`` draws through nilearn, flat-shaded. ``"pyvista"``
+        renders each view off-screen with smooth normals, a light kit and a
+        specular highlight (the ``render`` extra), then lays the views out in
+        the same figure: a few seconds a view on a laptop, about twenty in
+        software on a cluster node without a display (VTK 9.4 or later; an
+        older VTK there needs its OSMesa build, ``pip install --extra-index-url
+        https://wheels.vtk.org vtk-osmesa``).
 
     Returns
     -------
@@ -277,6 +286,8 @@ def plot_surface(
 
     if mesh not in DISPLAY_MESHES:
         raise ValueError(f"mesh must be one of {DISPLAY_MESHES}, got {mesh!r}")
+    if engine not in ("matplotlib", "pyvista"):
+        raise ValueError(f"engine must be 'matplotlib' or 'pyvista', got {engine!r}")
     values = np.asarray(surface_map, dtype=np.float64).ravel()
     grid_mesh = load_surface(surface)
     if values.size != grid_mesh.n_vertices:
@@ -339,6 +350,32 @@ def plot_surface(
             side: np.where(np.nan_to_num(cortex_fraction[k]) > 0.5, display.sulc[k], 0.0)
             for k, side in enumerate("LR")
         }
+    if engine == "pyvista":
+        from . import render
+
+        on_cortex = (
+            {"L": cortex[:half], "R": cortex[half:]}
+            if mesh == "ico4"
+            else {side: np.nan_to_num(cortex_fraction[k]) > 0.5 for k, side in enumerate("LR")}
+        )
+        images = {}
+        for side, hemisphere_values in per_hemisphere.items():
+            grey = (
+                render.shade(depths[side], on_cortex[side])
+                if shading
+                else np.full(hemisphere_values.shape, render.WALL_GREY + 0.2)
+            )
+            rgb = render.colour(
+                hemisphere_values, grey, cmap, vmin, vmax, threshold=threshold, symmetric=symmetric
+            )
+            coordinates, faces = meshes[side]
+            for view in views:
+                images[(side, view)] = render.render_view(coordinates, faces, rgb, view, side)
+        figure = render.compose(images, tuple(views), cmap, vmin, vmax, colorbar=not constant)
+        if title:
+            figure.suptitle(title, fontsize=15)
+        return figure
+
     if shading and "bg_map" not in kwargs:
         backgrounds = depths
         kwargs.setdefault("bg_on_data", True)
