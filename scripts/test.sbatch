@@ -8,10 +8,10 @@
 #SBATCH --time=00:20:00
 #SBATCH --output=slurm-%j.out
 
-# Run the test suite as a batch job. The login node is fine for this suite
-# today (it runs in well under a second), but the same script will carry the
-# full-grid and tutorial-subject tests once the data release exists, and those
-# do not belong on a login node.
+# Run the test suite as a batch job. Most of the suite would be fine on a login
+# node, but the tutorial-subject tests re-smooth a released subject's million
+# streamlines and do not belong there. They run when SBCI_HCP_DIR names a
+# downloaded copy (sbatch --export=ALL) or SBCI_DOWNLOAD=1 fetches one.
 set -euo pipefail
 
 ONYEN="$(whoami)"

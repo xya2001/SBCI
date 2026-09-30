@@ -98,46 +98,60 @@ where `src/sbci/spec.py` currently carries a **provisional** value, marked
    which the toolkit does not ship at ico4, was downsampled).
 
 6. **The data release.** ~~Do the HCP terms permit redistributing derived
-   connectomes openly?~~ **Answered, and the answer is no.** The group's own
-   `sbci-brain/SBCI_Datasets` repository says it plainly:
+   connectomes openly?~~ **Answered: it depends on the dataset.** The group's
+   own `sbci-brain/SBCI_Datasets` repository declines for its cohorts:
 
    > Due to the size and DUAs, we can't publish the SBCI connectomes here.
    > Please contact Dr. Zhang (zhengwu_zhang@unc.edu) if you want to use
    > connectomes produced by SBCI.
 
-   So `sbci download hcp-ya` **cannot work without authentication**, and the
-   brief's five-minute test cannot pass as written -- its second line assumes
-   an open download. The criterion itself needs rewording.
+   HCP-Aging is released under an NDA-style data use agreement, and the lab
+   decided on 30 September that its data are not to be published. The WU-Minn
+   HCP Young Adult open-access data are different: their Open Access Data Use
+   Terms allow derived data to be redistributed, provided they travel under
+   the same terms.
 
-   **Decided (28 September): the example cohort is ten HCP-Aging subjects,
-   hosted by the lab on a public Google Drive.** `sbci download hcp-aging`
-   fetches them from the ids in `src/sbci/data/hcp_aging.json` and verifies
-   each file's SHA-256; the manifest gives each subject's sex and a five-year
-   age bin, not the exact age, and the files' metadata carry no age. Whether
-   HCP-Aging's NDA data-use terms permit this public hosting of derived
-   connectomes is the lab's responsibility and was affirmed by the lab; this
-   entry records that the group's SBCI_Datasets page says otherwise for the
-   earlier cohorts. The five-minute test runs against the first subject when
-   asked (`SBCI_DOWNLOAD=1`). `sbci download hcp-ya` is not offered.
+   **Decided (30 September): the example cohort is eleven HCP Young Adult
+   subjects, hosted by the lab on a public Google Drive.** Ten were drawn at
+   random (seed 0), five women and five men, from the 946 young adults with
+   complete SBCI pipeline output in the lab's copy; the eleventh, sub-100307,
+   was added the same day because the brief's acceptance test names it, so
+   `sbci download hcp-ya --subject 100307` now works as the brief writes it.
+   All were rebuilt on the ico4
+   grid from the pipeline's snapped streamline endpoints on each subject's
+   FreeSurfer-registered sphere (`tools/build_hcp_cohort.py --layout
+   young-adult`). Each is one SC file with its endpoints; the lab's copy has
+   no resting-state data, so there is no FC yet. `sbci download hcp-ya`
+   fetches them from the ids in `src/sbci/data/hcp_ya.json`, verifies each
+   file's SHA-256 and writes `DATA_USE.txt` beside them: the terms, and the
+   acknowledgment a publication must carry. The manifest carries only
+   open-access fields, sex and the HCP's age band, and the files' metadata
+   carry no age. The folder,
+   https://drive.google.com/drive/folders/1gG2ZmxxVm4w5dvlCQvMaEEOBypU7nDpx,
+   holds the eleven files and the same `DATA_USE.txt`, shared with anyone who
+   has the link. `sbci download hcp-ya` fetched and verified the files from a
+   machine with no Google account, and Drive's own SHA-256 of sub-100307
+   matched the digest of the file built on Longleaf, and `scripts/check_hcp_ya.py` runs every method on
+   the download. The five-minute test runs against the first subject when
+   asked (`SBCI_DOWNLOAD=1`), and CI's `five-minute-start` job does so from a
+   blank environment on every push.
 
-   **Released (28 September).** The twenty files are in the lab's folder,
-   https://drive.google.com/drive/folders/1cC4vvF8XqixaRr6X1tJ6FsraDVArsQAP, shared with anyone who has the link. Their Drive ids, sizes and
-   SHA-256 digests are in the manifest; Drive's own SHA-256 of every upload
-   matched the digest of the file built on Longleaf, and `sbci download
-   hcp-aging` fetched and verified all twenty from a machine with no
-   Google account.
+   **The other 935 are not distributed.** All 946 were built the same way for
+   the README's analysis of fluid intelligence, at the lab's decision that
+   they be analysed and not released.
 
-   **The full cohort (29 September).** Every HCP-Aging subject with complete
-   pipeline output, 528 of the 726 in the lab's copy (295 women, 233 men, 36
-   to 100 years), was converted the same way (1,056 files, all passing
-   validation, 43 GB) and bundled for Zenodo, whose records take at most a
-   hundred files: 44 zip bundles of twenty-four subjects per modality and a
-   listing with every member's SHA-256 (`tools/bundle_hcp_cohort.py`). The
-   lab uploads them (`tools/zenodo_upload.py` stops short of publishing), and
-   `sbci download hcp-aging-full` reads them from the manifest
-   `src/sbci/data/hcp_aging_full.json`, filled in from the published record;
-   until then the command says the cohort has not been released. The same
-   data-use question as above applies at this scale.
+   **HCP-Aging is not published (30 September).** From 28 to 30 September the
+   example cohort was ten HCP-Aging subjects on a public Drive folder, and the
+   528 with complete pipeline output were bundled for Zenodo. The Zenodo
+   deposition was never published, and its owner discarded it.
+   `sbci download` offers no HCP-Aging cohort, and on 30 September the twenty
+   files were moved out of the public folder into a private one, after which
+   none of them downloads anonymously. The HCP-Aging files stay on Longleaf for
+   the lab's own analyses, and the figures drawn from them are marked as such.
+   The endpoints the HCP-Aging files carried then were the pipeline's
+   unsnapped branch, not those its connectome was smoothed from (PORTING.md
+   item 6); the lab's internal copies have been rebuilt from the snapped
+   endpoints.
 
 7. **License holder.** `LICENSE` says "The SBCI developers". Replace with the
    institutional holder before the first tagged release.

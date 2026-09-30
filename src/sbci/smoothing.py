@@ -787,6 +787,15 @@ class Endpoints:
         """Read ``mesh_intersections_*.mat`` from the legacy pipeline.
 
         MATLAB vertex indices are one-based and are converted here.
+
+        This file is the pipeline's *other* branch: the unsnapped filtered
+        intersections mapped barycentrically onto the grid. The pipeline's
+        smoothed connectome is built from the snapped streamlines on the
+        subject's registered high-resolution sphere instead, so endpoints read
+        from here do not re-smooth to it (r = 0.97 against 0.9997 on an
+        HCP-Aging subject; PORTING.md item 6). When ``snapped_fibers.npz`` and
+        the registered spheres are at hand, :meth:`from_snapped` gives the
+        endpoints that belong with the connectome.
         """
         import scipy.io
 
@@ -810,6 +819,77 @@ class Endpoints:
             n_per_hemi=n_per_hemi,
             **optional,
         )
+
+    @classmethod
+    def from_snapped(cls, snapped, lh_sphere, rh_sphere, grids=None) -> Endpoints:
+        """Endpoints from the pipeline's snapped streamlines and the subject's registered sphere.
+
+        This is the branch the pipeline's smoothed connectome comes from:
+        ``snapped_fibers.npz`` gives each streamline's two ends as a surface
+        (``0`` left white, ``1`` right white, higher values other surfaces)
+        and a vertex of that native surface, and the subject's registered
+        sphere, which has one vertex per native vertex, says where each lands
+        on the template sphere. Streamlines with an end on any other surface
+        are dropped, as ``intersections_to_sphere.py`` drops them, and each
+        end is then located on the grid with its triangle and barycentric
+        weights.
+
+        Parameters
+        ----------
+        snapped
+            Path to ``snapped_fibers.npz``, or a mapping with ``surf_ids0``,
+            ``surf_ids1``, ``v_ids0`` and ``v_ids1``.
+        lh_sphere, rh_sphere
+            ``(n_native, 3)`` vertex coordinates of the subject's registered
+            spheres, any radius, **in the grid's frame**. The pipeline's
+            ``?h_sphere_reg_lps.vtk`` are; a sphere stored in RAS, such as
+            FreeSurfer's ``sphere.reg``, needs its x and y negated first.
+        grids
+            ``(lh_grid, rh_grid)`` to locate on; the bundled ico4 grids by
+            default.
+
+        On an HCP-Aging subject the coordinates reproduce the pipeline's own
+        ``subject_xing_sphere_avg_coords.tsv`` for every one of 903,797
+        streamlines to within 0.001 degrees (PORTING.md item 6).
+        """
+        from .alignment import normalize_rows
+        from .conseal import EndpointConnectome, default_grids
+
+        if isinstance(snapped, (str, bytes)) or hasattr(snapped, "__fspath__"):
+            with np.load(snapped) as loaded:
+                snapped = {key: loaded[key] for key in loaded.files}
+        missing = [k for k in ("surf_ids0", "surf_ids1", "v_ids0", "v_ids1") if k not in snapped]
+        if missing:
+            raise FormatError(f"the snapped streamlines have no {missing}")
+        surf_in = np.asarray(snapped["surf_ids0"]).astype(np.int64).ravel()
+        surf_out = np.asarray(snapped["surf_ids1"]).astype(np.int64).ravel()
+        vertex_in = np.asarray(snapped["v_ids0"]).astype(np.int64).ravel()
+        vertex_out = np.asarray(snapped["v_ids1"]).astype(np.int64).ravel()
+        keep = (surf_in >= 0) & (surf_in <= 1) & (surf_out >= 0) & (surf_out <= 1)
+        spheres = [normalize_rows(np.asarray(s, dtype=np.float64)) for s in (lh_sphere, rh_sphere)]
+
+        def place(surface, vertex):
+            points = np.empty((surface.size, 3))
+            for side, sphere in enumerate(spheres):
+                pick = surface == side
+                if pick.any() and vertex[pick].max() >= sphere.shape[0]:
+                    raise ValueError(
+                        f"vertex {int(vertex[pick].max())} is beyond the "
+                        f"{'left' if side == 0 else 'right'} sphere's {sphere.shape[0]} vertices"
+                    )
+                points[pick] = sphere[vertex[pick]]
+            return points
+
+        lh_grid, rh_grid = grids if grids is not None else default_grids()
+        located = EndpointConnectome.from_points(
+            lh_grid,
+            rh_grid,
+            place(surf_in[keep], vertex_in[keep]),
+            place(surf_out[keep], vertex_out[keep]),
+            surf_in[keep],
+            surf_out[keep],
+        )
+        return located.to_endpoints()
 
     @property
     def has_positions(self) -> bool:

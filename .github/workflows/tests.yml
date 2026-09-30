@@ -50,6 +50,26 @@ jobs:
           python -c "from sbci import ContinuousConnectome, load_atlas; print('import ok')"
           sbci --version
 
+  five-minute-start:
+    # The acceptance criterion on a machine none of us configured: a blank
+    # environment installs the wheel with the plotting extra, runs the brief's
+    # `sbci download hcp-ya --subject 100307` against the public Google Drive,
+    # and runs the brief's remaining lines on the file it leaves.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip build
+      - run: python -m build
+      - run: python -m pip install "$(ls dist/*.whl)[plotting]" pytest
+      - name: The brief's acceptance lines on sub-100307
+        env:
+          SBCI_DOWNLOAD: "1"
+        run: python -m pytest -v -p no:cacheprovider tests/test_five_minute_start.py
+
   lint:
     runs-on: ubuntu-latest
     steps:

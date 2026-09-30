@@ -1,11 +1,17 @@
-"""Whether age is visible in a cohort's structural connectomes, and at what level.
+"""Whether age, or another subject measure, is visible in a cohort's structural connectomes.
 
     python tools/age_probe.py COHORT_DIR [--out probe.npz]
+    python tools/age_probe.py COHORT_DIR --table unrestricted.csv --column PMAT24_A_CR
 
 COHORT_DIR holds ``sub-*_sc.h5`` and ``manifest.csv`` with ``subject``, ``sex``
-and either ``age_years`` or ``age_bin`` (a bin enters as its midpoint), as
-``sbci download hcp-aging-full`` writes it. PORTING.md item 5, "Measured on
-the full HCP-Aging cohort", records what this found on the 528 subjects.
+and either ``age_years`` or ``age_bin`` (a bin enters as its midpoint, ``36+``
+as 37), as ``sbci download`` writes it. With ``--table`` and ``--column`` the
+measure tested is that column of a table keyed by subject, either the HCP's
+open-access table (``Subject`` holds the bare id) or one with a ``subject``
+column; subjects without a value are left out. PORTING.md item 5, "Measured on
+the full HCP-Aging cohort", records what this found against age on the 528
+HCP-Aging subjects, and "Measured on the HCP Young Adult cohort" what it found
+against fluid intelligence on the 946 young adults.
 
 Streams the SC files once and records, per subject: the area-weighted
 strength of every vertex, the Desikan region matrix, the interhemispheric and
@@ -29,6 +35,8 @@ parser = argparse.ArgumentParser(
 )
 parser.add_argument("cohort", type=Path, help="directory of sub-*_sc.h5 and manifest.csv")
 parser.add_argument("--out", type=Path, default=None, help="save the per-subject measures here")
+parser.add_argument("--table", type=Path, default=None, help="a table of subject measures")
+parser.add_argument("--column", default=None, help="the measure to test, a column of --table")
 args = parser.parse_args()
 rows = list(csv.DictReader(open(args.cohort / "manifest.csv")))
 
@@ -36,11 +44,30 @@ rows = list(csv.DictReader(open(args.cohort / "manifest.csv")))
 def years(row):
     if row.get("age_years"):
         return float(row["age_years"])
+    if row["age_bin"].endswith("+"):
+        return float(row["age_bin"][:-1]) + 1
     low, high = (int(v) for v in row["age_bin"].split("-"))
     return (low + high) / 2
 
 
-age = np.array([years(r) for r in rows])
+label = "age"
+if args.table is not None:
+    if args.column is None:
+        parser.error("--table needs --column")
+    label = args.column
+    with open(args.table, newline="") as handle:
+        table = list(csv.DictReader(handle))
+    key = "Subject" if table and "Subject" in table[0] else "subject"
+    values = {
+        (r[key] if r[key].startswith("sub-") else f"sub-{r[key]}"): r[args.column] for r in table
+    }
+    kept = [r for r in rows if values.get(r["subject"], "") not in ("", "NA", "nan")]
+    if len(kept) != len(rows):
+        print(f"{len(rows) - len(kept)} subjects have no {label}; left out", flush=True)
+    rows = kept
+    age = np.array([float(values[r["subject"]]) for r in rows])
+else:
+    age = np.array([years(r) for r in rows])
 female = np.array([r["sex"] == "F" for r in rows], dtype=float)
 n = len(rows)
 
@@ -120,8 +147,9 @@ def bh(p):
 
 
 print(
-    f"age {age.min():.1f}-{age.max():.1f}, {int(female.sum())} F; streamlines "
-    f"{count.min():,.0f}-{count.max():,.0f} (r with age {corr(count, age):+.3f})",
+    f"{n} subjects; {label} {age.min():.1f}-{age.max():.1f}, {int(female.sum())} F; streamlines "
+    f"{count.min():,.0f}-{count.max():,.0f} (r with {label} {corr(count, age):+.3f}; "
+    f"{label} with sex {corr(age, female):+.3f})",
     flush=True,
 )
 for name, values in (
@@ -130,7 +158,7 @@ for name, values in (
 ):
     r = corr(values, age)
     print(
-        f"{name}: mean {values.mean():.4f}; r with age {r:+.3f} (p {p_of_r(r):.2g}); "
+        f"{name}: mean {values.mean():.4f}; r with {label} {r:+.3f} (p {p_of_r(r):.2g}); "
         f"with sex {corr(values, female):+.3f}; with streamline count {corr(values, count):+.3f}"
     )
 for name, data in (("vertex strength", strength), ("Desikan edge", edges)):
@@ -141,17 +169,17 @@ for name, data in (("vertex strength", strength), ("Desikan edge", edges)):
     rs = corr(x, female)
     qs = bh(p_of_r(rs))
     print(
-        f"{name}: {keep.sum()} tested; age: {int((q < 0.05).sum())} significant at FDR 0.05, "
+        f"{name}: {keep.sum()} tested; {label}: {int((q < 0.05).sum())} significant at FDR 0.05, "
         f"|r| max {np.abs(r).max():.3f}, 95th pct {np.percentile(np.abs(r), 95):.3f}; "
         f"sex: {int((qs < 0.05).sum())} significant, |r| max {np.abs(rs).max():.3f}"
     )
     z = (x - x.mean(0)) / x.std(0)
     u, s, _ = np.linalg.svd(z, full_matrices=False)
     share = s**2 / (s**2).sum()
-    for k in range(8):
+    for k in range(min(8, s.size)):
         score = u[:, k] * s[k]
         print(
-            f"   PC{k + 1} ({share[k]:.1%}): r age {corr(score, age):+.3f}, sex "
+            f"   PC{k + 1} ({share[k]:.1%}): r {label} {corr(score, age):+.3f}, sex "
             f"{corr(score, female):+.3f}, streamlines {corr(score, count):+.3f}"
         )
 print("done", flush=True)

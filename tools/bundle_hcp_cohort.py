@@ -1,4 +1,4 @@
-"""Bundle the full HCP-Aging cohort for Zenodo, and write the package's manifest for it.
+"""Bundle a large cohort for Zenodo, and write the package's manifest for it.
 
     python tools/bundle_hcp_cohort.py bundle --data DIR --manifest manifest.csv --out BUNDLES
     python tools/bundle_hcp_cohort.py manifest --bundles BUNDLES --record 1234567 \
@@ -14,9 +14,11 @@ five-year age bin. Zenodo accepts at most a hundred files per record; 528
 subjects give 44 bundles.
 
 ``manifest`` turns ``bundles.json`` and the Zenodo record id into
-``src/sbci/data/hcp_aging_full.json``, the manifest ``sbci download
-hcp-aging-full`` reads. Run it after the record is published, since the file
-URLs carry the record id.
+``src/sbci/data/<cohort>.json``, the manifest ``sbci download <cohort>``
+reads once the cohort is added to ``sbci.download.MANIFESTS``. Run it after the
+record is published, since the file URLs carry the record id. It was written
+for the 528-subject HCP-Aging cohort, which is not to be released; nothing is
+released this way at present.
 """
 
 from __future__ import annotations
@@ -30,7 +32,7 @@ import sys
 import zipfile
 from pathlib import Path
 
-COHORT = "hcp-aging-full"
+COHORT = "hcp-ya-full"  # the default cohort name; --cohort sets it
 FILE_URL = "https://zenodo.org/records/{record}/files/{name}?download=1"
 
 
@@ -68,7 +70,7 @@ def bundle(args) -> int:
     per = args.per_bundle
     for modality in ("sc", "fc"):
         for index, start in enumerate(range(0, len(subjects), per), start=1):
-            name = f"{COHORT}_{modality}_{index:02d}.zip"
+            name = f"{args.cohort}_{modality}_{index:02d}.zip"
             path = out / name
             members = []
             with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as z:
@@ -94,7 +96,7 @@ def bundle(args) -> int:
                 flush=True,
             )
     listing = {
-        "cohort": COHORT,
+        "cohort": args.cohort,
         "subjects": [
             {
                 "subject": s,
@@ -116,12 +118,11 @@ def manifest(args) -> int:
     for entry in listing["bundles"]:
         entry["url"] = FILE_URL.format(record=args.record, name=entry["name"])
     document = {
-        "cohort": COHORT,
+        "cohort": listing["cohort"],
         "description": (
-            "Every HCP-Aging subject with complete SBCI pipeline output, converted by "
-            "tools/build_hcp_cohort.py: one SC file with the streamline endpoints and one FC "
-            "file per subject, on the ico4 grid, in zip bundles of twenty-four subjects per "
-            "modality. Ages are given as five-year bins."
+            "Continuous connectomes built by tools/build_hcp_cohort.py on the ico4 grid, one SC "
+            "file with its streamline endpoints (and, where there is FC, one FC file) per "
+            "subject, in zip bundles of twenty-four subjects per modality."
         ),
         "host": "zenodo",
         "record": str(args.record),
@@ -148,6 +149,7 @@ def main() -> int:
     b.add_argument("--manifest", required=True, help="subject, age_years, sex")
     b.add_argument("--out", required=True, help="where the bundles go")
     b.add_argument("--per-bundle", type=int, default=24, help="subjects per bundle (24)")
+    b.add_argument("--cohort", default=COHORT, help=f"cohort name, the bundles' prefix ({COHORT})")
     b.set_defaults(run=bundle)
     m = commands.add_parser("manifest", help="write the package manifest from bundles.json")
     m.add_argument("--bundles", required=True, help="directory holding bundles.json")
@@ -155,7 +157,7 @@ def main() -> int:
     m.add_argument("--doi", default="", help="the record's DOI")
     m.add_argument("--release", default="", help="release date, YYYY-MM-DD")
     m.add_argument(
-        "--target", default="src/sbci/data/hcp_aging_full.json", help="the manifest to write"
+        "--target", required=True, help="the manifest to write, src/sbci/data/<cohort>.json"
     )
     m.set_defaults(run=manifest)
     args = parser.parse_args()

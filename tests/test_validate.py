@@ -77,7 +77,7 @@ def test_cli_download_explains_what_is_missing(tmp_path, capsys, monkeypatch):
     from sbci import download
 
     manifest = {
-        "cohort": "hcp-aging",
+        "cohort": "hcp-ya",
         "subjects": [
             {
                 "subject": "sub-A",
@@ -87,11 +87,11 @@ def test_cli_download_explains_what_is_missing(tmp_path, capsys, monkeypatch):
             }
         ],
     }
-    monkeypatch.setattr(download, "load_manifest", lambda cohort="hcp-aging": manifest)
-    assert main(["download", "hcp-aging", "--out", str(tmp_path)]) == 1
+    monkeypatch.setattr(download, "load_manifest", lambda cohort="hcp-ya": manifest)
+    assert main(["download", "hcp-ya", "--out", str(tmp_path)]) == 1
     assert "not been released" in capsys.readouterr().err
     monkeypatch.undo()
-    assert main(["download", "hcp-ya", "--out", str(tmp_path)]) == 1
+    assert main(["download", "hcp-development", "--out", str(tmp_path)]) == 1
     assert "cohort" in capsys.readouterr().err
 
 

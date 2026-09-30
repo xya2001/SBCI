@@ -1,16 +1,24 @@
-"""Draw the documentation figures from the ten-subject HCP-Aging example cohort.
+"""Draw the documentation figures from an HCP example cohort.
 
-    python scripts/hcp_figures.py /path/to/cohort docs/figures \
+    python scripts/hcp_figures.py hcp-ya docs/figures \
         [--skip-cohort | --only-cohort | --surfaces-only | --only-recovery | --only-migration]
-        [--timeseries /path/to/fc_ts.npz] [--full-cohort DIR [--rank 20] [--candidates 1]]
+        [--timeseries /path/to/fc_ts.npz]
+        [--full-cohort DIR [--traits CSV] [--rank 20] [--candidates 1]]
+        [--dataset NAME]
 
-The cohort directory holds ``manifest.csv`` (subject, age_years, sex) and one
-``<subject>_sc.h5`` (with endpoints) and ``<subject>_fc.h5`` per subject, as
-written by ``tools/build_hcp_cohort.py``. Every surface is drawn on fsaverage.
+The cohort directory is what ``sbci download hcp-ya`` writes, or what
+``tools/build_hcp_cohort.py`` builds: ``manifest.csv`` (``subject`` and, where
+the cohort has them, ``sex`` and ``age_bin``) and one ``<subject>_sc.h5``,
+with endpoints, per subject, plus ``<subject>_fc.h5`` where there is FC. The
+coupling figure needs the FC and the warp-migration figure a resting-state
+time series (``--timeseries``); without them both are skipped. Titles name the
+dataset from the subject ids (``sub-HCA...`` is HCP-Aging, ``sub-`` and six
+digits HCP Young Adult) unless ``--dataset`` names it. Every surface is drawn
+on fsaverage.
 
 The single-subject figures take a few minutes. The cohort figures register
-ten subjects with ENCORE and ConSEAL and take a couple of hours on four
-cores; run this in a batch job.
+every subject with ENCORE and ConSEAL, about an hour and a half for ten on
+eight cores; run this in a batch job.
 """
 
 from __future__ import annotations
@@ -54,13 +62,33 @@ from sbci.connectome import ContinuousConnectome  # noqa: E402
 from sbci.plotting import display_mesh  # noqa: E402
 from sbci.smoothing import Endpoints  # noqa: E402
 
+#: The cohort's name in figure titles: :func:`dataset_of`, or ``--dataset``.
+DATASET = "HCP Young Adult"
+
+
+def dataset_of(directory: Path) -> str:
+    """The cohort's name for the titles, read off its first subject id."""
+    with open(directory / "manifest.csv") as handle:
+        subject = next(csv.DictReader(handle))["subject"]
+    if subject.startswith("sub-HCA"):
+        return "HCP-Aging"
+    if subject.startswith("sub-HCD"):
+        return "HCP-Development"
+    return "HCP Young Adult"
+
 
 def load_cohort(directory: Path):
-    """The subjects in manifest order, their FC paths and their ages."""
+    """The subjects in manifest order, their FC paths (``None`` where absent) and ages.
+
+    Ages are NaN when the manifest has no ``age_years`` column, as the young
+    adult cohort's has not; FC is absent for it too.
+    """
     rows = list(csv.DictReader(open(directory / "manifest.csv")))
     subjects = [sbci.load(directory / f"{row['subject']}_sc.h5") for row in rows]
-    functional = [directory / f"{row['subject']}_fc.h5" for row in rows]
-    ages = np.array([float(row["age_years"]) for row in rows])
+    functional = [
+        path if (path := directory / f"{row['subject']}_fc.h5").exists() else None for row in rows
+    ]
+    ages = np.array([float(row.get("age_years") or "nan") for row in rows])
     return subjects, functional, ages
 
 
@@ -97,7 +125,7 @@ def seed_profile(out: Path, cc) -> None:
         profile, threshold=0.02, vmin=0.02, vmax=1.0, markers=[(0, [SEED], ORANGE, SEED_SIZE)]
     )
     figure.suptitle(
-        f"Where one vertex connects to: an HCP-Aging subject's density of streamlines between "
+        f"Where one vertex connects to: an {DATASET} subject's density of streamlines between "
         f"vertex {SEED}\n(orange dot, left temporal cortex) and every other vertex, relative to "
         "the strongest",
         fontsize=TITLE_SIZE,
@@ -130,7 +158,7 @@ def region_matrix(out: Path, cc) -> None:
     bar = figure.colorbar(image, ax=axis, fraction=0.046, pad=0.03)
     bar.set_label("mass between the two regions (log scale, top four decades)", color=MUTED)
     bar.outline.set_visible(False)
-    axis.set_title("An HCP-Aging subject parcellated with the Desikan atlas (68 regions)")
+    axis.set_title(f"An {DATASET} subject parcellated with the Desikan atlas (68 regions)")
     save(figure, out, "region_matrix.png")
 
 
@@ -146,7 +174,7 @@ def coupling(out: Path, sc, fc) -> None:
         engine=DISPLAY_ENGINE,
     )
     figure.suptitle(
-        "Structure-function coupling in an HCP-Aging subject: at each vertex, the cosine "
+        f"Structure-function coupling in an {DATASET} subject: at each vertex, the cosine "
         "similarity\nof its SC and FC profiles",
         fontsize=TITLE_SIZE,
         y=1.11,
@@ -244,7 +272,7 @@ def smoothing_power(out: Path, cc) -> None:
     bar.outline.set_visible(False)
     figure.suptitle(
         "Smoothing: from a scatter of endpoints to a map you can compare\n"
-        f"vertex {SEED} (orange dot) in two random halves of one HCP-Aging subject's "
+        f"vertex {SEED} (orange dot) in two random halves of one {DATASET} subject's "
         "streamlines, left hemisphere",
         fontsize=TITLE_SIZE,
     )
@@ -440,7 +468,7 @@ def alignment_recovery(out: Path, subject, experiment: dict | None = None) -> No
     right.set_title("Cost of the registration", loc="left")
     right.legend(frameon=False, loc="upper right")
     figure.suptitle(
-        "Alignment with a known answer: an HCP-Aging subject's endpoints moved by a smooth "
+        f"Alignment with a known answer: an {DATASET} subject's endpoints moved by a smooth "
         "warp and registered back onto the undeformed subject",
         fontsize=14,
     )
@@ -638,11 +666,11 @@ def series_shape(timeseries: Path) -> int:
 
 
 def cohort_figures(out: Path, subjects, conseal: bool = True) -> None:
-    """The alignment of the ten subjects.
+    """The alignment of the example subjects.
 
-    A rank-4 FPCA of ten subjects against their ages finds nothing, as it
-    should with ten subjects, so the real cohort illustrates alignment only;
-    the synthetic cohort, with its planted effect, illustrates the analysis.
+    Ten or eleven subjects are too few to ask a question of, so the example cohort
+    illustrates alignment only; the analysis is drawn from a full cohort
+    (:func:`cohort_trait`, :func:`cohort_age`).
     """
 
     # Alignment: ENCORE on the densities, ConSEAL on the endpoints, and how alike
@@ -658,7 +686,7 @@ def cohort_figures(out: Path, subjects, conseal: bool = True) -> None:
     # two unfair (see alignment_recovery).
     t = time.time()
     smoothed = [resmoothed(subject, subject.endpoints) for subject in subjects]
-    print(f"  re-smoothed ten subjects in {time.time() - t:.0f}s", flush=True)
+    print(f"  re-smoothed {len(subjects)} subjects in {time.time() - t:.0f}s", flush=True)
     before = similarity([s.data for s in smoothed])
     t = time.time()
     encore = sbci.align(smoothed, max_iterations=10, backtracks=4)
@@ -667,17 +695,18 @@ def cohort_figures(out: Path, subjects, conseal: bool = True) -> None:
     aligned_encore = [to_condensed(np.asarray(d)) for d in encore.aligned]
     after_encore = similarity(aligned_encore)
     print(
-        f"  ENCORE on ten subjects in {time.time() - t:.0f}s: mean pairwise correlation "
-        f"{before.mean():.4f} -> {after_encore.mean():.4f}",
+        f"  ENCORE on {len(subjects)} subjects in {time.time() - t:.0f}s: "
+        f"mean pairwise correlation {before.mean():.4f} -> {after_encore.mean():.4f}",
         flush=True,
     )
     after_conseal = None
     conseal_costs = None
     if conseal:
         # ConSEAL's Karcher median settles on one subject when the subjects sit
-        # evenly around the mean, which on this cohort it does (USAGE, ConSEAL
-        # caveats); register onto the mean of the square-root densities instead
-        # so that every subject moves, as with ENCORE's template.
+        # evenly around the mean, as it does on the ten young adults drawn at random (0.001
+        # degrees from sub-212116; USAGE, ConSEAL caveats); register onto the mean
+        # of the square-root densities instead so that every subject moves, as
+        # with ENCORE's template.
         from sbci.conseal import (
             DEFAULT_KERNEL_DEGREE,
             DEFAULT_SIGMA,
@@ -710,7 +739,8 @@ def cohort_figures(out: Path, subjects, conseal: bool = True) -> None:
         after_conseal = similarity(aligned)
         conseal_costs = registration.costs
         print(
-            f"  ConSEAL on ten subjects in {time.time() - t:.0f}s: mean pairwise correlation "
+            f"  ConSEAL on {len(subjects)} subjects in {time.time() - t:.0f}s: "
+            "mean pairwise correlation "
             f"{before.mean():.4f} -> {after_conseal.mean():.4f}",
             flush=True,
         )
@@ -732,7 +762,7 @@ def cohort_figures(out: Path, subjects, conseal: bool = True) -> None:
     left.set_xlabel("iteration")
     left.set_ylabel("cost, relative to the start")
     left.set_ylim(0, 1.05)
-    left.set_title("Registering ten subjects onto a template", loc="left")
+    left.set_title(f"Registering {len(subjects)} subjects onto a template", loc="left")
     left.legend(frameon=False)
     groups = [("before", before, MUTED), ("after ENCORE", after_encore, BLUE)]
     if after_conseal is not None:
@@ -746,9 +776,10 @@ def cohort_figures(out: Path, subjects, conseal: bool = True) -> None:
     right.set_xticks(range(len(groups)))
     right.set_xticklabels([label for label, _, _ in groups])
     right.set_ylabel("correlation between two subjects' connectomes")
-    right.set_title("The 45 pairs of subjects, and the mean", loc="left")
+    n = len(subjects)
+    right.set_title(f"The {n * (n - 1) // 2} pairs of subjects, and the mean", loc="left")
     figure.suptitle(
-        "Aligning the ten HCP-Aging subjects: the cost falls for every subject, and the "
+        f"Aligning {n} {DATASET} subjects: the cost falls for every subject, and the "
         "subjects grow more alike",
         fontsize=14,
         y=1.03,
@@ -916,6 +947,181 @@ def cohort_age(out: Path, directory: Path, rank: int = 20, candidates: int = 1) 
     save(figure, out, "cohort_age_effect.png")
 
 
+#: Midpoints of the HCP Young Adult open-access age bands, for use as a covariate.
+BAND_MIDPOINTS = {"22-25": 23.5, "26-30": 28.0, "31-35": 33.0, "36+": 37.0}
+
+
+def open_access_table(path: Path, trait: str) -> dict:
+    """Subject id to sex, age band and ``trait``, from an open-access table.
+
+    Either the HCP's own table (ConnectomeDB's open-access csv, with
+    ``Subject``, ``Gender``, ``Age`` and ``PMAT24_A_CR``), for which ``trait``
+    is a column name such as ``PMAT24_A_CR``, or a table with ``subject``,
+    ``sex``, ``age_bin`` and the ``trait`` column.
+    """
+    with open(path, newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    if rows and "Subject" in rows[0]:
+        column = "PMAT24_A_CR" if trait == "fluid_intelligence_pmat24" else trait
+        return {
+            f"sub-{r['Subject']}": {"sex": r["Gender"], "age_bin": r["Age"], "trait": r[column]}
+            for r in rows
+        }
+    return {
+        r["subject"]: {"sex": r["sex"], "age_bin": r["age_bin"], "trait": r[trait]} for r in rows
+    }
+
+
+def cohort_trait(
+    out: Path,
+    directory: Path,
+    traits: Path,
+    trait: str = "fluid_intelligence_pmat24",
+    label: str = "fluid intelligence (PMAT24 correct responses)",
+    rank: int = 20,
+    candidates: int = 1,
+) -> None:
+    """FPCA of a full young adult cohort against a trait, given sex, age band and streamline count.
+
+    ``directory`` holds the SC files, ``<subject>_sc.h5``; ``traits`` is an
+    open-access table (:func:`open_access_table`) giving each subject's sex,
+    age band and ``trait``. Subjects without a value are left out. The fit is
+    saved beside the data as ``fpca_rank<rank>_c<candidates>.npz`` and reused,
+    as in :func:`cohort_age`.
+    """
+    from sbci.reduction import Reduction
+
+    table = open_access_table(traits, trait)
+    built = sorted(p.name.split("_")[0] for p in directory.glob("sub-*_sc.h5"))
+    unknown = [s for s in built if s not in table]
+    if unknown:
+        raise ValueError(f"{len(unknown)} subjects are not in {traits.name}: {unknown[:3]}")
+    rows = [dict(subject=s, **table[s]) for s in built]
+    keep = [r for r in rows if r["trait"] not in ("", "NA", "nan")]
+    if len(keep) != len(rows):
+        print(f"  {len(rows) - len(keep)} subjects have no {trait}; left out", flush=True)
+    rows = keep
+    score = np.array([float(r["trait"]) for r in rows])
+    female = np.array([r["sex"] == "F" for r in rows], dtype=float)
+    band = np.array([BAND_MIDPOINTS[r["age_bin"]] for r in rows])
+    saved = directory.parent / f"fpca_rank{rank}_c{candidates}.npz"
+    first = sbci.load(directory / f"{rows[0]['subject']}_sc.h5")
+    if saved.exists():
+        with np.load(saved) as fit:
+            if list(fit["subjects"]) != [r["subject"] for r in rows]:
+                raise ValueError(f"{saved.name} was fitted to other subjects; remove it to refit")
+            reduction = Reduction(
+                basis=fit["basis"],
+                scores=fit["scores"],
+                scales=fit["scales"],
+                explained=fit["explained"],
+                objective=np.zeros((rank, 1)),
+            )
+            count = fit["count"]
+        print(f"  reusing {saved.name}: explained {reduction.explained[-1]:.3f}", flush=True)
+    else:
+        t = time.time()
+        cohort = LazyCohort(directory / f"{r['subject']}_sc.h5" for r in rows)
+        reduction = sbci.reduce(cohort, rank=rank, candidates=candidates)
+        count = cohort.count
+        print(
+            f"  FPCA rank {rank} (candidates={candidates}) of {len(cohort)} subjects in "
+            f"{time.time() - t:.0f}s, loading included: explained {reduction.explained[-1]:.3f}",
+            flush=True,
+        )
+        np.savez(
+            saved,
+            basis=reduction.basis,
+            scores=reduction.scores,
+            scales=reduction.scales,
+            explained=reduction.explained,
+            count=count,
+            trait=score,
+            female=female,
+            band=band,
+            subjects=np.array([r["subject"] for r in rows]),
+        )
+    print(
+        f"  {len(rows)} subjects, {int(female.sum())} F; "
+        f"{trait} {score.min():.0f}-{score.max():.0f}",
+        flush=True,
+    )
+    millions = count / 1e6
+    design = np.column_stack([score, female, band, millions])
+    result = sbci.local_test(reduction.scores, design, terms=[1])
+    alone = sbci.local_test(reduction.scores, score)
+    found = result.significant()
+    correlations = [float(np.corrcoef(reduction.scores[:, k], score)[0, 1]) for k in range(rank)]
+    for name, test in (
+        (f"{trait} alone", alone),
+        (f"{trait} given sex, age band and streamline count", result),
+    ):
+        print(
+            f"  {name}: adjusted p {np.round(test.adjusted, 4).tolist()}, "
+            f"significant {test.significant().tolist()}",
+            flush=True,
+        )
+    for name, v in (
+        ("the trait", score),
+        ("sex", female),
+        ("age band", band),
+        ("streamline count", count),
+    ):
+        r = [float(np.corrcoef(reduction.scores[:, k], v)[0, 1]) for k in range(rank)]
+        print(f"  r(score, {name}): {np.round(r, 3).tolist()}", flush=True)
+
+    shown = np.argsort(result.adjusted)[: min(4, rank)]
+    figure, axes = plt.subplots(
+        1, len(shown), figsize=(4.2 * len(shown), 3.9), layout="constrained", squeeze=False
+    )
+    axes = axes[0]
+    for axis, k in zip(axes, shown, strict=True):
+        scores = reduction.scores[:, k]
+        for mask, color, sex in ((female == 1, ORANGE, "F"), (female == 0, BLUE, "M")):
+            axis.scatter(
+                score[mask], scores[mask], s=9, color=color, alpha=0.45, linewidths=0, label=sex
+            )
+        slope, intercept = np.polyfit(score, scores, 1)
+        grid = np.linspace(score.min(), score.max(), 2)
+        axis.plot(grid, slope * grid + intercept, color=INK, linewidth=2)
+        axis.set_title(
+            f"component {k + 1}: r = {correlations[k]:.2f}, adjusted p = {result.adjusted[k]:.2g}",
+            fontsize=11,
+        )
+        axis.set_xlabel(label)
+    axes[0].set_ylabel("score")
+    axes[0].legend(frameon=False, markerscale=2)
+    figure.suptitle(
+        f"FPCA of {len(rows)} HCP Young Adult subjects, rank {rank}: the {len(shown)} components "
+        "most associated with fluid intelligence\n"
+        "(sex, age band and streamline count as covariates)",
+        fontsize=14,
+    )
+    save(figure, out, "cohort_trait_scores.png")
+    if not found.size:
+        print("  no component reaches significance; no effect map drawn", flush=True)
+        return
+    effect = result.effect_map(reduction, alpha=0.05)
+    effect = effect / np.abs(effect).max()
+    figure = first.plot(
+        effect,
+        views=VIEWS,
+        cmap="coolwarm",
+        symmetric=True,
+        threshold=0.05,
+        mesh=DISPLAY_MESH,
+        engine=DISPLAY_ENGINE,
+    )
+    figure.suptitle(
+        f"Where fluid intelligence shows in the structural connectome of {len(rows)} HCP Young "
+        f"Adult subjects: the effect over the {found.size} significant component(s) of {rank},\n"
+        "relative to its largest value (positive: connectivity higher with higher scores)",
+        fontsize=TITLE_SIZE,
+        y=1.11,
+    )
+    save(figure, out, "cohort_trait_effect.png")
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 3:
         print(__doc__)
@@ -935,7 +1141,11 @@ def main(argv: list[str]) -> int:
         candidates = int(argv[argv.index("--candidates") + 1]) if "--candidates" in argv else 1
         out.mkdir(parents=True, exist_ok=True)
         print("full cohort", flush=True)
-        cohort_age(out, directory, rank=rank, candidates=candidates)
+        if "--traits" in argv:  # a young adult cohort against an open-access trait
+            traits = Path(argv[argv.index("--traits") + 1])
+            cohort_trait(out, directory, traits, rank=rank, candidates=candidates)
+        else:  # the HCP-Aging cohort against age
+            cohort_age(out, directory, rank=rank, candidates=candidates)
         return 0
     # --timeseries PATH: the pipeline's fc_ts.npz of the first subject (its resting-state
     # time series on fsaverage), for the warp-migration figure; skipped without it.
@@ -943,14 +1153,22 @@ def main(argv: list[str]) -> int:
     if "--timeseries" in argv:
         timeseries = Path(argv[argv.index("--timeseries") + 1])
         argv = [a for a in argv if a not in ("--timeseries", str(timeseries))]
+    global DATASET
+    DATASET = dataset_of(cohort_dir)
+    if "--dataset" in argv:
+        DATASET = argv[argv.index("--dataset") + 1]
+        argv = [a for a in argv if a not in ("--dataset", DATASET)]
     out.mkdir(parents=True, exist_ok=True)
     subjects, functional, ages = load_cohort(cohort_dir)
-    print(f"loaded {len(subjects)} subjects, ages {ages.min():.0f}-{ages.max():.0f}", flush=True)
+    span = f", ages {np.nanmin(ages):.0f}-{np.nanmax(ages):.0f}" if np.isfinite(ages).any() else ""
+    print(f"loaded {len(subjects)} {DATASET} subjects{span}", flush=True)
     first = subjects[0]
+    fc_first = sbci.load(functional[0]) if functional[0] is not None else None
     if surfaces_only:
         print("surface figures", flush=True)
         seed_profile(out, first)
-        coupling(out, first, sbci.load(functional[0]))
+        if fc_first is not None:
+            coupling(out, first, fc_first)
         smoothing_power(out, first)
         return 0
     if only_recovery or only_migration:
@@ -966,7 +1184,8 @@ def main(argv: list[str]) -> int:
         print("single subject", flush=True)
         seed_profile(out, first)
         region_matrix(out, first)
-        coupling(out, first, sbci.load(functional[0]))
+        if fc_first is not None:
+            coupling(out, first, fc_first)
         print("smoothing", flush=True)
         smoothing_power(out, first)
         print("alignment recovery", flush=True)

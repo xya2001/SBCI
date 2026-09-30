@@ -97,9 +97,7 @@ def main() -> int:
     )
     parser.add_argument("--sandbox", action="store_true", help="use sandbox.zenodo.org")
     parser.add_argument("--deposition", help="continue an existing deposition id")
-    parser.add_argument(
-        "--title", default="SBCI continuous connectomes of the HCP-Aging cohort (ico4)"
-    )
+    parser.add_argument("--title", required=True, help="the record's title")
     parser.add_argument(
         "--creators",
         default="Zhang, Zhengwu",
@@ -108,11 +106,10 @@ def main() -> int:
     parser.add_argument(
         "--description",
         default=(
-            "Structural (with streamline endpoints) and functional continuous connectomes of "
-            "every HCP-Aging subject with complete SBCI pipeline output, on the fsaverage ico4 "
-            "grid (5,124 vertices), in the SBCI package's HDF5 format; bundles.json lists every "
-            "file with its SHA-256 and each subject's sex and five-year age bin. Read them with "
-            "the sbci Python package (sbci download hcp-aging-full)."
+            "Continuous connectomes on the fsaverage ico4 grid (5,124 vertices), with their "
+            "streamline endpoints, in the SBCI package's HDF5 format; bundles.json lists every "
+            "file with its SHA-256 and each subject's demographics where released. Read them with "
+            "the sbci Python package."
         ),
     )
     args = parser.parse_args()
@@ -147,7 +144,7 @@ def main() -> int:
         "license": "cc-by-4.0",
         "keywords": [
             "connectome",
-            "HCP-Aging",
+            "Human Connectome Project",
             "SBCI",
             "diffusion MRI",
             "fMRI",

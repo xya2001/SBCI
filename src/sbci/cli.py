@@ -20,14 +20,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     download = subparsers.add_parser(
         "download",
-        help="fetch a released cohort: hcp-aging (ten example subjects, about 1 GB) or "
-        "hcp-aging-full (528 subjects in zip bundles, about 46 GB)",
+        help="fetch the example cohort: hcp-ya, eleven HCP Young Adult subjects, about 560 MB",
     )
-    download.add_argument("cohort", help="cohort name: hcp-aging or hcp-aging-full")
+    download.add_argument("cohort", help="cohort name: hcp-ya")
     download.add_argument(
-        "--subject", action="append", help="one subject id, e.g. sub-HCA6924080; repeatable"
+        "--subject", action="append", help="one subject id, e.g. 100307 or sub-100307; repeatable"
     )
-    download.add_argument("--out", default="hcp-aging", help="destination directory")
+    download.add_argument(
+        "--out", default=".", help="destination directory (default: the current directory)"
+    )
     download.add_argument("--sc-only", action="store_true", help="structural files only")
     download.add_argument("--fc-only", action="store_true", help="functional files only")
     download.add_argument("--force", action="store_true", help="re-download files already present")

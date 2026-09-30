@@ -17,6 +17,9 @@ batch job, not on a login node.
 | `write_exchange_file.py` | writes the exchange `.dconn.nii` for the example subject and verifies it end to end |
 | `plot_exchange_file.py` | draws the exchange file itself, reading everything back from the `.dconn` |
 | `audit_api.py` | runs every row of the README's API table on real data, in order (a batch job) |
-| `align_hcp_cohort.py` | ENCORE on real multi-subject HCP data (a batch job) |
+| `align_hcp_cohort.py` | ENCORE on the lab's HCP test-retest tensors, which are on the retired 4121-vertex 0.94 grid, not ico4: a check of the algorithm on a foreign grid; the ico4 alignment of the ten young adults is `hcp_figures.py`'s (a batch job) |
+| `check_hcp_ya.py` | downloads the released young adult cohort as a user would and runs every method the README and USAGE show on it, from `to_atlas` to `reduce` and `local_test`, stopping at the first check that fails (under ten minutes on four cores; a batch job) |
+| `hcp_figures.py` | draws the documentation figures from a downloaded or built cohort, and with `--full-cohort` the analysis of a whole cohort against an open-access trait (a batch job; docs/figures/README.md) |
+| `make_figures.py` | draws the same figures from the synthetic example, a smoke test of the figure code on a machine without the data |
 | `verify_all.sh` | runs every verification tier available in the environment and summarises (VERIFICATION.md) |
 | `show_build.sh` | walks the whole build, printing what each stage produces |

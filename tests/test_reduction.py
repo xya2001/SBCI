@@ -225,6 +225,20 @@ def test_reduce_reads_a_lazy_sequence_one_subject_at_a_time(cohort):
         reduce([], rank=2)
 
 
+def test_reduce_reads_files_by_path(tmp_path):
+    """Paths give the fit the loaded connectomes give, one file at a time."""
+    import sbci
+
+    subjects = [sbci.example(seed=seed, n_streamlines=2000) for seed in (1, 2, 3)]
+    paths = [subject.save(tmp_path / f"sub-{i}_sc.h5") for i, subject in enumerate(subjects)]
+    expected = reduce(subjects, rank=1, seed=0)
+    for items in (paths, [str(p) for p in paths]):
+        result = reduce(items, rank=1, seed=0)
+        np.testing.assert_array_equal(result.basis, expected.basis)
+        np.testing.assert_array_equal(result.scores, expected.scores)
+    assert reduce(paths[0], rank=1, seed=0).scores.shape == (1, 1)
+
+
 def test_reduce_refuses_mismatched_grids(cohort):
     matrices, _ = cohort
     with pytest.raises(ValueError, match="different grids"):

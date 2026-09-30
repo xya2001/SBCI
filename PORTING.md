@@ -513,6 +513,28 @@ fit ran on one core because eight one-CPU tasks leave `OMP_NUM_THREADS=1`;
 four hours at rank 20. One task with eight CPUs gives the linear algebra its
 threads.
 
+### Measured on the HCP Young Adult cohort
+
+The 946 young adults with complete pipeline output (item 6, *The HCP Young
+Adult cohort, rebuilt on ico4*) are the README's association example: fluid
+intelligence, the number of Penn Matrix Test items answered correctly
+(`PMAT24_A_CR` in the HCP's open-access table, 4 to 24), which 943 of them
+have. `tools/age_probe.py --table ... --column ...` streams the cohort once,
+in fifteen minutes on four cores, and shows the trait is in the data but
+weakly, far more weakly than sex:
+
+| measured on each subject | fluid intelligence | sex |
+| --- | --- | --- |
+| area-weighted strength of each cortical vertex | 217 of 4,685 significant at FDR 0.05, \|r\| up to 0.17 | 1,177, \|r\| up to 0.31 |
+| each Desikan region pair | 52 of 2,278, \|r\| up to 0.16 | 843, \|r\| up to 0.35 |
+| interhemispheric share of the connectivity | r = 0.04, p 0.29 | r = 0.14 |
+| long-range share, over 50 mm | r = -0.03, p 0.37 | r = 0.28 |
+| the leading eight principal directions, vertex level | \|r\| up to 0.16 (the fifth) | up to 0.22 (the second) |
+
+The streamline count, 0.60 to 1.07 million per subject, correlates with the
+trait at r = -0.08 and with the fourth and fifth vertex-level directions at
+-0.36; the trait correlates with sex at -0.14.
+
 ## 6. Spherical kernel -- DONE, r = 1.000000 AT FULL SCALE
 
 - **From:** [`dcmoyer/concon`](https://github.com/dcmoyer/concon), C++, MIT.
@@ -700,6 +722,75 @@ The port kept 0.09% more pairs than `c3_main` until `apply_final_threshold`
 reproduced `--final_thold 1e-9`, the per-streamline value below which the
 reference writes nothing; what remains (+0.071%) sits on the kernel's cutoff
 boundary -- *Shipping it*, below.
+
+### The released files carried the other branch's endpoints
+
+The HCP-Aging example files, as first released, stored the pipeline's smoothed
+connectome with endpoints read from `mesh_intersections_ico4.mat`: the
+unsnapped branch described below (*Confirmed from the pipeline itself*), not
+the snapped streamlines the connectome was smoothed from. On an HCP-Aging
+subject the two sets are a median 1.6 degrees apart, only 38% of endpoints
+fall in the same grid triangle, and the stored endpoints re-smoothed correlate
+with the stored connectome at r = 0.968. A user re-smoothing a released file
+got a different connectome from the one it stored.
+
+`Endpoints.from_snapped` builds the right set. Each end of a snapped streamline
+is a vertex of the subject's native white surface, and the registered sphere
+(`?h_sphere_reg_lps.vtk`, one vertex per native vertex) says where it lands;
+streamlines with an end on any other surface are dropped, as
+`intersections_to_sphere.py` drops them. On `sub-HCA6924080` this reproduces
+the pipeline's own `subject_xing_sphere_avg_coords.tsv`, the file `c3_main`
+smoothed, for every one of 903,797 streamlines to within 0.001 degrees, and
+the two give the same connectome through the package's smoother to eight
+decimals. Against the pipeline's stored connectome that connectome correlates
+at r = 0.99974, with either order of medial-wall masking and normalization;
+the kernel verification above reached 1.000000 on ADNI, so the remaining
+difference is in how that HCP-Aging run smoothed, and is not yet explained.
+
+`tools/build_hcp_cohort.py` now takes its endpoints this way for both layouts
+it builds, HCP-Aging and the HCP Young Adult subjects of the ENCORE project,
+whose FreeSurfer-registered spheres are stored in RAS and negated in x and y to
+reach the grid's frame (as stored they sit 121 degrees from the subject's
+native LPS sphere on median, flipped 12 to 14, against 120 and 8 for the
+HCP-Aging pair, which is how the orientation was read). `--check` re-smooths
+each file's endpoints and compares them with its stored connectome.
+
+### The HCP Young Adult cohort, rebuilt on ico4
+
+The lab's HCP Young Adult connectomes are on the retired 0.94 grid (4,121
+vertices), so the young adults the package distributes were not converted
+from them. `tools/build_hcp_cohort.py --layout young-adult` rebuilds each
+subject on ico4 from the ENCORE project's copy: the snapped streamlines,
+placed on the subject's FreeSurfer-registered sphere and negated in x and y as
+above, smoothed by the package's `shk` kernel at bandwidth 0.005 with the
+medial wall masked, and stored with those endpoints. Nothing is resampled
+from the 0.94 grid. The frame was checked before anything was released:
+
+| check, on the ten released subjects drawn at random | measured |
+| --- | --- |
+| stored endpoints re-smoothed, against the stored connectome | r = 1.000000 for every subject |
+| share of endpoints on the medial wall | 0.1% to 0.3%, as in HCP-Aging |
+| correlation between two young adults' connectomes | 0.67 to 0.71 |
+| correlation with HCP-Aging subjects' connectomes | 0.63 to 0.69, against 0.68 between HCP-Aging subjects |
+| distance from a seed vertex to the peak of its profile | a median of about 12 degrees, as in HCP-Aging |
+
+All 946 young adults with complete pipeline output were built the same way,
+44 GB, and an audit read every file back. All 946 pass `sbci validate` and
+carry positioned endpoints, with 599,553 to 1,071,113 streamlines each (median
+823,732), and every connectome correlates with the mean of five released
+subjects at 0.73 or more (median 0.82).
+
+The medial wall takes a median 0.21% of a subject's endpoints, but 67 subjects
+put more than 1% there and 22 more than 4%, up to 7.9% (sub-211316). In the
+three examined, nearly all of it is in one hemisphere: 12 to 13% of that
+hemisphere's endpoints on the registered sphere, against 0.2 to 0.4% in the
+other. The subject's own unregistered sphere puts 9 to 12% of them there as
+well, so these streamlines end on the medial wall of the subject's surface, and
+the registration is not the cause: it sits 11 to 20 degrees from the native
+sphere, as in every other subject checked. The mask drops those endpoints, and
+the subjects stay in the analysis. Their connectomes correlate with the
+example mean at 0.77 to 0.83, against 0.79 to 0.84 for twelve others drawn at
+random.
 
 ### Shipping it
 
@@ -1188,16 +1279,20 @@ field) and brought the endpoints from 0.95 to 0.92 degrees; step lengths from
 0.05 to 1.0 gave the same result. Two flaws in that experiment, not in the
 port, produced it (`tools/encore_probe.py` makes the measurements):
 
-- **The reference was the pipeline's stored density, the deformed copy was
-  re-smoothed by the package's kernel, and the two smoothers disagree by more
-  than the warp moves anything.** The stored density sits at a cost of 0.028
-  from its own endpoints put through `smooth(kernel="shk")`, out of a starting
-  cost of 0.039; the exact inverse warp, Jacobian included, lowers the cost
+- **The reference was the pipeline's stored density, and the endpoints stored
+  beside it are not the ones it was smoothed from.** The files took their
+  endpoints from `mesh_intersections_ico4.mat`, the pipeline's unsnapped
+  branch, while the density comes from the snapped streamlines (item 6, *The
+  released files carried the other branch's endpoints*). The smoother was
+  never the difference: the pipeline's own endpoint coordinates re-smooth to
+  the stored density at r = 0.9997. The stored density sits at a cost of 0.028
+  from the stored endpoints re-smoothed, out of a starting cost of 0.039; the exact inverse warp, Jacobian included, lowers the cost
   only to 0.036, and undoing the warp exactly at the endpoint level and
   re-smoothing still costs 0.028. Even ConSEAL's warp, which agrees with the
   true field at cosine 0.93, scores 0.035 in that cost. ENCORE's halving was
-  mostly fitting the smoother difference. With the reference put through the
-  same smoother the start is 0.009, the exact endpoint-level undo costs 0.0000,
+  mostly fitting the difference between the two endpoint sets. With the
+  reference re-smoothed from the same endpoints as the deformed copy the start
+  is 0.009, the exact endpoint-level undo costs 0.0000,
   and ENCORE undoes 58% of that warp (cosine 0.79).
 - **A warp with structure at the grid scale is one the smoothed density cannot
   see.** Deforming the endpoints and then smoothing is not smoothing and then
@@ -1216,8 +1311,9 @@ undone 87% and a degree-2 warp 94%; against the stored reference the same
 smooth warp is undone 65%. ConSEAL on the smooth warp reaches 0.10 degrees, 94% undone, in 60 iterations. The
 README's figure uses the smooth warp and the matching reference
 (`scripts/hcp_figures.py`: `WARP_ORDER`, `WARP_AMPLITUDE`, `ENCORE_ORDER`).
-Two rules follow for any comparison: put every density through one smoother,
-and judge a registration by a warp it can represent.
+Two rules follow for any comparison: build every density from the same
+endpoints through the same smoother, and judge a registration by a warp it can
+represent.
 
 ### Measured on the synthetic cohort
 

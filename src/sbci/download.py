@@ -1,27 +1,26 @@
-"""Fetching the released cohorts: the ten-subject example and the full HCP-Aging cohort.
+"""Fetching the released example cohort: eleven HCP Young Adult subjects.
 
-The files are too large for the repository (40 to 56 MB each), so the
-repository carries manifests instead, one per cohort:
-
-- ``data/hcp_aging.json``, the example cohort: ten subjects on a public
-  Google Drive, one file per subject and modality with its Drive id, size
-  and SHA-256.
-- ``data/hcp_aging_full.json``, the full cohort: every HCP-Aging subject with
-  complete pipeline output (528), on Zenodo. A Zenodo record holds at most a
-  hundred files, so the 1,056 files travel in zip bundles of twenty-four
-  subjects, one bundle per modality; the manifest lists each bundle's URL,
-  size and SHA-256 and, for every file, its bundle and its own SHA-256.
-
-:func:`fetch_cohort` downloads what is asked for, verifies every file against
-the manifest, and skips files already present and correct, so it can be
-re-run; ``sbci download <cohort>`` is the command form. For the full cohort a
-subject costs its two bundles (about two gigabytes), which are removed once
-their files are out unless ``keep_bundles`` is set.
+The files are too large for the repository (47 to 56 MB each), so the
+repository carries a manifest instead: ``data/hcp_ya.json`` lists every
+subject's SC file with its Google Drive id, size and SHA-256, and each
+subject's sex and open-access age band. :func:`fetch_cohort` downloads what is
+asked for, verifies every file against the manifest, and skips files already
+present and correct, so it can be re-run; ``sbci download hcp-ya`` is the
+command form. The files are redistributed under the WU-Minn HCP Open Access
+Data Use Terms: the manifest carries the note that points to them, and every
+download writes it beside the files as ``DATA_USE.txt``.
 
 Google Drive serves a public file at ``drive.usercontent.google.com`` with
 ``confirm=t``; for files it will not scan for viruses it answers with an HTML
-page carrying a ``uuid`` token, which is read and sent back once. Zenodo
-serves plain HTTPS with range requests, so an interrupted bundle resumes.
+page carrying a ``uuid`` token, which is read and sent back once.
+
+A cohort too large for one file per subject can be released as zip bundles on
+Zenodo, whose records take at most a hundred files: a manifest with
+``host: zenodo`` lists each bundle's URL, size and SHA-256 and, for every file,
+its bundle and its own digest, and :func:`fetch_cohort` then fetches only the
+bundles the requested subjects need, resuming an interrupted one with a range
+request (``tools/bundle_hcp_cohort.py`` writes such bundles and manifests).
+No cohort is released that way at present.
 """
 
 from __future__ import annotations
@@ -35,13 +34,13 @@ from collections.abc import Callable, Iterable
 from importlib import resources
 from pathlib import Path
 
-COHORTS = ("hcp-aging", "hcp-aging-full")
-MANIFESTS = {"hcp-aging": "hcp_aging.json", "hcp-aging-full": "hcp_aging_full.json"}
+COHORTS = ("hcp-ya",)
+MANIFESTS = {"hcp-ya": "hcp_ya.json"}
 DRIVE_URL = "https://drive.usercontent.google.com/download?id={id}&export=download&confirm=t"
 CHUNK = 1 << 20
 
 
-def load_manifest(cohort: str = "hcp-aging") -> dict:
+def load_manifest(cohort: str = "hcp-ya") -> dict:
     """The cohort's manifest as shipped with the package."""
     if cohort not in MANIFESTS:
         raise ValueError(f"cohort must be one of {COHORTS}, got {cohort!r}")
@@ -143,7 +142,12 @@ def _verify(destination: Path, digest: str) -> None:
 
 
 def _check_request(manifest: dict, subjects, modalities) -> tuple[set | None, tuple]:
-    wanted = None if subjects is None else set(subjects)
+    if isinstance(subjects, str):
+        subjects = [subjects]
+    # HCP ids are often written bare (100307); the files are named sub-100307.
+    wanted = (
+        None if subjects is None else {s if s.startswith("sub-") else f"sub-{s}" for s in subjects}
+    )
     known = {entry["subject"] for entry in manifest["subjects"]}
     if wanted is not None and not wanted <= known:
         raise ValueError(
@@ -153,21 +157,30 @@ def _check_request(manifest: dict, subjects, modalities) -> tuple[set | None, tu
     for modality in modalities:
         if modality not in ("sc", "fc"):
             raise ValueError(f"modalities are 'sc' and 'fc', got {modality!r}")
+    held = sorted({modality for entry in manifest["subjects"] for modality in entry["files"]})
+    if held and not set(modalities) & set(held):  # an unreleased cohort lists no files
+        raise ValueError(
+            f"the {manifest.get('cohort', 'requested')} cohort has no {' or '.join(modalities)} "
+            f"files; it holds {' and '.join(held)}"
+        )
     return wanted, modalities
 
 
 def _write_manifest_copy(manifest: dict, out: Path) -> None:
+    """``manifest.csv`` beside the files: the subjects and whatever demographics the cohort has."""
     manifest_copy = out / "manifest.csv"
     if not manifest_copy.exists():
+        subjects = manifest["subjects"]
+        columns = ["subject"] + [c for c in ("sex", "age_bin") if any(c in e for e in subjects)]
         with open(manifest_copy, "w", encoding="utf-8") as handle:
-            handle.write("subject,sex,age_bin\n")
-            for entry in manifest["subjects"]:
-                handle.write(f"{entry['subject']},{entry['sex']},{entry['age_bin']}\n")
+            handle.write(",".join(columns) + "\n")
+            for entry in subjects:
+                handle.write(",".join(str(entry.get(c, "")) for c in columns) + "\n")
 
 
 def fetch_cohort(
     out,
-    cohort: str = "hcp-aging",
+    cohort: str = "hcp-ya",
     subjects: Iterable[str] | None = None,
     modalities: Iterable[str] = ("sc", "fc"),
     force: bool = False,
@@ -182,34 +195,39 @@ def fetch_cohort(
     out
         Destination directory; created if needed.
     cohort
-        ``"hcp-aging"`` (the ten-subject example, one file at a time from
-        Google Drive) or ``"hcp-aging-full"`` (all 528 subjects, in zip
-        bundles from Zenodo).
+        ``"hcp-ya"``, the eleven HCP Young Adult subjects on Google Drive.
     subjects
-        Subject ids to fetch (``sub-HCA...``), or ``None`` for the whole cohort.
+        Subject ids to fetch (``sub-100307``, or the bare HCP id ``100307``),
+        or ``None`` for the whole cohort.
     modalities
-        ``"sc"``, ``"fc"``, or both.
+        ``"sc"``, ``"fc"``, or both; a subject without one of them gets the
+        other. Asking only for what the cohort does not hold (FC from
+        ``hcp-ya``, which has none yet) raises ``ValueError``.
     force
         Re-download files that are already present and correct.
     fetcher
         ``fetcher(source, destination, report)`` doing the transfer, where
-        ``source`` is a Drive file id for the example cohort and a URL for the
-        full one. Tests pass their own.
+        ``source`` is a Drive file id, or a bundle URL for a cohort released in
+        bundles. Tests pass their own.
     report
         Where progress lines go.
     keep_bundles
-        Keep the downloaded zip bundles of the full cohort next to the files
+        For a cohort released in bundles, keep the zips next to the files
         instead of removing them once their files are out.
 
     Returns
     -------
     The paths written or found, in manifest order. A file whose digest does
-    not match the manifest is removed and reported as an error.
+    not match the manifest is removed and reported as an error. Beside them go
+    ``manifest.csv`` (the subjects, with sex and age band where the cohort has
+    them) and, for a cohort that comes with terms of use, ``DATA_USE.txt``.
     """
     manifest = load_manifest(cohort)
+    if not manifest["subjects"]:
+        raise RuntimeError(f"the {cohort} cohort has not been released yet")
+    wanted, modalities = _check_request(manifest, subjects, modalities)
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
-    wanted, modalities = _check_request(manifest, subjects, modalities)
     if manifest.get("host") == "zenodo":
         written = _fetch_bundled(
             manifest, out, wanted, modalities, force, fetcher or _fetch_https, report, keep_bundles
@@ -219,7 +237,19 @@ def fetch_cohort(
             manifest, out, wanted, modalities, force, fetcher or _fetch_drive, report
         )
     _write_manifest_copy(manifest, out)
+    _write_data_use(manifest, out, report)
     return written
+
+
+def _write_data_use(manifest: dict, out: Path, report) -> None:
+    """``DATA_USE.txt`` beside the files: the terms the data are redistributed under."""
+    terms = manifest.get("data_use")
+    if not terms:
+        return
+    notice = out / "DATA_USE.txt"
+    if not notice.exists() or notice.read_text(encoding="utf-8") != terms:
+        notice.write_text(terms, encoding="utf-8")
+    report(f"  these data come with terms of use: read {notice}")
 
 
 def _fetch_files(manifest, out, wanted, modalities, force, fetcher, report) -> list[Path]:

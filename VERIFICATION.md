@@ -48,9 +48,22 @@ and the statistics in `stats.py`.
 **What it does not prove.** Nothing here compares against the original MATLAB.
 A port can be self-consistent and still wrong; that is what Tier 4 is for.
 
-The skips are `tests/test_five_minute_start.py`, which needs the data release
-that does not exist yet (SPEC_QUESTIONS.md item 6), and the MATLAB comparisons
-in `tests/test_matlab_reference.py`, which need the Tier 4 reference dumps.
+The skips are `tests/test_five_minute_start.py`, which downloads the released
+tutorial subject only when asked, and the MATLAB comparisons in
+`tests/test_matlab_reference.py`, which need the Tier 4 reference dumps. With a
+network connection, two more checks run on the released young adults:
+
+```bash
+SBCI_DOWNLOAD=1 python -m pytest tests/test_five_minute_start.py   # the brief's acceptance lines on sub-100307, 50 MB
+python scripts/check_hcp_ya.py --out hcp-ya                         # all eleven, every method; under ten minutes on four cores
+```
+
+The first is the acceptance criterion, which CI's `five-minute-start` job
+also runs from a blank environment on every push. The second downloads the
+cohort as a user would, checks every file against its digest, and runs
+parcellation, seeds, smoothing, a surface figure, ENCORE, ConSEAL,
+`migrate_warp`, `reduce` and `local_test` on it, stopping at the first check
+that fails.
 
 ### Checks worth reading rather than just running
 
@@ -245,14 +258,17 @@ PORTING.md item 6; it needs the lab data and about a minute per subject.
 triangle and diagonal conventions in `parcellate_sc.m` — change every published
 region matrix. Files written before they are settled may need rewriting.
 
-**`sbci download` does not exist**, because the data release does not
-(SPEC_QUESTIONS.md item 6). This is the only unimplemented row in the API table.
+**The example cohort is structural only.** The eleven HCP Young Adult subjects
+carry no FC, because the lab's copy of the cohort has no resting-state data.
+Coupling and the warp-migration figure are shown on HCP-Aging subjects, whose
+files are not distributed (SPEC_QUESTIONS.md item 6).
 
 ---
 
 ## A reviewer's checklist
 
 - [ ] Tier 1 passes from a clean clone: tests, lint, wheel
+- [ ] `scripts/check_hcp_ya.py` passes on a machine with network access
 - [ ] `scripts/audit_api.py` reports 15 passed, 0 failed
 - [ ] Tier 4 reproduces the agreements in the table above
 - [ ] Alignment raises inter-subject correlation on a cohort of your choosing

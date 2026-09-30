@@ -7,13 +7,14 @@ output quoted here.
 
 ```bash
 pip install "sbci[plotting] @ git+https://github.com/xya2001/SBCI.git"
-sbci download hcp-aging --subject sub-HCA6924080     # one real subject, 96 MB
+sbci download hcp-ya --subject 100307     # one real subject, 50 MB, into the current directory
 ```
 
-Python 3.10 or newer; the plotting extra is only for figures. Every example
-below runs on the released HCP-Aging subjects: `sbci download hcp-aging`
-fetches the ten (a gigabyte) and `--subject` one of them. The paths quoted
-are the lab's on the Longleaf cluster, so substitute yours. The `rdk` and `matern` kernels need the
+Python 3.10 or newer; the plotting extra is only for figures. The examples
+below that need a released subject run on the HCP Young Adult cohort:
+`sbci download hcp-ya --out hcp-ya` fetches all eleven (about 560 MB) and
+`--subject` one of them. They are structural only, so the examples with FC use the lab's files
+on the Longleaf cluster, whose paths are quoted; substitute yours. The `rdk` and `matern` kernels need the
 Laplace-Beltrami basis, two files from `SBCI_Toolkit/concon_estimate`; *Storing
 endpoints, and re-smoothing from them* says where to put them.
 
@@ -70,46 +71,46 @@ Both pass every validator check. To convert more, use
 
 ## Getting the example cohort
 
-Ten HCP-Aging subjects, five women and five men across the age range, each
-as an SC file that carries its streamline endpoints and an FC file, converted
-from the SBCI pipeline's output by `tools/build_hcp_cohort.py` and hosted on
-a public Google Drive ([the folder](https://drive.google.com/drive/folders/1cC4vvF8XqixaRr6X1tJ6FsraDVArsQAP)). The package ships the
-manifest, not the data:
+Eleven HCP Young Adult subjects, each as an SC file that carries its
+streamline endpoints: sub-100307, the subject the package brief's acceptance
+test names, and ten drawn at random, five women and five men, from the 946
+with complete pipeline output in the lab's copy. They were rebuilt on the ico4 grid from
+the SBCI pipeline's output by `tools/build_hcp_cohort.py --layout
+young-adult` and are hosted on a public Google Drive ([the
+folder](https://drive.google.com/drive/folders/1gG2ZmxxVm4w5dvlCQvMaEEOBypU7nDpx)).
+The lab's copy of the cohort has no resting-state data, so there is no FC yet.
+The package ships the manifest, not the data:
 
 ```bash
-sbci download hcp-aging                    # everything into ./hcp-aging, about 1 GB
-sbci download hcp-aging --sc-only          # the ten SC files, 40 to 56 MB each
-sbci download hcp-aging --subject sub-HCA6924080 --out data
+sbci download hcp-ya --out hcp-ya                    # the eleven SC files into ./hcp-ya, about 560 MB
+sbci download hcp-ya --subject 100307                # one file, sub-100307_sc.h5, into the current directory
 ```
 
 ```python
 from sbci.download import fetch_cohort, load_manifest
-paths = fetch_cohort("hcp-aging")                      # the same, from Python
-load_manifest()["subjects"][0]                         # subject, sex, age_bin, files
+paths = fetch_cohort("hcp-ya")                       # all eleven into ./hcp-ya, from Python
+load_manifest()["subjects"][0]                       # subject, sex, age_bin, files
 ```
 
-The full cohort, every HCP-Aging subject with complete pipeline output (528),
-is a second cohort hosted on Zenodo, whose records hold at most a hundred
-files, so it travels in zip bundles of twenty-four subjects per modality:
-
-```bash
-sbci download hcp-aging-full --out hcp-aging-full            # everything, 46 GB
-sbci download hcp-aging-full --subject sub-HCA6002236 --sc-only   # one bundle, about 1.2 GB
-sbci download hcp-aging-full --keep-bundles                  # keep the zips beside the files
-```
-
-A bundle is fetched once, verified, its files extracted and verified again,
-and removed unless `--keep-bundles`; an interrupted bundle resumes where it
-stopped. `src/sbci/data/hcp_aging_full.json` is its manifest, with the same
-sex and age bins.
+The data are the WU-Minn Human Connectome Project's, redistributed under its
+[Open Access Data Use Terms](https://www.humanconnectome.org/study/hcp-young-adult/document/wu-minn-hcp-consortium-open-access-data-use-terms).
+Downloading them means accepting those terms, and every download writes
+`DATA_USE.txt` beside the files with the acknowledgment a publication must
+carry. The manifest gives each subject's sex and the HCP's open-access age
+band (22-25, 26-30, 31-35 or 36+), never an exact age.
 
 Every file is checked against its SHA-256 from the manifest; a file that
 fails is removed and the error says so. A re-run verifies and skips what is
-present, so the command is safe to repeat. The manifest gives ages as
-five-year bins, which is what `scripts/hcp_figures.py` uses when it draws the
-cohort figures from a downloaded copy. Google Drive answers with a page
-instead of a file when the file is not shared with anyone who has the link;
-the error names the file id.
+present, so the command is safe to repeat. Asking only for FC, which this
+cohort does not hold, says so instead of fetching nothing. Google Drive
+answers with a page instead of a file when the file is not shared with anyone
+who has the link; the error names the file id.
+
+A cohort too large for one file per subject can travel as zip bundles on
+Zenodo, which `fetch_cohort` reads as well, fetching only the bundles the
+requested subjects need and resuming an interrupted one
+(`tools/bundle_hcp_cohort.py` writes them). No cohort is released that way at
+present.
 
 ## Loading
 
@@ -168,10 +169,10 @@ areas, giving a density comparable across regions of different size; this
 reproduces `parcellate_sc.m`. FC is aggregated through Fisher-z automatically,
 because averaging correlations directly is biased.
 
-![The Desikan region matrix of an HCP-Aging subject](docs/figures/region_matrix.png)
+![The Desikan region matrix of an HCP Young Adult subject](docs/figures/region_matrix.png)
 
-*`cc.to_atlas("Desikan")` on an HCP-Aging subject: 68 regions, left hemisphere
-first, mass on a log scale.*
+*`cc.to_atlas("Desikan")` on sub-103010: 68 regions, left hemisphere first,
+mass on a log scale.*
 
 ## `seed` — one profile
 
@@ -207,8 +208,9 @@ and region are uncentred cosine similarity.
 
 ![Structure-function coupling on the surface](docs/figures/coupling.png)
 
-*`sc.coupling(fc)` for an HCP-Aging subject's SC and FC: one cosine similarity
-per vertex, drawn on the inflated surface.*
+*`sc.coupling(fc)` for an HCP-Aging subject's SC and FC, since the young adult
+files have no FC yet and the HCP-Aging files are not distributed: one cosine
+similarity per vertex, drawn on the inflated surface.*
 
 ## `plot` — a surface figure
 
@@ -307,10 +309,10 @@ released bandwidth and at twice it, with the cutoff beyond which it is zero.*
 A structural file can carry the streamline endpoints it was built from, in an
 optional `/endpoints` group. Without them a connectome is a finished product;
 with them it can be re-smoothed at another bandwidth or with another kernel.
-The released subjects carry theirs (903,797 for `sub-HCA6924080`), so
-`sbci.load("hcp-aging/sub-HCA6924080_sc.h5").smooth(kernel="shk",
-mask_medial_wall=True)` re-smooths a real subject; the rest of this section
-is about the lab's files.
+The released subjects carry theirs (803,741 for `sub-100307`), so
+`sbci.load("sub-100307_sc.h5").smooth(kernel="shk", mask_medial_wall=True)`
+re-smooths a real subject and gives back the stored connectome at
+r = 1.0000000; the rest of this section is about the lab's files.
 
 ```python
 from sbci import ContinuousConnectome
@@ -324,6 +326,27 @@ sc.endpoints = Endpoints.from_matlab(
 )
 sc.save("/work/users/x/y/xya/sub-example_desc-withendpoints_sc.h5")
 ```
+
+**Which endpoints.** The pipeline writes two sets, and only one belongs with
+its smoothed connectome. `mesh_intersections_ico4.mat` holds the unsnapped
+intersections mapped onto the grid; the connectome was smoothed from the
+snapped streamlines placed on the subject's registered sphere. Build those
+with `Endpoints.from_snapped`, which is what `tools/build_hcp_cohort.py`
+does:
+
+```python
+from sbci.smoothing import Endpoints
+# ?h_sphere_reg_lps.vtk: the subject's registered spheres, one vertex per native
+# vertex, already in the grid's frame (a sphere stored in RAS needs x and y negated)
+ends = Endpoints.from_snapped("snapped_fibers.npz", lh_sphere_vertices, rh_sphere_vertices)
+```
+
+On an HCP-Aging subject these re-smooth to the pipeline's stored connectome at
+r = 0.9997; the endpoints from `mesh_intersections_ico4.mat` reach 0.968
+(PORTING.md item 6). The young adult files were smoothed by the package from
+the snapped endpoints themselves, which is why they re-smooth exactly. The
+example above uses the other file only because the toolkit's demo subject has
+nothing else.
 
 On the example subject that is 383,760 streamlines and takes the file from
 **20.0 MB to 31.8 MB**. The group is optional, so a file without it is still
@@ -379,7 +402,7 @@ minute. See PORTING.md item 6.
 A re-smoothed density can carry mass on the medial wall, exactly as both
 references do, so `sbci validate` may flag a file saved straight from it --
 SPEC_QUESTIONS.md item 14. Pass `mask_medial_wall=True` to zero it first --
-a file saved that way passes all seven `sbci validate` checks, verified end to
+a file saved that way passes all nine `sbci validate` checks, verified end to
 end on a real subject -- and `progress=lambda done, total: ...` to watch a run.
 
 The kernel is evaluated the way `c3_main` evaluates it: through two
@@ -392,71 +415,76 @@ cutoff are visited per endpoint, found with a KD-tree.
 ![Smoothing, from endpoints to a comparable map](docs/figures/smoothing_power.png)
 
 *Why the density and not the counts: the far ends of the streamlines touching
-vertex 1234 (blue dots) in two random halves of one HCP-Aging subject's
-903,797 streamlines and in the whole set, and the smoothed density of the
-same vertex from each. The halves' raw counts already agree across the cortex
-at r = 0.96, because a single vertex is well sampled by this many streamlines;
-smoothed they agree at r = 1.00, and each matches the map from all
-streamlines at r = 0.98.*
+vertex 1234 (blue dots) in two random halves of sub-103010's 988,788
+streamlines and in the whole set, and the smoothed density of the same vertex
+from each. Only 41 and 28 streamlines touch the vertex in the two halves, so
+their raw counts agree across the cortex at r = 0.46; smoothed they agree at
+r = 1.00, and half A matches the map from all streamlines at r = 1.00.*
 
 ## The cohort, end to end
 
-The ten example subjects show the alignments. The full cohort, every
-HCP-Aging subject with complete pipeline output (528, `sbci download
-hcp-aging-full`, 46 GB in zip bundles; being released on Zenodo, and until
-the record is published the command says so), is the one to ask a question
-of. Both manifests give sex and a five-year age bin per subject, so age
-enters as the bin's midpoint.
+The example subjects show the alignments. The question of an association
+goes to all 946 HCP Young Adult subjects with complete pipeline output, which
+are not distributed; `tools/build_hcp_cohort.py --layout young-adult` builds
+them from the pipeline's output for anyone with HCP access. Sex, the age band
+and fluid intelligence come from the HCP's open-access table, and the age
+band enters as its midpoint.
 
 ```python
 import csv
+from pathlib import Path
 import numpy as np
 import sbci
 from sbci.download import fetch_cohort
 
-fetch_cohort(out="hcp-aging")                              # the ten, 1 GB
-rows = list(csv.DictReader(open("hcp-aging/manifest.csv")))
-subjects = [sbci.load(f"hcp-aging/{r['subject']}_sc.h5") for r in rows]
+paths = fetch_cohort(out="hcp-ya")                         # the eleven, 560 MB
+subjects = [sbci.load(p) for p in paths]
 
-# ENCORE on the densities: five minutes on four cores for ten subjects
+# ENCORE on the densities: five minutes on eight cores for ten subjects
 alignment = sbci.align(subjects, max_iterations=10)
 alignment.aligned[0]                                       # subject 1's warped density, dense
-# ConSEAL on the endpoints (an hour): re-smooth to get connectomes back
+# ConSEAL on the endpoints (an hour; see the ConSEAL notes on its template)
 registration = sbci.endpoints_align(subjects, max_iterations=30)
 for i, cc in enumerate(subjects):
     cc.endpoints = registration.aligned_endpoints(i)
 aligned = [cc.smooth(kernel="shk", mask_medial_wall=True) for cc in subjects]
 
-# the association, on the full cohort: a batch job with 160 GB of memory
-paths = fetch_cohort(out="hcp-aging-full", cohort="hcp-aging-full", modalities=("sc",))
-rows = list(csv.DictReader(open("hcp-aging-full/manifest.csv")))
-subjects = [sbci.load(p) for p in paths]
-age = np.array([np.mean([int(v) for v in r["age_bin"].split("-")]) for r in rows])
-female = np.array([r["sex"] == "F" for r in rows], dtype=float)
-count = np.array([s.metadata.get("streamline_count") for s in subjects]) / 1e6
-reduction = sbci.reduce(subjects, rank=20)                 # FPCA
-design = np.column_stack([age, female, count])
+# the association, on the 946: a batch job with 230 GB of memory
+table = {f"sub-{r['Subject']}": r for r in csv.DictReader(open("unrestricted.csv"))}  # the HCP's open-access table
+cohort = [p.name.split("_")[0] for p in sorted(Path("hcp-ya-full").glob("sub-*_sc.h5"))]
+cohort = [s for s in cohort if table[s]["PMAT24_A_CR"]]    # those with a score
+files = [f"hcp-ya-full/{s}_sc.h5" for s in cohort]
+reduction = sbci.reduce(files, rank=20)                    # FPCA, one file at a time
+rows = [table[s] for s in cohort]
+score = np.array([float(r["PMAT24_A_CR"]) for r in rows])  # fluid intelligence
+female = np.array([r["Gender"] == "F" for r in rows], dtype=float)
+band = np.array([{"22-25": 23.5, "26-30": 28, "31-35": 33, "36+": 37}[r["Age"]] for r in rows])
+count = np.array([sbci.load(f).metadata["streamline_count"] for f in files]) / 1e6
+design = np.column_stack([score, female, band, count])
 result = sbci.local_test(reduction.scores, design, terms=[1])
-result.significant()                                       # components tracking age, given sex and count
+result.significant()                                       # components tracking the score, given the rest
 effect = result.effect_map(reduction, alpha=0.05)          # one value per vertex, significant components only
-subjects[0].plot(effect, mesh="fsaverage", engine="pyvista")
+sbci.load(files[0]).plot(effect, mesh="fsaverage", engine="pyvista")
 ```
 
-`terms=[1]` tests the age column only: column 0 is the intercept the test
-adds, and columns 2 and 3, sex and the streamline count, stay in the model as
-nuisance. On the 528 subjects five of the twenty components track age this
-way; the README shows them and where on the cortex the effect sits. The
-streamline count matters: it is the largest source of difference between
-these subjects' connectomes, and a rank-4 fit, which never reaches past it,
-finds nothing (PORTING.md item 5).
+`terms=[1]` tests the score column only: column 0 is the intercept the test
+adds, and columns 2 to 4, sex, the age band and the streamline count, stay in
+the model as nuisance.
+The streamline count matters: it is the largest source of difference between
+subjects' connectomes, and on 528 HCP-Aging subjects a rank-4 fit, which never
+reaches past it, missed the age effect a rank-20 fit found (PORTING.md item
+5).
 
 **Running it on Longleaf.** `reduce` holds the cohort once, as one dense
-float64 array, 111 GB for 528 subjects; a sequence whose items are loaded when
-indexed is read one subject at a time, so the files need not be held as well.
-Ask for 160 GB. Ask for the cores as one task, `--ntasks=1 --cpus-per-task=8`:
-with eight one-CPU tasks the cluster sets `OMP_NUM_THREADS=1`, and the linear
-algebra then runs on one core. The rank-20 fit took four hours that way; with
-eight threads it reads the cohort about three times faster.
+float64 array: 199 GB for 946 subjects, 111 GB for 528. Given paths, or a
+sequence whose items are loaded when indexed, it reads one subject at a time,
+so the files need not be held as well. The 528 peaked at 116 GiB; ask for
+230 GB for the 946.
+Ask for the cores as one task, `--ntasks=1 --cpus-per-task=8`: with eight
+one-CPU tasks the cluster sets `OMP_NUM_THREADS=1`, and the linear algebra
+then runs on one core. On the 528 HCP-Aging subjects the rank-20 fit took four
+hours that way; with eight threads it reads the cohort about three times
+faster.
 
 The pipeline is checked against a planted answer on a synthetic cohort
 (`sbci.example_cohort()`, one bundle scaled by a synthetic age) in PORTING.md
@@ -607,8 +635,9 @@ ENCORE moves a smoothed density. ConSEAL moves the streamline endpoints
 themselves: each endpoint rides along with the warped triangle it fell in, the
 density is re-smoothed from where the endpoints now sit, and nothing is ever
 resampled. It needs files that store the endpoints with their barycentric
-positions (`cc.endpoints.has_positions`), which the pipeline's
-`mesh_intersections_ico4.mat` provides.
+positions (`cc.endpoints.has_positions`), as the released subjects do;
+*Storing endpoints, and re-smoothing from them* says how to build them from
+the pipeline's output.
 ```python
 import sbci
 subjects = [sbci.load(p) for p in paths]
@@ -629,7 +658,7 @@ when to prefer.
 
 Two of the released subjects will do to see it run:
 `sbci.endpoints_align([sbci.load(a), sbci.load(b)], max_iterations=5)` with
-two of the ten SC files takes a few minutes on four cores, and both costs
+two of the released SC files takes a few minutes on four cores, and both costs
 fall at every step.
 **This is a batch job too**, though a lighter one: the heat kernel at the
 published bandwidth has 89 nonzeros per row on ico4, so an iteration costs
@@ -660,7 +689,9 @@ seconds per 100,000 streamlines rather than minutes. Six things to know:
   that subject: its cost is 0, it takes no iterations, and everyone else is
   registered onto its bundles. In the synthetic checks of PORTING.md item 7
   this happens at three degrees of anatomical spread (every subject 10 to 11 Fisher-Rao degrees
-  from the mean) and not at two. Pass `template=` a subject index or a
+  from the mean) and not at two, and it happens on the ten young adults of
+  the example cohort drawn at random: the median lands 0.001 degrees from sub-212116 and 24 to 27 from the
+  others, while every subject is 17 to 20 degrees from the mean. Pass `template=` a subject index or a
   precomputed square-root density -- the normalized mean of the subjects'
   `q_transform(kernel)` arrays, for one -- to choose.
 - **The paper's unregularized update onto one subject can align away a real
@@ -674,14 +705,14 @@ seconds per 100,000 streamlines rather than minutes. Six things to know:
   (PORTING.md item 7).
 ![Alignment with a known answer](docs/figures/alignment_recovery.png)
 
-*An HCP-Aging subject's 903,797 endpoints moved by a known smooth warp
-(degree 4, 1.7 degrees on average, 4 at most) and registered back onto the
-undeformed subject, both through the package's smoother. Top: how far the
+*The endpoints of sub-103010's 988,788 streamlines moved by a known smooth
+warp (degree 4, 1.7 degrees on average, 4 at most) and registered back onto
+the undeformed subject, both through the package's smoother. Top: how far the
 endpoints still are from where they started, vertex by vertex. Bottom: the
 same as a histogram, and the cost per iteration. ENCORE, with its default
-degree-6 basis, brings the endpoints back from 1.66 to 0.21 degrees in eight
+degree-6 basis, brings the endpoints back from 1.65 to 0.22 degrees in eight
 steps; ConSEAL with the paper's update (`delta=0.1, step_clamp=inf,
-viscosity=0`) and a stopping threshold of 1e-7 to 0.10 degrees in sixty. The
+viscosity=0`) and a stopping threshold of 1e-7 to 0.12 degrees in sixty. The
 reference has to go through the same smoother as the deformed copy, and the
 warp has to be one a smoothed density can see; PORTING.md item 4 shows what
 happens otherwise.*
@@ -729,7 +760,7 @@ points you handle yourself.
 
 ![Carrying a warp between templates](docs/figures/migration_power.png)
 
-*Top: the subject's resting-state connectivity of vertex 1234 on fsaverage (163,842 vertices per hemisphere, correlation with the seed's time series), the same map moved by the known warp of the recovery figure (r = 0.87 with the original), and put back by ENCORE's warp carried from the grid with `migrate_warp` (r = 0.99). Bottom: ENCORE's warp on the grid (5,124 vertices), the same warp restated on fsaverage, and the known warp on fsaverage; the carried warp is 0.35 degrees from the true one, which moved vertices 1.58 degrees on average.*
+*Measured on an HCP-Aging subject, since the young adult files carry no resting-state data; the HCP-Aging files are not distributed. Top: the subject's resting-state connectivity of vertex 1234 on fsaverage (163,842 vertices per hemisphere, correlation with the seed's time series), the same map moved by the known warp of the recovery figure (r = 0.87 with the original), and put back by ENCORE's warp carried from the grid with `migrate_warp` (r = 0.99). Bottom: ENCORE's warp on the grid (5,124 vertices), the same warp restated on fsaverage, and the known warp on fsaverage; the carried warp is 0.35 degrees from the true one over both hemispheres and 0.33 over the left one shown, where the true warp moved vertices 1.58 degrees on average.*
 
 ```python
 alignment = sbci.align(subjects)                              # ENCORE
@@ -830,6 +861,7 @@ means an OnDemand desktop session rather than a plain `ssh`.
 | --- | --- | --- |
 | `sc.smooth()` on a file with no `/endpoints` | `MissingDataError` | nothing to re-smooth from; the group is optional |
 | `sc.smooth()` on endpoints stored as vertices only | `MissingDataError` | `shk` needs where each streamline crossed, not the nearest vertex |
-| `sbci download` | `SystemExit` | needs the data release (Q6) |
+| `sbci download hcp-aging` | exit status 1: `cohort must be one of ('hcp-ya',)` | only the young adult cohort is released; HCP-Aging data are not distributed |
+| `sbci download hcp-ya --fc-only` | exit status 1: `the hcp-ya cohort has no fc files` | the young adult files are structural only for now |
 
 Every message names what has to happen and where it is tracked.

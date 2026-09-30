@@ -81,6 +81,7 @@ fix to the reference, which is recorded in PORTING.md item 5.
 
 from __future__ import annotations
 
+import os
 import warnings
 from dataclasses import dataclass
 
@@ -633,12 +634,13 @@ def reduce(cc_list, rank: int = 10, **kwargs) -> Reduction:
     Parameters
     ----------
     cc_list
-        Connectomes on the same grid, as :class:`~sbci.ContinuousConnectome`
-        or dense arrays. A single connectome is allowed and gives its own
-        rank-``K`` separable approximation. The cohort is held once, as one
-        dense float64 array (111 GB for 528 ico4 subjects); a sequence whose
-        items are loaded when indexed is read one subject at a time, so the
-        files need not all be in memory as well.
+        Connectomes on the same grid, as :class:`~sbci.ContinuousConnectome`,
+        dense arrays, or paths of ``.h5`` files. A single connectome is
+        allowed and gives its own rank-``K`` separable approximation. The
+        cohort is held once, as one dense float64 array (199 GB for 946 ico4
+        subjects); paths are read one file at a time, as is a sequence whose
+        items are loaded when indexed, so the files need not all be in memory
+        as well.
     rank
         Components to keep.
     **kwargs
@@ -649,8 +651,13 @@ def reduce(cc_list, rank: int = 10, **kwargs) -> Reduction:
     >>> result = sbci.reduce(subjects, rank=20)       # doctest: +SKIP
     >>> result.scores.shape                            # doctest: +SKIP
     (40, 20)
+    >>> result = sbci.reduce(sorted(Path("cohort").glob("*_sc.h5")), rank=20)  # doctest: +SKIP
     """
-    single = hasattr(cc_list, "dense") or (isinstance(cc_list, np.ndarray) and cc_list.ndim == 2)
+    single = (
+        hasattr(cc_list, "dense")
+        or isinstance(cc_list, (str, os.PathLike))
+        or (isinstance(cc_list, np.ndarray) and cc_list.ndim == 2)
+    )
     items = [cc_list] if single else cc_list
     if not hasattr(items, "__len__"):
         items = list(items)  # a generator: the stack's size is needed before it is filled
@@ -664,6 +671,10 @@ def reduce(cc_list, rank: int = 10, **kwargs) -> Reduction:
     matrices = None
     area = None
     for index, item in enumerate(items):
+        if isinstance(item, (str, os.PathLike)):
+            from .connectome import ContinuousConnectome
+
+            item = ContinuousConnectome.load(item)  # released once its matrix is copied in
         if hasattr(item, "dense"):
             density = np.asarray(item.dense(), dtype=np.float64)
             if area is None:
@@ -676,7 +687,7 @@ def reduce(cc_list, rank: int = 10, **kwargs) -> Reduction:
             shapes = sorted({matrices.shape[1:], density.shape})
             raise ValueError(f"connectomes are on different grids: {shapes}")
         matrices[index] = density
-        del density
+        del density, item
     mean = None
     if matrices.shape[0] > 1:
         mean = matrices.mean(axis=0)

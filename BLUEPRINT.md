@@ -10,12 +10,14 @@ Most of the remaining work needs no input. **Five decisions do**, and they are
 listed in section 9 with an owner and an estimated lead time against each.
 Annex A gives each one in full, with the evidence and a recommendation.
 
-One of the five should start immediately, because its answer comes from outside
-this work and the project's acceptance criterion waits on it:
+One of the five had to come from outside this work, and the project's
+acceptance criterion waited on it:
 
-- **Q6 — may we redistribute derived dense connectomes openly?** Asked and
-  answered: no (SPEC_QUESTIONS.md item 6). The acceptance criterion has to be
-  reworded around the user's own HCP credentials rather than met as written.
+- **Q6 — may we redistribute derived dense connectomes openly?** Answered
+  (SPEC_QUESTIONS.md item 6): the HCP Young Adult open-access terms allow
+  derived data to be redistributed under the same terms, so eleven young
+  adults are public and `sbci download hcp-ya` fetches them. HCP-Aging data are not
+  published.
 
 The other four are ratifications rather than investigations: minutes of
 discussion each, but everything written to disk depends on them.
@@ -74,21 +76,28 @@ cc.to_cifti("sub-100307_sc.dconn.nii")
 ```
 
 On a machine nobody here configured, from a blank environment, in under five
-minutes. Encoded in `tests/test_five_minute_start.py`, which skips until the
-data release exists.
+minutes. The criterion runs as written: sub-100307 is one of the released
+subjects, and the download line leaves `sub-100307_sc.h5` in the current
+directory for the next to load. Encoded in `tests/test_five_minute_start.py`, which runs when `SBCI_DOWNLOAD=1` or
+`SBCI_HCP_DIR` is set, and run by CI's `five-minute-start` job from a blank
+environment on every push: the wheel installs, the subject downloads, and the
+lines run, in 74 seconds on a laptop. The export line is left
+out of the test, since it writes 16.9 GB; `scripts/write_exchange_file.py`
+checks it end to end.
 
 | Line | Status | Waiting on |
 | --- | --- | --- |
 | install the package | wheel builds, installs clean, imports elsewhere | publishing to PyPI; the name is free |
-| download a subject | implemented: `sbci download hcp-aging` (ten subjects) from the lab's public Google Drive, and `sbci download hcp-aging-full` (528, in zip bundles) from Zenodo once the record is published; verified by manifest | Q6 decided: ten HCP-Aging subjects, hosted by the lab |
+| download a subject | implemented: `sbci download hcp-ya` (eleven HCP Young Adult subjects, SC with endpoints) from the lab's public Google Drive; verified by manifest, with the HCP's terms written beside the files | — (Q6 decided: ten young adults, hosted by the lab) |
 | load a connectome | works, validated on real data | — |
 | aggregate to an atlas | works, exactly 200×200 on real data | — |
 | take a seed profile | works | — |
 | plot a surface map | works on inflated, white, pial and spherical surfaces | — |
 | export to CIFTI | works; writes a 16.9 GB fsLR-32k dense connectome | — |
 
-**Six of seven lines work today.** The seventh, `download`, waits on the data
-release (Q6).
+**Every line works on the released subject but the first.** `pip install
+sbci` waits on publishing to PyPI; until then `pip install
+git+https://github.com/xya2001/SBCI.git` stands in for it.
 
 ## 3. Architecture
 
@@ -147,7 +156,7 @@ under `/work/users/x/y/xya/`.
 
 **Working, and verified against real data**
 
-- HDF5 read and write; both example files pass all seven validator checks
+- HDF5 read and write; both example files pass every validator check
 - `to_atlas` — 200×200 for Schaefer200, retaining 99.98% of connectome mass;
   Desikan retains 100.0000%, consistent with its full cortical coverage
 - 44 atlases bundled in 332 KB, region counts matching each published atlas
@@ -160,12 +169,9 @@ under `/work/users/x/y/xya/`.
   agreeing to 0.002 although nothing in the code enforces it
 
 **Built since this section was first written:** the spherical heat kernel
-(PORTING.md item 6, r = 1.000000 at full scale), FPCA (item 5), ENCORE (item 4)
-and ConSEAL (item 7).
-
-**Not built**
-
-- Subject download
+(PORTING.md item 6, r = 1.000000 at full scale), FPCA (item 5), ENCORE (item 4),
+ConSEAL (item 7), and the subject download, `sbci download hcp-ya`, which
+fetches the eleven released HCP Young Adult subjects and verifies each file.
 
 ### The exchange file, as built
 
@@ -236,26 +242,26 @@ contiguous.
 ## 6. What blocks what
 
 ```
-Q6  HCP redistribution ─────► subject download ──► acceptance test
+Q6  HCP redistribution ─────► subject download ──► acceptance test   (answered)
 Q1, Q2, Q3/Q9 format freeze ► every file ever written
                               └─► WP3 fast path, WP5 notebooks
 Q7  licence holder ─────────► first tagged release
 ```
 
-**Q6 is the critical path.** It gates the second line of the acceptance
-criterion, it is the only item whose answer comes from outside the group, and
-nobody has asked yet. If derived dense connectomes cannot be redistributed
-openly, the five-minute test cannot pass as written and the criterion itself
-needs rewording. It should start first precisely because its lead time is not
-ours to control.
+**Q6 was the critical path, and it is answered.** It gated the second line of
+the acceptance criterion and was the only item whose answer came from outside
+the group. The HCP Young Adult open-access terms allow derived connectomes to
+be redistributed under the same terms, so the example cohort is public and the
+line works (SPEC_QUESTIONS.md item 6).
 
 **Q1, Q2, Q3/Q9 are ratifications, not investigations.** They need one meeting,
 and everything downstream writes these files.
 
 ## 7. Plan
 
-**Immediately, in parallel with everything else: ask HCP (Q6).** One email.
-Longest lead time, widest blast radius.
+~~**Immediately, in parallel with everything else: ask HCP (Q6).**~~ Answered:
+the example cohort is eleven HCP Young Adult subjects under the HCP's
+open-access terms.
 
 **Freeze the format (Q1, Q2, Q3/Q9).** One meeting, with recommendations
 already drafted in Annex A. Until this lands, every file written is provisional
@@ -282,7 +288,7 @@ nothing and prevents an awkward rename later.
 
 | Risk | Consequence | Mitigation |
 | --- | --- | --- |
-| Q6 answers "credentials required" | the acceptance test cannot pass as written | ask now; prepare a fallback criterion |
+| ~~Q6 answers "credentials required"~~ | resolved | the young adult open-access terms allow derived data to be redistributed under the same terms; eleven subjects are public |
 | ~~the spherical kernel port does not reproduce the released files~~ | resolved | r = 1.000000 and scale 1.000000 against `smoothed_sc_avg_0.005_ico4.mat` on five subjects (PORTING.md item 6) |
 | Q2 flips to "include the diagonal" | every released file must be rewritten | freeze before the first release, not after |
 | Q3/Q9 picks the plain sum | the legacy importer normalizes wrongly | decide before importing a cohort |
@@ -294,13 +300,13 @@ nothing and prevents an awkward rename later.
 
 | # | Decision | Who | Lead time |
 | --- | --- | --- | --- |
-| 6 | May derived dense connectomes be redistributed openly? | HCP, via whoever holds the data agreement | weeks |
+| ~~6~~ | ~~May derived dense connectomes be redistributed openly?~~ Answered: the young adults' open-access data, yes, under the same terms; HCP-Aging, no | — | — |
 | 1 | HDF5 dataset names | WP1 owner | minutes |
 | 2 | Diagonal in the stored triangle | WP1 owner | minutes |
 | 3/9 | Which normalization | WP1 owner | minutes |
 | 7 | Copyright holder for the licence | PI | minutes |
 
-Four of these are minutes of discussion. One is not, and it should start today.
+Four of these are minutes of discussion; the fifth, Q6, is answered.
 Everything not listed here needs no decision — it is engineering work, already
 scoped.
 
@@ -320,7 +326,9 @@ the brief's own open question: do the HCP data use terms permit redistributing
 *derived* dense connectomes openly, or must every user hold HCP credentials?
 *Why it matters:* this is the difference between the five-minute acceptance
 test passing and not. If credentials are required, the criterion has to be
-reworded rather than met. *Answered: no (SPEC_QUESTIONS.md item 6).*
+reworded rather than met. *Answered (SPEC_QUESTIONS.md item 6): for the HCP
+Young Adult open-access data, derived connectomes may be redistributed under
+the same terms, and eleven are; HCP-Aging data are not published.*
 
 ### Tier 2 — ratifications for the format owner, minutes each
 
