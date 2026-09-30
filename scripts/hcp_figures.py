@@ -756,6 +756,27 @@ def cohort_figures(out: Path, subjects, conseal: bool = True) -> None:
     save(figure, out, "cohort_alignment.png")
 
 
+class LazyCohort:
+    """SC files loaded when indexed and not kept, so reduce() reads one subject at a time.
+
+    Also records each subject's streamline count as it is read.
+    """
+
+    def __init__(self, paths):
+        self.paths = list(paths)
+        self.count = np.zeros(len(self.paths))
+
+    def __len__(self):
+        return len(self.paths)
+
+    def __getitem__(self, index):
+        if not -len(self.paths) <= index < len(self.paths):
+            raise IndexError(index)
+        cc = sbci.load(self.paths[index])
+        self.count[index] = float(cc.metadata.get("streamline_count") or 0)
+        return cc
+
+
 def cohort_age(out: Path, directory: Path, rank: int = 20, candidates: int = 1) -> None:
     """FPCA of the full cohort against age: the components' scores, and the effect on the surface.
 
@@ -786,15 +807,12 @@ def cohort_age(out: Path, directory: Path, rank: int = 20, candidates: int = 1) 
         print(f"  reusing {saved.name}: explained {reduction.explained[-1]:.3f}", flush=True)
     else:
         t = time.time()
-        subjects = [sbci.load(directory / f"{row['subject']}_sc.h5") for row in rows]
-        count = np.array([float(s.metadata.get("streamline_count") or 0) for s in subjects])
-        print(f"  loaded {len(subjects)} subjects in {time.time() - t:.0f}s", flush=True)
-        t = time.time()
-        reduction = sbci.reduce(subjects, rank=rank, candidates=candidates)
-        del subjects
+        cohort = LazyCohort(directory / f"{row['subject']}_sc.h5" for row in rows)
+        reduction = sbci.reduce(cohort, rank=rank, candidates=candidates)
+        count = cohort.count
         print(
-            f"  FPCA rank {rank} (candidates={candidates}) in {time.time() - t:.0f}s: "
-            f"explained {reduction.explained[-1]:.3f}",
+            f"  FPCA rank {rank} (candidates={candidates}) of {len(cohort)} subjects in "
+            f"{time.time() - t:.0f}s, loading included: explained {reduction.explained[-1]:.3f}",
             flush=True,
         )
         np.savez(
@@ -816,22 +834,34 @@ def cohort_age(out: Path, directory: Path, rank: int = 20, candidates: int = 1) 
     def r_with(values):
         return [float(np.corrcoef(reduction.scores[:, k], values)[0, 1]) for k in range(rank)]
 
+    # Age is tested with sex and the streamline count as nuisance covariates: the count
+    # (tractography yield, 0.5 to 1.8 million here) is the largest source of variation
+    # between subjects' connectomes and correlates only weakly with age.
+    millions = count / 1e6
     alone = sbci.local_test(reduction.scores, age)
-    result = sbci.local_test(reduction.scores, np.column_stack([age, female]), terms=[1])
+    with_sex = sbci.local_test(reduction.scores, np.column_stack([age, female]), terms=[1])
+    result = sbci.local_test(reduction.scores, np.column_stack([age, female, millions]), terms=[1])
     found = result.significant()
     correlations = r_with(age)
-    print(f"  age alone: adjusted p {np.round(alone.adjusted, 4).tolist()}", flush=True)
-    print(
-        f"  age with sex as a covariate: adjusted p {np.round(result.adjusted, 4).tolist()}, "
-        f"significant {found.tolist()}",
-        flush=True,
-    )
+    for label, test in (
+        ("age alone", alone),
+        ("age given sex", with_sex),
+        ("age given sex and streamline count", result),
+    ):
+        print(
+            f"  {label}: adjusted p {np.round(test.adjusted, 4).tolist()}, "
+            f"significant {test.significant().tolist()}",
+            flush=True,
+        )
     for name, values in (("age", age), ("sex", female), ("streamline count", count)):
         print(f"  r(score, {name}): {np.round(r_with(values), 3).tolist()}", flush=True)
 
     # Scores against age for the components most associated with it.
-    shown = np.argsort(result.adjusted)[:4]
-    figure, axes = plt.subplots(1, 4, figsize=(16.8, 3.9), layout="constrained")
+    shown = np.argsort(result.adjusted)[: min(4, rank)]
+    figure, axes = plt.subplots(
+        1, len(shown), figsize=(4.2 * len(shown), 3.9), layout="constrained", squeeze=False
+    )
+    axes = axes[0]
     for axis, k in zip(axes, shown, strict=True):
         scores = reduction.scores[:, k]
         jitter = np.random.default_rng(int(k)).uniform(-1.5, 1.5, size=age.size)
@@ -856,8 +886,8 @@ def cohort_age(out: Path, directory: Path, rank: int = 20, candidates: int = 1) 
     axes[0].set_ylabel("score")
     axes[0].legend(frameon=False, markerscale=2)
     figure.suptitle(
-        f"FPCA of {len(rows)} HCP-Aging subjects, rank {rank}: the four components most "
-        "associated with age (sex as a covariate)",
+        f"FPCA of {len(rows)} HCP-Aging subjects, rank {rank}: the {len(shown)} components most "
+        "associated with age (sex and streamline count as covariates)",
         fontsize=14,
     )
     save(figure, out, "cohort_age_scores.png")

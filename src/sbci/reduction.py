@@ -635,7 +635,10 @@ def reduce(cc_list, rank: int = 10, **kwargs) -> Reduction:
     cc_list
         Connectomes on the same grid, as :class:`~sbci.ContinuousConnectome`
         or dense arrays. A single connectome is allowed and gives its own
-        rank-``K`` separable approximation.
+        rank-``K`` separable approximation. The cohort is held once, as one
+        dense float64 array (111 GB for 528 ico4 subjects); a sequence whose
+        items are loaded when indexed is read one subject at a time, so the
+        files need not all be in memory as well.
     rank
         Components to keep.
     **kwargs
@@ -648,23 +651,32 @@ def reduce(cc_list, rank: int = 10, **kwargs) -> Reduction:
     (40, 20)
     """
     single = hasattr(cc_list, "dense") or (isinstance(cc_list, np.ndarray) and cc_list.ndim == 2)
-    items = [cc_list] if single else list(cc_list)
+    items = [cc_list] if single else cc_list
+    if not hasattr(items, "__len__"):
+        items = list(items)  # a generator: the stack's size is needed before it is filled
+    if len(items) == 0:
+        raise ValueError("reduce needs at least one connectome")
 
-    densities = []
+    # One array for the cohort, filled a subject at a time. Collecting the
+    # dense matrices and then stacking them held the cohort twice (222 GB
+    # rather than 111 for 528 ico4 subjects), and a sequence that loads each
+    # connectome when indexed is read one subject at a time.
+    matrices = None
     area = None
-    for item in items:
+    for index, item in enumerate(items):
         if hasattr(item, "dense"):
-            densities.append(np.asarray(item.dense(), dtype=np.float64))
+            density = np.asarray(item.dense(), dtype=np.float64)
             if area is None:
                 area = np.asarray(item.area, dtype=np.float64)
         else:
-            densities.append(np.asarray(item, dtype=np.float64))
-    shapes = {d.shape for d in densities}
-    if len(shapes) != 1:
-        raise ValueError(f"connectomes are on different grids: {sorted(shapes)}")
-
-    matrices = np.stack(densities)
-    densities.clear()  # the stack owns the only copy now
+            density = np.asarray(item, dtype=np.float64)
+        if matrices is None:
+            matrices = np.empty((len(items),) + density.shape)
+        elif density.shape != matrices.shape[1:]:
+            shapes = sorted({matrices.shape[1:], density.shape})
+            raise ValueError(f"connectomes are on different grids: {shapes}")
+        matrices[index] = density
+        del density
     mean = None
     if matrices.shape[0] > 1:
         mean = matrices.mean(axis=0)

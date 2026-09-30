@@ -194,6 +194,37 @@ def test_reduce_accepts_a_single_connectome(cohort):
     assert result.rank == 3
 
 
+def test_reduce_reads_a_lazy_sequence_one_subject_at_a_time(cohort):
+    """The same fit from a list, a generator and a sequence that loads on access."""
+    matrices, _ = cohort
+    expected = reduce(list(matrices), rank=3)
+
+    class Lazy:
+        def __init__(self, source):
+            self.source, self.held, self.most = source, 0, 0
+
+        def __len__(self):
+            return len(self.source)
+
+        def __getitem__(self, index):
+            if index >= len(self.source):
+                raise IndexError(index)
+            self.held += 1  # a fresh copy, as a file loaded on access would be
+            self.most = max(self.most, self.held)
+            copy = np.array(self.source[index])
+            self.held -= 1
+            return copy
+
+    lazy = Lazy(matrices)
+    for items in (lazy, (m for m in matrices)):
+        result = reduce(items, rank=3)
+        np.testing.assert_array_equal(result.basis, expected.basis)
+        np.testing.assert_array_equal(result.scores, expected.scores)
+    assert lazy.most == 1
+    with pytest.raises(ValueError, match="at least one"):
+        reduce([], rank=2)
+
+
 def test_reduce_refuses_mismatched_grids(cohort):
     matrices, _ = cohort
     with pytest.raises(ValueError, match="different grids"):

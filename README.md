@@ -175,12 +175,46 @@ rows = list(csv.DictReader(open("hcp-aging-full/manifest.csv")))   # subject, se
 subjects = [sbci.load(p) for p in paths]
 age = np.array([np.mean([int(v) for v in r["age_bin"].split("-")]) for r in rows])
 female = np.array([r["sex"] == "F" for r in rows], dtype=float)
-reduction = sbci.reduce(subjects, rank=20)                 # FPCA; a batch job with 400 GB of memory
-result = sbci.local_test(reduction.scores, np.column_stack([age, female]), terms=[1])   # age, given sex
+count = np.array([s.metadata.get("streamline_count") for s in subjects]) / 1e6
+reduction = sbci.reduce(subjects, rank=20)                 # FPCA: a batch job, 160 GB, four hours on one core
+design = np.column_stack([age, female, count])             # age, and sex and streamline count as nuisance
+result = sbci.local_test(reduction.scores, design, terms=[1])
 result.significant()
 effect = result.effect_map(reduction, alpha=0.05)          # one value per vertex, significant components only
 subjects[0].plot(effect, mesh="fsaverage", engine="pyvista")
 ```
+
+On the 528 subjects, five of the twenty components track age after the
+false-discovery-rate correction across them, with sex and the streamline
+count in the model. The two strongest, components 14 and 11, correlate with
+age at r = 0.32 and 0.28 (adjusted p 4e-12 and 2e-9). The effect map says
+where: connectivity falls with age at the frontal poles and in rostral middle
+frontal cortex, and rises in inferior temporal cortex and at the temporal
+poles; the densities have unit mass, so a rise is relative to the rest of the
+connectome.
+
+Two choices make this work, and a first try without them found nothing. A
+rank-4 fit has no component that tracks age (the largest correlation is
+-0.11), because the largest differences between these subjects are not age:
+they follow how many streamlines tractography produced, 0.5 to 1.8 million
+per subject. At the level of Desikan regions the count is the first direction
+of variation across subjects and age the second, while half of all region
+pairs change significantly with age. Twenty components reach past the count,
+and the count belongs in the design as a nuisance covariate. PORTING.md item
+5 has the measurements.
+
+![The components that track age](docs/figures/cohort_age_scores.png)
+
+*The four components of a rank-20 FPCA of 528 HCP-Aging subjects most
+associated with age, given sex and streamline count: each subject's score
+against its age bin's midpoint, women orange and men blue, with the
+least-squares line and the adjusted p-value.*
+
+![Where age shows in the structural connectome](docs/figures/cohort_age_effect.png)
+
+*The effect map over the five significant components, relative to its
+largest value: the fitted change in connectivity with age, summed over the
+other endpoint.*
 
 Alignment fits in front of `reduce`: `sbci.align(subjects)` (ENCORE) returns
 the warped densities as `aligned`, and `sbci.endpoints_align(subjects)`

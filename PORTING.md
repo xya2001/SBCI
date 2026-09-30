@@ -472,6 +472,47 @@ difference of BLAS summation order:
 Ten ico4 subjects at rank 4 take about 40 s on four cores of a compute node,
 down from 66 s, and 2.1 GB rather than 4.2 GB.
 
+### Measured on the full HCP-Aging cohort
+
+A rank-4 fit of all 528 HCP-Aging subjects with complete pipeline output
+(`candidates=6`, 20% of the cohort's norm) finds no component whose scores
+track age: the correlations are 0.06, 0.08, -0.11 and -0.07, adjusted p 0.05
+to 0.17. With 528 subjects aged 36 to 100 that is not a biological answer,
+and `tools/age_probe.py`, which streams the cohort once, shows age is plainly
+in the data:
+
+| measured on each subject | against age |
+| --- | --- |
+| interhemispheric share of the connectivity | r = -0.56, p 5e-44 |
+| area-weighted strength of each cortical vertex | 2,256 of 4,683 vertices significant at FDR 0.05, \|r\| up to 0.62 |
+| each Desikan region pair | 1,188 of 2,278 significant, \|r\| up to 0.60 |
+| first principal direction across subjects, vertex level | r = -0.08; with the streamline count, r = 0.48 |
+| second principal direction, vertex level | r = -0.60 |
+| first principal direction, region level | r = 0.09; with the streamline count, r = -0.45 |
+| second principal direction, region level | r = 0.54 |
+
+The largest source of difference between these subjects' connectomes is how
+many streamlines tractography produced, 0.54 to 1.84 million per subject,
+which correlates with age at only r = -0.08; the unit-mass normalization
+removes its scale but not its effect on the shape of the density. Age is the
+next direction. At rank 20 (`candidates=1`, 31% of the norm) five components
+track age at FDR 0.05 with sex and the count as covariates, components 14 and
+11 most strongly (r = 0.32 and 0.28, adjusted p 4e-12 and 2e-9); without the
+count nine do, but the first two components correlate with the count at
+-0.24 and -0.30 and with age at 0.06. So on real data the rank has to reach
+past the acquisition's own variation, and its measure belongs in the design.
+
+The rank-4 fit also exposed a memory cost: `reduce` collected every subject's
+dense matrix in a list and then stacked them, so the cohort was held twice at
+the peak, 278 GB for 528 subjects. It now fills one preallocated array, and a
+sequence that loads each connectome when indexed is read one subject at a
+time: the rank-20 fit peaked at 121 GB. Basis, scores, scales, explained
+fractions and mean of a six-subject ico4 cohort are bitwise identical to the
+previous code, as objects and as arrays, with both starts. On Longleaf the
+fit ran on one core because eight one-CPU tasks leave `OMP_NUM_THREADS=1`;
+four hours at rank 20. One task with eight CPUs gives the linear algebra its
+threads.
+
 ## 6. Spherical kernel -- DONE, r = 1.000000 AT FULL SCALE
 
 - **From:** [`dcmoyer/concon`](https://github.com/dcmoyer/concon), C++, MIT.

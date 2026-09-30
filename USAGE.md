@@ -427,21 +427,36 @@ for i, cc in enumerate(subjects):
     cc.endpoints = registration.aligned_endpoints(i)
 aligned = [cc.smooth(kernel="shk", mask_medial_wall=True) for cc in subjects]
 
-# the association, on the full cohort: a batch job with 400 GB of memory
+# the association, on the full cohort: a batch job with 160 GB of memory
 paths = fetch_cohort(out="hcp-aging-full", cohort="hcp-aging-full", modalities=("sc",))
 rows = list(csv.DictReader(open("hcp-aging-full/manifest.csv")))
 subjects = [sbci.load(p) for p in paths]
 age = np.array([np.mean([int(v) for v in r["age_bin"].split("-")]) for r in rows])
 female = np.array([r["sex"] == "F" for r in rows], dtype=float)
+count = np.array([s.metadata.get("streamline_count") for s in subjects]) / 1e6
 reduction = sbci.reduce(subjects, rank=20)                 # FPCA
-result = sbci.local_test(reduction.scores, np.column_stack([age, female]), terms=[1])
-result.significant()                                       # components tracking age, given sex
+design = np.column_stack([age, female, count])
+result = sbci.local_test(reduction.scores, design, terms=[1])
+result.significant()                                       # components tracking age, given sex and count
 effect = result.effect_map(reduction, alpha=0.05)          # one value per vertex, significant components only
 subjects[0].plot(effect, mesh="fsaverage", engine="pyvista")
 ```
 
 `terms=[1]` tests the age column only: column 0 is the intercept the test
-adds, column 2 the sex covariate, which stays in the model as nuisance.
+adds, and columns 2 and 3, sex and the streamline count, stay in the model as
+nuisance. On the 528 subjects five of the twenty components track age this
+way; the README shows them and where on the cortex the effect sits. The
+streamline count matters: it is the largest source of difference between
+these subjects' connectomes, and a rank-4 fit, which never reaches past it,
+finds nothing (PORTING.md item 5).
+
+**Running it on Longleaf.** `reduce` holds the cohort once, as one dense
+float64 array, 111 GB for 528 subjects; a sequence whose items are loaded when
+indexed is read one subject at a time, so the files need not be held as well.
+Ask for 160 GB. Ask for the cores as one task, `--ntasks=1 --cpus-per-task=8`:
+with eight one-CPU tasks the cluster sets `OMP_NUM_THREADS=1`, and the linear
+algebra then runs on one core. The rank-20 fit took four hours that way; with
+eight threads it reads the cohort about three times faster.
 
 The pipeline is checked against a planted answer on a synthetic cohort
 (`sbci.example_cohort()`, one bundle scaled by a synthetic age) in PORTING.md
