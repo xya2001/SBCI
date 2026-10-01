@@ -1,4 +1,4 @@
-"""Exercise the five working entry points and print what each returns.
+"""Exercise the five working entry points on a released subject and print what each returns.
 
 module load python/3.12.4
 source /work/users/x/y/xya/sbci-venv/bin/activate
@@ -18,11 +18,10 @@ import numpy as np
 from sbci import ContinuousConnectome, load_atlas
 from sbci.metadata import MetadataError, template
 
-DATA = "/work/users/x/y/xya/sbci-derivatives"
+DATA = "/work/users/x/y/xya/hcp-ya/data"  # sbci download hcp-ya, the lab's copy
 FIGURES = "/work/users/x/y/xya/sbci-figures"
 
-sc = ContinuousConnectome.load(f"{DATA}/sub-example_sc.h5")
-fc = ContinuousConnectome.load(f"{DATA}/sub-example_fc.h5")
+sc = ContinuousConnectome.load(f"{DATA}/sub-100307_sc.h5")
 atlas = load_atlas("Desikan")
 
 
@@ -50,20 +49,14 @@ print("  region= takes a BOOLEAN MASK over vertices, not a region id.")
 
 # ------------------------------------------------------------ 2. coupling
 heading("2.  sc.coupling(fc, scope='global')")
-coupling = sc.coupling(fc, scope="global")
-finite = np.isfinite(coupling)
-print(f"  shape           {coupling.shape}")
-print(f"  finite          {int(finite.sum()):,}   NaN {int((~finite).sum()):,}")
-print(f"  range           [{coupling[finite].min():.4f}, {coupling[finite].max():.4f}]")
-print(f"  mean            {coupling[finite].mean():.4f}")
-print(f"  negative        {int((coupling[finite] < 0).sum()):,} vertices")
-print(f"  NaN is the medial wall: mask says {int((~sc.mask).sum()):,} non-cortex vertices")
+print("  needs an FC file on the same grid; the released young adults have none")
+print("  yet, so this step is skipped.")
 
 # ---------------------------------------------------------------- 3. plot
 heading("3.  sc.plot(map)")
 os.makedirs(FIGURES, exist_ok=True)
-figure = sc.plot(coupling, title="SC-FC coupling (global)", cmap="coolwarm")
-out = f"{FIGURES}/check_five_coupling.png"
+figure = sc.plot(profile, title="seed profile of vertex 1234")
+out = f"{FIGURES}/check_five_seed.png"
 figure.savefig(out, dpi=110)
 print(f"  returns         {type(figure).__name__}")
 print(f"  panels          {len(figure.axes)}  (2 hemispheres x 2 views, plus colourbars)")

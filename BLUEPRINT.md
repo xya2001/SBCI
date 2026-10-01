@@ -188,15 +188,15 @@ distributing form looks right -- it preserves the plain sum of the entries --
 and silently loses **99.3%** of the area-weighted mass. The package stores the
 raw overlap counts and normalizes by row.
 
-Verified end to end on the example subject, against references the resampling
-code does not share:
+Verified end to end on sub-100307, against references the resampling code
+does not share (`scripts/write_exchange_file.py`):
 
 | Check | Reference | Result |
 | --- | --- | --- |
 | the overlap partitions the pipeline's own vertices | `area` vector in the subject's HDF5 file | identical, maximum difference 0 |
 | regions land where the pipeline puts them | `lh/rh.fs_LR.aparc.annot` | 94.3% / 94.4% of vertices |
-| unit mass survives the move | `area @ D @ area` before and after | 1.00000000002 against 0.999999999908 |
-| the region matrix is unchanged | Desikan on ico4 against Desikan on fsLR | r = 0.9997, 2.3% relative Frobenius difference |
+| unit mass survives the move | `area @ D @ area` before and after | 0.999999999985 against 0.999999999876 |
+| the region matrix is unchanged | Desikan on ico4 against Desikan on fsLR | r = 0.9996, 2.7% relative Frobenius difference |
 | the file is readable elsewhere | plain `nibabel`, no `sbci` code | both axes `BrainModelAxis`, 32,492 vertices per hemisphere, symmetric |
 
 The last check is the load-bearing one: the two region matrices are computed
@@ -379,8 +379,8 @@ Built, bundled and verified; see the note below and SPEC_QUESTIONS.md item 4.
 **Q8. The format carries no endpoints.** -- **Decided and built.** Endpoints
 now live in the computational file itself, as an optional `/endpoints` group,
 rather than in a sibling: a connectome and the streamlines it was built from
-then cannot be separated or versioned apart. On the example subject they add
-11.8 MB to a 20.0 MB file, and the group is optional so most users carry none.
+then cannot be separated or versioned apart. On sub-100307 they add 22.2 MB
+to a 28.0 MB file, and the group is optional so most users carry none.
 `.smooth()` works from them for `rdk` and `matern`; the Laplace-Beltrami basis
 is 50 MB per hemisphere and is passed in rather than bundled.
 

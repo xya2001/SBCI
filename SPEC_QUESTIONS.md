@@ -146,8 +146,8 @@ where `src/sbci/spec.py` currently carries a **provisional** value, marked
    deposition was never published, and its owner discarded it.
    `sbci download` offers no HCP-Aging cohort, and on 30 September the twenty
    files were moved out of the public folder into a private one, after which
-   none of them downloads anonymously. The HCP-Aging files stay on Longleaf for
-   the lab's own analyses, and the figures drawn from them are marked as such.
+   none of them downloads anonymously. No example, figure or worked script in
+   the documents uses HCP-Aging data any more.
    The endpoints the HCP-Aging files carried then were the pipeline's
    unsnapped branch, not those its connectome was smoothed from (PORTING.md
    item 6); the lab's internal copies have been rebuilt from the snapped

@@ -472,7 +472,44 @@ difference of BLAS summation order:
 Ten ico4 subjects at rank 4 take about 40 s on four cores of a compute node,
 down from 66 s, and 2.1 GB rather than 4.2 GB.
 
-### Measured on the full HCP-Aging cohort
+### Measured on the HCP Young Adult cohort
+
+The 946 young adults with complete pipeline output (item 6, *The HCP Young
+Adult cohort, rebuilt on ico4*) are the README's association example: fluid
+intelligence, the number of Penn Matrix Test items answered correctly
+(`PMAT24_A_CR` in the HCP's open-access table, 4 to 24), which 943 of them
+have. `tools/age_probe.py --table ... --column ...` streams the cohort once,
+in fifteen minutes on four cores, and shows the trait is in the data but
+weakly, far more weakly than sex:
+
+| measured on each subject | fluid intelligence | sex |
+| --- | --- | --- |
+| area-weighted strength of each cortical vertex | 217 of 4,685 significant at FDR 0.05, \|r\| up to 0.17 | 1,177, \|r\| up to 0.31 |
+| each Desikan region pair | 52 of 2,278, \|r\| up to 0.16 | 843, \|r\| up to 0.35 |
+| interhemispheric share of the connectivity | r = 0.04, p 0.29 | r = 0.14 |
+| long-range share, over 50 mm | r = -0.03, p 0.37 | r = 0.28 |
+| the leading eight principal directions, vertex level | \|r\| up to 0.16 (the fifth) | up to 0.22 (the second) |
+
+The streamline count, 0.60 to 1.07 million per subject, correlates with the
+trait at r = -0.08 and with the fourth and fifth vertex-level directions at
+-0.36; the trait correlates with sex at -0.14.
+
+At rank 20 (`candidates=1`, 27% of the cohort's norm) one component tracks
+the score after the false-discovery-rate correction across the twenty, with
+sex, the age band and the streamline count as covariates: component 13,
+r = 0.11, adjusted p 0.023, an effect in right medial occipital cortex where
+connectivity is higher in subjects who score higher. Without the covariates
+component 7 joins it (r = 0.10, adjusted p 0.029); with them it reaches 0.052.
+At rank 4, the first four of the same components (17% of the norm), nothing
+tracks the score, with the covariates or without (the largest correlation is
+0.06), while sex shows in all four; at rank 20 sex shows in thirteen, the
+strongest at adjusted p 2e-8. The streamline count matters less here than
+the rank does: it correlates with the first component at -0.12 and with no
+other beyond 0.18. The fit read the cohort one file at a time, held it as
+199 GB of float64 and peaked at 196 GiB, and took 5.4 hours on eight threads,
+loading included.
+
+### Measured earlier on HCP-Aging subjects, whose files are not distributed
 
 A rank-4 fit of all 528 HCP-Aging subjects with complete pipeline output
 (`candidates=6`, 20% of the cohort's norm) finds no component whose scores
@@ -512,28 +549,6 @@ previous code, as objects and as arrays, with both starts. On Longleaf the
 fit ran on one core because eight one-CPU tasks leave `OMP_NUM_THREADS=1`;
 four hours at rank 20. One task with eight CPUs gives the linear algebra its
 threads.
-
-### Measured on the HCP Young Adult cohort
-
-The 946 young adults with complete pipeline output (item 6, *The HCP Young
-Adult cohort, rebuilt on ico4*) are the README's association example: fluid
-intelligence, the number of Penn Matrix Test items answered correctly
-(`PMAT24_A_CR` in the HCP's open-access table, 4 to 24), which 943 of them
-have. `tools/age_probe.py --table ... --column ...` streams the cohort once,
-in fifteen minutes on four cores, and shows the trait is in the data but
-weakly, far more weakly than sex:
-
-| measured on each subject | fluid intelligence | sex |
-| --- | --- | --- |
-| area-weighted strength of each cortical vertex | 217 of 4,685 significant at FDR 0.05, \|r\| up to 0.17 | 1,177, \|r\| up to 0.31 |
-| each Desikan region pair | 52 of 2,278, \|r\| up to 0.16 | 843, \|r\| up to 0.35 |
-| interhemispheric share of the connectivity | r = 0.04, p 0.29 | r = 0.14 |
-| long-range share, over 50 mm | r = -0.03, p 0.37 | r = 0.28 |
-| the leading eight principal directions, vertex level | \|r\| up to 0.16 (the fifth) | up to 0.22 (the second) |
-
-The streamline count, 0.60 to 1.07 million per subject, correlates with the
-trait at r = -0.08 and with the fourth and fifth vertex-level directions at
--0.36; the trait correlates with sex at -0.14.
 
 ## 6. Spherical kernel -- DONE, r = 1.000000 AT FULL SCALE
 

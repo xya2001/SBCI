@@ -1,10 +1,15 @@
-"""A worked tour of everything the package can currently do.
+"""A worked tour of everything the package can currently do, on a released subject.
 
 Run on Longleaf with the environment active:
 
     module load python/3.12.4
     source /work/users/x/y/xya/sbci-venv/bin/activate
     python ~/sbci/scripts/tour.py
+
+The subject is sub-100307 of the HCP Young Adult example cohort, as
+``sbci download hcp-ya`` writes it (D below is the lab's copy; point it at
+yours). The young adult files are structural only, so the steps that need FC
+say so and are skipped.
 """
 
 import matplotlib
@@ -14,7 +19,8 @@ import numpy as np
 
 import sbci
 
-D = "/work/users/x/y/xya/sbci-derivatives"
+D = "/work/users/x/y/xya/hcp-ya/data"
+SUBJECT = "sub-100307"
 
 
 def heading(text):
@@ -24,10 +30,8 @@ def heading(text):
 heading("1. LOADING")
 from sbci import ContinuousConnectome
 
-sc = ContinuousConnectome.load(f"{D}/sub-example_sc.h5")
-fc = ContinuousConnectome.load(f"{D}/sub-example_fc.h5")
+sc = ContinuousConnectome.load(f"{D}/{SUBJECT}_sc.h5")
 print(f"  sc                {sc!r}")
-print(f"  fc                {fc!r}")
 print(f"  stored form       {sc.data.shape} float32, the strict upper triangle")
 print(f"  area weights      {sc.area.shape}, sum {sc.area.sum():,.0f}")
 print(f"  cortex mask       {int(sc.mask.sum()):,} of {sc.mask.size:,} vertices")
@@ -58,11 +62,7 @@ print(f"  how='mass'  {mass.shape}  total {mass.sum():.6f}  (preserves connectiv
 print(f"  how='mean'  {mean.shape}  range [{mean.min():.3g}, {mean.max():.3g}]  (a density)")
 i, j = np.unravel_index(np.argmax(np.triu(mass, 1)), mass.shape)
 print(f"  strongest pair: {atlas.names[i]} <-> {atlas.names[j]}")
-print("  FC is aggregated through Fisher-z automatically:")
-print(
-    f"  fc.to_atlas(...) range [{fc.to_atlas(atlas, how='mean').min():.3f}, "
-    f"{fc.to_atlas(atlas, how='mean').max():.3f}]"
-)
+print("  FC is aggregated through Fisher-z automatically (the young adult files have no FC).")
 
 heading("5. seed - one vertex's or one region's connectivity profile")
 profile = sc.seed(vertex=1234)
@@ -76,34 +76,16 @@ print(
 print("  region= takes a boolean mask and returns the area-weighted marginal.")
 
 heading("6. coupling - structure against function")
-glb = sc.coupling(fc, scope="global")
-finite = np.isfinite(glb)
-print(
-    f"  scope='global'   {glb.shape}, {int(finite.sum()):,} finite "
-    f"(NaN = medial wall or a constant profile)"
-)
-print(
-    f"                   range [{glb[finite].min():.3f}, {glb[finite].max():.3f}], "
-    f"mean {glb[finite].mean():.3f}"
-)
-loc = sc.coupling(fc, scope="region", labels=atlas.labels)
-ok = np.isfinite(loc)
-print(
-    f"  scope='region'   needs labels=; mean {loc[ok].mean():.3f} (higher: neighbours share both)"
-)
-from sbci.coupling import discrete_coupling
-
-dct = discrete_coupling(sc.to_atlas(atlas, "mean"), fc.to_atlas(atlas, "mean"))
-print(f"  discrete_coupling on atlas matrices -> {dct.shape}, mean {np.nanmean(dct):.3f}")
-print("  global and region are cosine similarity; discrete is Pearson.")
+print("  sc.coupling(fc, scope='global'|'region') needs an FC file on the same grid;")
+print("  the released young adults have none yet, so this step is skipped.")
 
 heading("7. plot - a surface figure")
 from sbci import load_surface
 
 surface = load_surface("sphere")
 print(f"  load_surface('sphere') -> {surface.n_vertices} vertices, {len(surface.faces):,} faces")
-figure = sc.plot(glb, title="SC-FC coupling", cmap="coolwarm")
-out = "/work/users/x/y/xya/sbci-figures/tour_coupling.png"
+figure = sc.plot(profile, title="seed profile of vertex 1234")
+out = "/work/users/x/y/xya/sbci-figures/tour_seed.png"
 figure.savefig(out, dpi=100)
 matplotlib.pyplot.close(figure)
 print(f"  sc.plot(map) -> matplotlib figure, saved to {out}")
@@ -140,8 +122,8 @@ for label, call in (
         print(f"  {'':28s} {first[:78]}...")
 
 if sc.has_endpoints:
-    # The example carries synthetic endpoints, so the default kernel has
-    # something to re-smooth; the file it gives back is the one we loaded.
+    # The released file carries the endpoints it was smoothed from, so the
+    # default kernel gives back the connectome we loaded.
     again = sc.smooth(kernel="shk", mask_medial_wall=True)
     gap = np.abs(again.data - sc.data).max()
     print("\n  sc.smooth(kernel='shk', mask_medial_wall=True) reproduces the file:")

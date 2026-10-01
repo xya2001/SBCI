@@ -93,7 +93,7 @@ def main(argv: list[str] | None = None) -> int:
         "seed",
         profile.shape == (5124,) and (profile >= 0).all() and np.allclose(profile, row),
         f"profile of vertex {SEED} equals its row of the connectome; two subjects correlate at "
-        f"r = {between:.2f}, as pairs of young adult and HCP-Aging subjects do (0.63 to 0.73)",
+        f"r = {between:.2f}, as pairs of young adults do (0.67 to 0.73)",
     )
     check("frame", between > 0.5, f"subjects 1 and 2 correlate at r = {between:.2f}")
 

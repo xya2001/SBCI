@@ -10,10 +10,10 @@ cost. ``variants`` repeats the recovery over the warp's smoothness and
 amplitude, ENCORE's basis order, the reference and the derivative estimator.
 
 The subject file must carry endpoints with positions (``tools/build_hcp_cohort.py``
-writes them). PORTING.md item 4, "Measured on a known deformation", records what
-these measured on an HCP-Aging subject: a reference through a different smoother
-than the deformed copy, and a warp with structure at the grid scale, are what
-made ENCORE look as if it recovered nothing.
+writes them; ``sbci download hcp-ya`` fetches some). PORTING.md item 4,
+"Measured on a known deformation", records what these measured: a reference
+through a different smoother than the deformed copy, and a warp with structure
+at the grid scale, are what made ENCORE look as if it recovered nothing.
 """
 
 import sys

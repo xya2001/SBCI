@@ -1,20 +1,20 @@
-"""Draw the documentation figures from an HCP example cohort.
+"""Draw the documentation figures from the HCP Young Adult example cohort.
 
     python scripts/hcp_figures.py hcp-ya docs/figures \
         [--skip-cohort | --only-cohort | --surfaces-only | --only-recovery | --only-migration]
-        [--timeseries /path/to/fc_ts.npz]
-        [--full-cohort DIR [--traits CSV] [--rank 20] [--candidates 1]]
+        [--anatomy /path/to/the/first/subject's/pipeline/directory]
+        [--full-cohort DIR --traits CSV [--rank 20] [--candidates 1]]
         [--dataset NAME]
 
 The cohort directory is what ``sbci download hcp-ya`` writes, or what
 ``tools/build_hcp_cohort.py`` builds: ``manifest.csv`` (``subject`` and, where
 the cohort has them, ``sex`` and ``age_bin``) and one ``<subject>_sc.h5``,
 with endpoints, per subject, plus ``<subject>_fc.h5`` where there is FC. The
-coupling figure needs the FC and the warp-migration figure a resting-state
-time series (``--timeseries``); without them both are skipped. Titles name the
-dataset from the subject ids (``sub-HCA...`` is HCP-Aging, ``sub-`` and six
-digits HCP Young Adult) unless ``--dataset`` names it. Every surface is drawn
-on fsaverage.
+coupling figure needs the FC, which the young adult files do not have yet, and
+the warp-migration figure the first subject's own FreeSurfer sulcal depth and
+registered spheres from its pipeline directory (``--anatomy``); without them
+both are skipped. Titles say HCP Young Adult unless ``--dataset`` names
+another. Every surface is drawn on fsaverage.
 
 The single-subject figures take a few minutes. The cohort figures register
 every subject with ENCORE and ConSEAL, about an hour and a half for ten on
@@ -62,34 +62,22 @@ from sbci.connectome import ContinuousConnectome  # noqa: E402
 from sbci.plotting import display_mesh  # noqa: E402
 from sbci.smoothing import Endpoints  # noqa: E402
 
-#: The cohort's name in figure titles: :func:`dataset_of`, or ``--dataset``.
+#: The cohort's name in figure titles; ``--dataset`` sets another.
 DATASET = "HCP Young Adult"
 
 
-def dataset_of(directory: Path) -> str:
-    """The cohort's name for the titles, read off its first subject id."""
-    with open(directory / "manifest.csv") as handle:
-        subject = next(csv.DictReader(handle))["subject"]
-    if subject.startswith("sub-HCA"):
-        return "HCP-Aging"
-    if subject.startswith("sub-HCD"):
-        return "HCP-Development"
-    return "HCP Young Adult"
-
-
 def load_cohort(directory: Path):
-    """The subjects in manifest order, their FC paths (``None`` where absent) and ages.
+    """The subjects in manifest order, and their FC paths.
 
-    Ages are NaN when the manifest has no ``age_years`` column, as the young
-    adult cohort's has not; FC is absent for it too.
+    A path is ``None`` where the subject has no FC, as none of the young adults
+    has yet.
     """
     rows = list(csv.DictReader(open(directory / "manifest.csv")))
     subjects = [sbci.load(directory / f"{row['subject']}_sc.h5") for row in rows]
     functional = [
         path if (path := directory / f"{row['subject']}_fc.h5").exists() else None for row in rows
     ]
-    ages = np.array([float(row.get("age_years") or "nan") for row in rows])
-    return subjects, functional, ages
+    return subjects, functional
 
 
 def subset(endpoints: Endpoints, index: np.ndarray) -> Endpoints:
@@ -475,12 +463,44 @@ def alignment_recovery(out: Path, subject, experiment: dict | None = None) -> No
     save(figure, out, "alignment_recovery.png")
 
 
-def migration_power(out: Path, subject, experiment: dict, timeseries: Path) -> None:
+def anatomy_on_fsaverage(anatomy: Path, measure: str = "sulc") -> list:
+    """The subject's own FreeSurfer map (``?h.sulc``), read at every fsaverage vertex.
+
+    ``anatomy`` is the subject's pipeline directory: the per-vertex map on the
+    subject's native surface and the FreeSurfer-registered spheres
+    (``?h_sphere_freesurfer_reg.vtk``, one vertex per native vertex, in
+    FreeSurfer's RAS frame like fsaverage's own sphere). Each fsaverage vertex
+    takes the value of the nearest registered vertex.
+    """
+    import nibabel.freesurfer as fs
+    from scipy.spatial import cKDTree
+
+    from sbci.alignment import normalize_rows
+    from sbci.templates import template_mesh
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+    from convert_surfaces import read_vtk_polydata
+
+    maps = []
+    for hemisphere, (fs_sphere, _) in zip(("lh", "rh"), template_mesh("fsaverage"), strict=True):
+        values = fs.read_morph_data(str(anatomy / f"{hemisphere}.{measure}"))
+        sphere, _ = read_vtk_polydata(str(anatomy / f"{hemisphere}_sphere_freesurfer_reg.vtk"))
+        if len(values) != len(sphere):
+            raise ValueError(
+                f"{hemisphere}.{measure} has {len(values)} values, the sphere {len(sphere)}"
+            )
+        _, nearest = cKDTree(normalize_rows(np.asarray(sphere, dtype=np.float64))).query(fs_sphere)
+        maps.append(np.asarray(values, dtype=np.float64)[nearest])
+    return maps
+
+
+def migration_power(out: Path, subject, experiment: dict, anatomy: Path) -> None:
     """ENCORE's warp, found on the grid, carried to fsaverage and applied to a 163,842-vertex map.
 
-    The map is the subject's own resting-state connectivity of the seed vertex,
-    from the pipeline's time series on fsaverage. The known warp moves it; the
-    migrated ENCORE warp puts it back.
+    The map is the subject's own sulcal depth from its FreeSurfer reconstruction
+    (:func:`anatomy_on_fsaverage`), a measure of anatomy at fsaverage resolution
+    that the tractography never sees. The known warp moves it; the migrated
+    ENCORE warp puts it back.
     """
     from types import SimpleNamespace
 
@@ -504,25 +524,13 @@ def migration_power(out: Path, subject, experiment: dict, timeseries: Path) -> N
             out.append((weights * field[indices]).sum(axis=1))
         return out
 
-    # The subject's resting-state map of the seed, at fsaverage resolution.
+    # The subject's own sulcal depth, at fsaverage resolution.
     t = time.time()
-    seed = int(display.nearest[0][SEED])
-    with np.load(timeseries) as loaded:
-        series = [
-            np.asarray(loaded[key], dtype=np.float32)
-            for key in ("lh_time_series", "rh_time_series")
-        ]
-    centred = [s - s.mean(axis=1, keepdims=True) for s in series]
-    scale = [np.sqrt((c * c).sum(axis=1)) for c in centred]
-    reference = centred[0][seed] / scale[0][seed]
-    fc_map = [
-        np.where(sd > 0, (c @ reference) / np.where(sd > 0, sd, 1.0), np.nan)
-        for c, sd in zip(centred, scale, strict=True)
-    ]
-    del series, centred
+    fc_map = anatomy_on_fsaverage(anatomy)
     print(
-        f"  seed map from {series_shape(timeseries)} time points in {time.time() - t:.0f}s; "
-        f"r at the seed {fc_map[0][seed]:.2f}",
+        f"  sulcal depth on fsaverage in {time.time() - t:.0f}s: "
+        f"{fc_map[0].size:,} vertices per hemisphere, range {fc_map[0].min():.2f} to "
+        f"{fc_map[0].max():.2f}",
         flush=True,
     )
 
@@ -574,39 +582,54 @@ def migration_power(out: Path, subject, experiment: dict, timeseries: Path) -> N
     grid_vertices = np.asarray(grid_surface.vertices, dtype=np.float64)
     half = cortex.size // 2
     grid_grey = render.shade(np.where(cortex[:half], sulcal_depth()[:half], 0.0), cortex[:half])
-    vmax_map = 0.6
+    vmax_map = float(np.ceil(np.nanpercentile(np.abs(fc_map[0][on_cortex]), 98) * 4) / 4)
     vmax_warp = float(np.ceil(np.nanpercentile(deformation[0], 99) * 2) / 2)
 
     figure = plt.figure(figsize=(15, 9.8), layout="constrained")
     top, bottom = figure.subfigures(2, 1)
     axes = top.subplots(1, 3)
+    # The map itself, then what the known warp and the carried warp leave of it: the
+    # difference from the original, which the eye cannot read off two near-identical maps.
+    moved_diff = moved_map[0] - fc_map[0]
+    back_diff = recovered_map[0] - fc_map[0]
+    vmax_diff = float(np.ceil(np.nanpercentile(np.abs(moved_diff[on_cortex]), 98) * 4) / 4)
     panels = (
         (
             fc_map[0],
-            "the subject's resting-state map of vertex 1234\non fsaverage, 163,842 vertices",
+            vmax_map,
+            "the subject's own sulcal depth (FreeSurfer)\non fsaverage, 163,842 vertices",
         ),
-        (moved_map[0], f"moved by the known warp\n(r = {r_moved:.2f} with the original)"),
         (
-            recovered_map[0],
-            "put back by ENCORE's warp carried from the grid\n"
-            f"(r = {r_back:.2f} with the original)",
+            moved_diff,
+            vmax_diff,
+            f"moved by the known warp: change from the original\n(r = {r_moved:.2f} with it)",
+        ),
+        (
+            back_diff,
+            vmax_diff,
+            "put back by ENCORE's warp carried from the grid:\n"
+            f"change from the original (r = {r_back:.2f} with it)",
         ),
     )
-    for axis, (values, label) in zip(axes, panels, strict=True):
+    for axis, (values, vmax, label) in zip(axes, panels, strict=True):
         shown = np.where(on_cortex, values, np.nan)
-        rgb = render.colour(shown, grey, "coolwarm", -vmax_map, vmax_map, 0.1, True)
+        rgb = render.colour(shown, grey, "PuOr_r", -vmax, vmax, 0.0, True)
         image = render.render_view(vertices, faces, rgb, "lateral", "L")
         axis.imshow(render.trim(image), interpolation="lanczos")
         axis.set_axis_off()
         axis.set_title(label, fontsize=12)
-    bar = top.colorbar(
-        ScalarMappable(norm=Normalize(-vmax_map, vmax_map), cmap="coolwarm"),
-        ax=axes.tolist(),
-        shrink=0.7,
-        pad=0.02,
-    )
-    bar.set_label("correlation with the seed's time series", fontsize=11)
-    bar.outline.set_visible(False)
+    for ax, vmax, label in (
+        (axes[:1], vmax_map, "sulcal depth (FreeSurfer sulc; deep is positive)"),
+        (axes[1:], vmax_diff, "change in sulcal depth"),
+    ):
+        bar = top.colorbar(
+            ScalarMappable(norm=Normalize(-vmax, vmax), cmap="PuOr_r"),
+            ax=list(ax),
+            shrink=0.7,
+            pad=0.02,
+        )
+        bar.set_label(label, fontsize=11)
+        bar.outline.set_visible(False)
 
     axes = bottom.subplots(1, 3)
     warps = (
@@ -656,12 +679,6 @@ def migration_power(out: Path, subject, experiment: dict, timeseries: Path) -> N
     save(figure, out, "migration_power.png")
 
 
-def series_shape(timeseries: Path) -> int:
-    """How many time points the pipeline's fsaverage series hold."""
-    with np.load(timeseries) as loaded:
-        return int(loaded["lh_time_series"].shape[1])
-
-
 # --- the cohort ----------------------------------------------------------------------
 
 
@@ -669,8 +686,8 @@ def cohort_figures(out: Path, subjects, conseal: bool = True) -> None:
     """The alignment of the example subjects.
 
     Ten or eleven subjects are too few to ask a question of, so the example cohort
-    illustrates alignment only; the analysis is drawn from a full cohort
-    (:func:`cohort_trait`, :func:`cohort_age`).
+    illustrates alignment only; the analysis is drawn from the full cohort
+    (:func:`cohort_trait`).
     """
 
     # Alignment: ENCORE on the densities, ConSEAL on the endpoints, and how alike
@@ -808,146 +825,6 @@ class LazyCohort:
         return cc
 
 
-def cohort_age(out: Path, directory: Path, rank: int = 20, candidates: int = 1) -> None:
-    """FPCA of the full cohort against age: the components' scores, and the effect on the surface.
-
-    ``directory`` holds the full cohort's SC files and ``manifest.csv`` with
-    ``subject, sex, age_bin``; age enters as the bin's midpoint and sex as a
-    covariate. The dense matrices of 528 subjects are 111 GB and the fit works
-    on them, so this is a large-memory batch job; the fitted basis and scores
-    are saved beside the data (``fpca_rank<rank>_c<candidates>.npz``) and
-    reused on the next run, so the figures can be redrawn without refitting.
-    """
-    from sbci.reduction import Reduction
-
-    rows = list(csv.DictReader(open(directory / "manifest.csv")))
-    age = np.array([np.mean([int(v) for v in row["age_bin"].split("-")]) for row in rows])
-    female = np.array([row["sex"] == "F" for row in rows], dtype=float)
-    saved = directory.parent / f"fpca_rank{rank}_c{candidates}.npz"
-    first = sbci.load(directory / f"{rows[0]['subject']}_sc.h5")
-    if saved.exists():
-        with np.load(saved) as fit:
-            reduction = Reduction(
-                basis=fit["basis"],
-                scores=fit["scores"],
-                scales=fit["scales"],
-                explained=fit["explained"],
-                objective=np.zeros((rank, 1)),
-            )
-            count = fit["count"]
-        print(f"  reusing {saved.name}: explained {reduction.explained[-1]:.3f}", flush=True)
-    else:
-        t = time.time()
-        cohort = LazyCohort(directory / f"{row['subject']}_sc.h5" for row in rows)
-        reduction = sbci.reduce(cohort, rank=rank, candidates=candidates)
-        count = cohort.count
-        print(
-            f"  FPCA rank {rank} (candidates={candidates}) of {len(cohort)} subjects in "
-            f"{time.time() - t:.0f}s, loading included: explained {reduction.explained[-1]:.3f}",
-            flush=True,
-        )
-        np.savez(
-            saved,
-            basis=reduction.basis,
-            scores=reduction.scores,
-            scales=reduction.scales,
-            explained=reduction.explained,
-            count=count,
-            age=age,
-            female=female,
-        )
-    print(
-        f"  {len(rows)} subjects: ages {age.min():.0f}-{age.max():.0f} (bin midpoints), "
-        f"{int(female.sum())} F",
-        flush=True,
-    )
-
-    def r_with(values):
-        return [float(np.corrcoef(reduction.scores[:, k], values)[0, 1]) for k in range(rank)]
-
-    # Age is tested with sex and the streamline count as nuisance covariates: the count
-    # (tractography yield, 0.5 to 1.8 million here) is the largest source of variation
-    # between subjects' connectomes and correlates only weakly with age.
-    millions = count / 1e6
-    alone = sbci.local_test(reduction.scores, age)
-    with_sex = sbci.local_test(reduction.scores, np.column_stack([age, female]), terms=[1])
-    result = sbci.local_test(reduction.scores, np.column_stack([age, female, millions]), terms=[1])
-    found = result.significant()
-    correlations = r_with(age)
-    for label, test in (
-        ("age alone", alone),
-        ("age given sex", with_sex),
-        ("age given sex and streamline count", result),
-    ):
-        print(
-            f"  {label}: adjusted p {np.round(test.adjusted, 4).tolist()}, "
-            f"significant {test.significant().tolist()}",
-            flush=True,
-        )
-    for name, values in (("age", age), ("sex", female), ("streamline count", count)):
-        print(f"  r(score, {name}): {np.round(r_with(values), 3).tolist()}", flush=True)
-
-    # Scores against age for the components most associated with it.
-    shown = np.argsort(result.adjusted)[: min(4, rank)]
-    figure, axes = plt.subplots(
-        1, len(shown), figsize=(4.2 * len(shown), 3.9), layout="constrained", squeeze=False
-    )
-    axes = axes[0]
-    for axis, k in zip(axes, shown, strict=True):
-        scores = reduction.scores[:, k]
-        jitter = np.random.default_rng(int(k)).uniform(-1.5, 1.5, size=age.size)
-        for mask, color, label in ((female == 1, ORANGE, "F"), (female == 0, BLUE, "M")):
-            axis.scatter(
-                age[mask] + jitter[mask],
-                scores[mask],
-                s=11,
-                color=color,
-                alpha=0.5,
-                linewidths=0,
-                label=label,
-            )
-        slope, intercept = np.polyfit(age, scores, 1)
-        grid = np.linspace(age.min(), age.max(), 2)
-        axis.plot(grid, slope * grid + intercept, color=INK, linewidth=2)
-        axis.set_title(
-            f"component {k + 1}: r = {correlations[k]:.2f}, adjusted p = {result.adjusted[k]:.2g}",
-            fontsize=11,
-        )
-        axis.set_xlabel("age (bin midpoint, years)")
-    axes[0].set_ylabel("score")
-    axes[0].legend(frameon=False, markerscale=2)
-    figure.suptitle(
-        f"FPCA of {len(rows)} HCP-Aging subjects, rank {rank}: the {len(shown)} components most "
-        "associated with age (sex and streamline count as covariates)",
-        fontsize=14,
-    )
-    save(figure, out, "cohort_age_scores.png")
-
-    if not found.size:
-        print("  no component reaches significance; no effect map drawn", flush=True)
-        return
-    effect = result.effect_map(reduction, alpha=0.05)
-    effect = effect / np.abs(effect).max()
-    figure = first.plot(
-        effect,
-        views=VIEWS,
-        cmap="coolwarm",
-        symmetric=True,
-        threshold=0.05,
-        mesh=DISPLAY_MESH,
-        engine=DISPLAY_ENGINE,
-    )
-    figure.suptitle(
-        f"Where age shows in the structural connectome of {len(rows)} HCP-Aging subjects: the "
-        f"effect over the {found.size} significant component(s) of {rank},\nrelative to its "
-        "largest value (positive: connectivity rising with age)",
-        fontsize=TITLE_SIZE,
-        y=1.11,
-    )
-    save(figure, out, "cohort_age_effect.png")
-
-
-#: Midpoints of the HCP Young Adult open-access age bands, for use as a covariate.
 BAND_MIDPOINTS = {"22-25": 23.5, "26-30": 28.0, "31-35": 33.0, "36+": 37.0}
 
 
@@ -986,8 +863,8 @@ def cohort_trait(
     ``directory`` holds the SC files, ``<subject>_sc.h5``; ``traits`` is an
     open-access table (:func:`open_access_table`) giving each subject's sex,
     age band and ``trait``. Subjects without a value are left out. The fit is
-    saved beside the data as ``fpca_rank<rank>_c<candidates>.npz`` and reused,
-    as in :func:`cohort_age`.
+    saved beside the data as ``fpca_rank<rank>_c<candidates>.npz`` and reused on
+    the next run, so the figures can be redrawn without refitting.
     """
     from sbci.reduction import Reduction
 
@@ -1070,32 +947,61 @@ def cohort_trait(
         r = [float(np.corrcoef(reduction.scores[:, k], v)[0, 1]) for k in range(rank)]
         print(f"  r(score, {name}): {np.round(r, 3).tolist()}", flush=True)
 
-    shown = np.argsort(result.adjusted)[: min(4, rank)]
+    # The two components most associated with the trait. At r near 0.1 a scatter of 943
+    # subjects is a cloud, so the trend is drawn as the mean score in each fifth of the
+    # trait's range, with its 95% interval, over the subjects themselves.
+    shown = np.argsort(result.adjusted)[: min(2, rank)]
+    edges = np.unique(np.quantile(score, np.linspace(0, 1, 6)))
+    groups = np.clip(np.digitize(score, edges[1:-1], right=True), 0, edges.size - 2)
+    jitter = np.random.default_rng(0).uniform(-0.3, 0.3, score.size)
     figure, axes = plt.subplots(
-        1, len(shown), figsize=(4.2 * len(shown), 3.9), layout="constrained", squeeze=False
+        1, len(shown), figsize=(5.8 * len(shown), 4.4), layout="constrained", squeeze=False
     )
     axes = axes[0]
     for axis, k in zip(axes, shown, strict=True):
         scores = reduction.scores[:, k]
-        for mask, color, sex in ((female == 1, ORANGE, "F"), (female == 0, BLUE, "M")):
+        for mask, color, sex in ((female == 1, ORANGE, "women"), (female == 0, BLUE, "men")):
             axis.scatter(
-                score[mask], scores[mask], s=9, color=color, alpha=0.45, linewidths=0, label=sex
+                score[mask] + jitter[mask],
+                scores[mask],
+                s=7,
+                color=color,
+                alpha=0.25,
+                linewidths=0,
+                label=sex,
             )
+        bins = [groups == g for g in range(edges.size - 1)]
+        centres = [score[b].mean() for b in bins]
+        means = [scores[b].mean() for b in bins]
+        half = [1.96 * scores[b].std(ddof=1) / np.sqrt(b.sum()) for b in bins]
+        axis.errorbar(
+            centres,
+            means,
+            yerr=half,
+            color=INK,
+            marker="o",
+            markersize=6,
+            linewidth=0,
+            elinewidth=2,
+            capsize=3,
+            label="mean of each fifth, 95% interval",
+        )
         slope, intercept = np.polyfit(score, scores, 1)
         grid = np.linspace(score.min(), score.max(), 2)
-        axis.plot(grid, slope * grid + intercept, color=INK, linewidth=2)
+        axis.plot(grid, slope * grid + intercept, color=INK, linewidth=1.5, linestyle="--")
+        low, high = np.percentile(scores, [2, 98])
+        axis.set_ylim(low, high)
         axis.set_title(
             f"component {k + 1}: r = {correlations[k]:.2f}, adjusted p = {result.adjusted[k]:.2g}",
-            fontsize=11,
+            fontsize=12,
         )
         axis.set_xlabel(label)
-    axes[0].set_ylabel("score")
-    axes[0].legend(frameon=False, markerscale=2)
+    axes[0].set_ylabel("score on the component")
+    axes[0].legend(frameon=False, markerscale=2, loc="upper left", fontsize=9)
     figure.suptitle(
-        f"FPCA of {len(rows)} HCP Young Adult subjects, rank {rank}: the {len(shown)} components "
-        "most associated with fluid intelligence\n"
-        "(sex, age band and streamline count as covariates)",
-        fontsize=14,
+        f"FPCA of {len(rows)} HCP Young Adult subjects, rank {rank}: the two components most "
+        "associated with fluid intelligence, given sex, age band and streamline count",
+        fontsize=13,
     )
     save(figure, out, "cohort_trait_scores.png")
     if not found.size:
@@ -1112,9 +1018,14 @@ def cohort_trait(
         mesh=DISPLAY_MESH,
         engine=DISPLAY_ENGINE,
     )
+    which = (
+        f"component {found[0] + 1}, the one of {rank} significant at FDR 0.05"
+        if found.size == 1
+        else f"the {found.size} components of {rank} significant at FDR 0.05"
+    )
     figure.suptitle(
         f"Where fluid intelligence shows in the structural connectome of {len(rows)} HCP Young "
-        f"Adult subjects: the effect over the {found.size} significant component(s) of {rank},\n"
+        f"Adult subjects: the effect of {which},\n"
         "relative to its largest value (positive: connectivity higher with higher scores)",
         fontsize=TITLE_SIZE,
         y=1.11,
@@ -1133,35 +1044,33 @@ def main(argv: list[str]) -> int:
     surfaces_only = "--surfaces-only" in argv  # the rendered surface figures, no registrations
     only_recovery = "--only-recovery" in argv  # the known-warp figures alone
     only_migration = "--only-migration" in argv  # the warp-migration figure alone
-    # --full-cohort DIR: the full cohort's SC files and manifest; draws the FPCA-against-age
-    # figures from them and nothing else.
+    # --full-cohort DIR --traits CSV: the full cohort's SC files and an open-access table;
+    # draws the FPCA-against-a-trait figures from them and nothing else.
     if "--full-cohort" in argv:
+        if "--traits" not in argv:
+            print("--full-cohort needs --traits, a table of open-access measures", file=sys.stderr)
+            return 2
         directory = Path(argv[argv.index("--full-cohort") + 1])
+        traits = Path(argv[argv.index("--traits") + 1])
         rank = int(argv[argv.index("--rank") + 1]) if "--rank" in argv else 20
         candidates = int(argv[argv.index("--candidates") + 1]) if "--candidates" in argv else 1
         out.mkdir(parents=True, exist_ok=True)
         print("full cohort", flush=True)
-        if "--traits" in argv:  # a young adult cohort against an open-access trait
-            traits = Path(argv[argv.index("--traits") + 1])
-            cohort_trait(out, directory, traits, rank=rank, candidates=candidates)
-        else:  # the HCP-Aging cohort against age
-            cohort_age(out, directory, rank=rank, candidates=candidates)
+        cohort_trait(out, directory, traits, rank=rank, candidates=candidates)
         return 0
-    # --timeseries PATH: the pipeline's fc_ts.npz of the first subject (its resting-state
-    # time series on fsaverage), for the warp-migration figure; skipped without it.
-    timeseries = None
-    if "--timeseries" in argv:
-        timeseries = Path(argv[argv.index("--timeseries") + 1])
-        argv = [a for a in argv if a not in ("--timeseries", str(timeseries))]
+    # --anatomy DIR: the first subject's pipeline directory (its FreeSurfer ?h.sulc and
+    # registered spheres), for the warp-migration figure; skipped without it.
+    anatomy = None
+    if "--anatomy" in argv:
+        anatomy = Path(argv[argv.index("--anatomy") + 1])
+        argv = [a for a in argv if a not in ("--anatomy", str(anatomy))]
     global DATASET
-    DATASET = dataset_of(cohort_dir)
     if "--dataset" in argv:
         DATASET = argv[argv.index("--dataset") + 1]
         argv = [a for a in argv if a not in ("--dataset", DATASET)]
     out.mkdir(parents=True, exist_ok=True)
-    subjects, functional, ages = load_cohort(cohort_dir)
-    span = f", ages {np.nanmin(ages):.0f}-{np.nanmax(ages):.0f}" if np.isfinite(ages).any() else ""
-    print(f"loaded {len(subjects)} {DATASET} subjects{span}", flush=True)
+    subjects, functional = load_cohort(cohort_dir)
+    print(f"loaded {len(subjects)} {DATASET} subjects", flush=True)
     first = subjects[0]
     fc_first = sbci.load(functional[0]) if functional[0] is not None else None
     if surfaces_only:
@@ -1176,9 +1085,9 @@ def main(argv: list[str]) -> int:
         if only_recovery:
             print("alignment recovery", flush=True)
             alignment_recovery(out, first, experiment)
-        if timeseries is not None:
+        if anatomy is not None:
             print("warp migration", flush=True)
-            migration_power(out, first, experiment, timeseries)
+            migration_power(out, first, experiment, anatomy)
         return 0
     if not only_cohort:
         print("single subject", flush=True)
@@ -1191,9 +1100,9 @@ def main(argv: list[str]) -> int:
         print("alignment recovery", flush=True)
         experiment = known_warp_experiment(first)
         alignment_recovery(out, first, experiment)
-        if timeseries is not None:
+        if anatomy is not None:
             print("warp migration", flush=True)
-            migration_power(out, first, experiment, timeseries)
+            migration_power(out, first, experiment, anatomy)
     if not skip_cohort:
         print("cohort", flush=True)
         cohort_figures(out, subjects, conseal=not no_conseal)

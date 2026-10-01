@@ -1,4 +1,4 @@
-"""Write the exchange file for the example subject, then verify it end to end.
+"""Write the exchange file for a released subject, sub-100307, then verify it end to end.
 
 Three claims are checked, each against something outside the resampling code:
 
@@ -22,12 +22,14 @@ import numpy as np
 from sbci import ContinuousConnectome, load_atlas
 from sbci.io.cifti import N_FSLR_PER_HEMI, vertex_areas
 
-DATA = "/work/users/x/y/xya/sbci-derivatives"
+DATA = "/work/users/x/y/xya/hcp-ya/data"  # sbci download hcp-ya, the lab's copy
+EXCHANGE = "/work/users/x/y/xya/hcp-ya/exchange"
 MSM = "/work/users/x/y/xya/sbci-reference/SBCI_Pipeline/data/MSMLabels"
-TARGET = f"{DATA}/sub-example_space-fsLR_den-32k_desc-concon_sc.dconn.nii"
+TARGET = f"{EXCHANGE}/sub-100307_space-fsLR_den-32k_desc-concon_sc.dconn.nii"
 BLOCK = 4096
 
-sc = ContinuousConnectome.load(f"{DATA}/sub-example_sc.h5")
+os.makedirs(EXCHANGE, exist_ok=True)
+sc = ContinuousConnectome.load(f"{DATA}/sub-100307_sc.h5")
 dense = sc.dense().astype(np.float64)
 area = np.asarray(sc.area, dtype=np.float64)
 mass_ico4 = float(area @ dense @ area)

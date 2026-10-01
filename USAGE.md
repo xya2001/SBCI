@@ -10,11 +10,12 @@ pip install "sbci[plotting] @ git+https://github.com/xya2001/SBCI.git"
 sbci download hcp-ya --subject 100307     # one real subject, 50 MB, into the current directory
 ```
 
-Python 3.10 or newer; the plotting extra is only for figures. The examples
-below that need a released subject run on the HCP Young Adult cohort:
-`sbci download hcp-ya --out hcp-ya` fetches all eleven (about 560 MB) and
-`--subject` one of them. They are structural only, so the examples with FC use the lab's files
-on the Longleaf cluster, whose paths are quoted; substitute yours. The `rdk` and `matern` kernels need the
+Python 3.10 or newer; the plotting extra is only for figures. Every example
+below runs on the released HCP Young Adult subjects: `sbci download hcp-ya
+--out hcp-ya` fetches all eleven (about 560 MB) and `--subject` one of them.
+The paths quoted are the lab's copies on the Longleaf cluster, so substitute
+yours. The released files are structural only, so the one method that needs
+FC, `coupling`, is described without a worked example. The `rdk` and `matern` kernels need the
 Laplace-Beltrami basis, two files from `SBCI_Toolkit/concon_estimate`; *Storing
 endpoints, and re-smoothing from them* says where to put them.
 
@@ -54,16 +55,14 @@ permanent.
 ## Data to try it on
 
 The released cohort is described under *Getting the example cohort* below.
-On Longleaf, one real subject is already imported, converted
-from legacy pipeline output:
+On Longleaf the lab's copy of the download is already there:
 
 ```
-/work/users/x/y/xya/sbci-derivatives/sub-example_sc.h5
-/work/users/x/y/xya/sbci-derivatives/sub-example_fc.h5
+/work/users/x/y/xya/hcp-ya/data/sub-100307_sc.h5     # and the other ten, with manifest.csv
 ```
 
-Both pass every validator check. To convert more, use
-`tools/import_legacy.py`.
+Every file passes every validator check. To convert other pipeline output,
+use `tools/import_legacy.py`.
 
 > Every path below is literal and copy-pasteable. If you see a
 > `FileNotFoundError` mentioning `...`, an ellipsis placeholder was pasted as a
@@ -117,12 +116,11 @@ present.
 ```python
 from sbci import ContinuousConnectome
 
-sc = ContinuousConnectome.load("/work/users/x/y/xya/sbci-derivatives/sub-example_sc.h5")
-fc = ContinuousConnectome.load("/work/users/x/y/xya/sbci-derivatives/sub-example_fc.h5")
+sc = ContinuousConnectome.load("/work/users/x/y/xya/hcp-ya/data/sub-100307_sc.h5")
 ```
 
 ```
-sc                ContinuousConnectome(modality='sc', n_vertices=5124)
+sc                <ContinuousConnectome sc on 5124 vertices>
 stored form       (13125126,) float32, the strict upper triangle
 area weights      (5124,), sum 327,684
 cortex mask       4,685 of 5,124 vertices
@@ -171,7 +169,7 @@ because averaging correlations directly is biased.
 
 ![The Desikan region matrix of an HCP Young Adult subject](docs/figures/region_matrix.png)
 
-*`cc.to_atlas("Desikan")` on sub-103010: 68 regions, left hemisphere first,
+*`cc.to_atlas("Desikan")` on sub-100307: 68 regions, left hemisphere first,
 mass on a log scale.*
 
 ## `seed` — one profile
@@ -192,25 +190,16 @@ sc.coupling(fc, scope="global")                        # (5124,)
 sc.coupling(fc, scope="region", labels=atlas.labels)   # (5124,)
 ```
 
-```
-global    4,683 finite, range [-0.106, 0.533], mean 0.248
-region    mean 0.671
-```
-
+`fc` is a functional connectome on the same grid, which the released young
+adults do not have yet; once they do, this section gets its worked example.
 NaN marks the medial wall and any vertex whose profile is constant. Local
-coupling runs higher than global because neighbouring vertices inside a region
-share both structure and function.
+coupling runs higher than global because neighbouring vertices inside a
+region share both structure and function.
 
 Two things worth knowing: **negative FC values are kept** — discarding them
 flips the sign of the map in association cortex — and **`discrete_coupling` is
 a Pearson correlation, not a cosine**, matching MATLAB's `corr2`, while global
 and region are uncentred cosine similarity.
-
-![Structure-function coupling on the surface](docs/figures/coupling.png)
-
-*`sc.coupling(fc)` for an HCP-Aging subject's SC and FC, since the young adult
-files have no FC yet and the HCP-Aging files are not distributed: one cosine
-similarity per vertex, drawn on the inflated surface.*
 
 ## `plot` — a surface figure
 
@@ -218,8 +207,9 @@ similarity per vertex, drawn on the inflated surface.*
 import matplotlib
 matplotlib.use("Agg")          # no display on a cluster node
 
-figure = sc.plot(coupling_map, title="SC-FC coupling", cmap="coolwarm")
-figure.savefig("coupling.png", dpi=150)
+profile = sc.seed(vertex=1234)
+figure = sc.plot(profile / profile.max(), title="vertex 1234")
+figure.savefig("seed.png", dpi=150)
 ```
 
 Four panels, each hemisphere seen laterally and medially, on a surface shaded
@@ -241,8 +231,8 @@ only the drawing is finer. nilearn fetches fsaverage once into
 download. The finest mesh takes about a minute per view to render.
 
 ```python
-figure = sc.plot(coupling_map, mesh="fsaverage", cmap="coolwarm")
-figure.savefig("coupling.png", dpi=200)
+figure = sc.plot(profile / profile.max(), mesh="fsaverage")
+figure.savefig("seed.png", dpi=200)
 ```
 
 For a figure to publish, add `engine="pyvista"`: each view is rendered
@@ -256,7 +246,7 @@ OSMesa build: `pip install --extra-index-url https://wheels.vtk.org
 vtk-osmesa`).
 
 ```python
-figure = sc.plot(coupling_map, mesh="fsaverage", engine="pyvista", cmap="coolwarm")
+figure = sc.plot(profile / profile.max(), mesh="fsaverage", engine="pyvista")
 ```
 
 ## `save` and `sbci validate`
@@ -309,53 +299,52 @@ released bandwidth and at twice it, with the cutoff beyond which it is zero.*
 A structural file can carry the streamline endpoints it was built from, in an
 optional `/endpoints` group. Without them a connectome is a finished product;
 with them it can be re-smoothed at another bandwidth or with another kernel.
-The released subjects carry theirs (803,741 for `sub-100307`), so
+The released subjects carry theirs (803,741 streamlines for `sub-100307`), so
 `sbci.load("sub-100307_sc.h5").smooth(kernel="shk", mask_medial_wall=True)`
 re-smooths a real subject and gives back the stored connectome at
-r = 1.0000000; the rest of this section is about the lab's files.
+r = 1.0000000.
+
+The endpoints come from the pipeline's output, which writes two sets, and only
+one belongs with the pipeline's smoothed connectome.
+`mesh_intersections_ico4.mat` holds the unsnapped intersections mapped onto
+the grid; the connectome is smoothed from the snapped streamlines
+(`snapped_fibers.npz`) placed on the subject's registered sphere, and
+`Endpoints.from_snapped` builds those. This is how `tools/build_hcp_cohort.py`
+built the released files, from the lab's copy of the subjects' pipeline
+output:
 
 ```python
+import numpy as np
 from sbci import ContinuousConnectome
 from sbci.smoothing import Endpoints
+from convert_surfaces import read_vtk_polydata    # tools/, on the path
 
-TOOLKIT = "/work/users/x/y/xya/sbci-reference/SBCI_Toolkit"
-
-sc = ContinuousConnectome.load("/work/users/x/y/xya/sbci-derivatives/sub-example_sc.h5")
-sc.endpoints = Endpoints.from_matlab(
-    f"{TOOLKIT}/example_data/SBCI_Individual_Subject_Outcome/mesh_intersections_ico4.mat"
-)
-sc.save("/work/users/x/y/xya/sub-example_desc-withendpoints_sc.h5")
+P = "/overflow/zzhanglab/encore_project/encore_paper_code/prediction_subs/100307"
+# FreeSurfer's registered spheres, one vertex per native vertex, stored in RAS;
+# negating x and y puts them in the grid's frame
+flip = np.array([-1.0, -1.0, 1.0])
+lh, _ = read_vtk_polydata(f"{P}/lh_sphere_freesurfer_reg.vtk")
+rh, _ = read_vtk_polydata(f"{P}/rh_sphere_freesurfer_reg.vtk")
+ends = Endpoints.from_snapped(f"{P}/snapped_fibers.npz", lh * flip, rh * flip)
+ends.n_streamlines                       # 803741, the released file's own
 ```
 
-**Which endpoints.** The pipeline writes two sets, and only one belongs with
-its smoothed connectome. `mesh_intersections_ico4.mat` holds the unsnapped
-intersections mapped onto the grid; the connectome was smoothed from the
-snapped streamlines placed on the subject's registered sphere. Build those
-with `Endpoints.from_snapped`, which is what `tools/build_hcp_cohort.py`
-does:
+Those are the endpoints `sub-100307_sc.h5` stores: the same vertices and
+triangles, and barycentric positions equal to float32 rounding. Endpoints read
+from `mesh_intersections_ico4.mat` instead would not re-smooth to the
+pipeline's connectome (`Endpoints.from_matlab` reads them; PORTING.md item 6
+has the measurement).
+
+On sub-100307 the endpoints take the file from **28.0 MB to 50.2 MB**. The
+group is optional, so a file without it is still valid -- it simply raises
+when you try to re-smooth.
 
 ```python
-from sbci.smoothing import Endpoints
-# ?h_sphere_reg_lps.vtk: the subject's registered spheres, one vertex per native
-# vertex, already in the grid's frame (a sphere stored in RAS needs x and y negated)
-ends = Endpoints.from_snapped("snapped_fibers.npz", lh_sphere_vertices, rh_sphere_vertices)
-```
+TOOLKIT = "/work/users/x/y/xya/sbci-reference/SBCI_Toolkit"   # where the Laplace-Beltrami basis lives
 
-On an HCP-Aging subject these re-smooth to the pipeline's stored connectome at
-r = 0.9997; the endpoints from `mesh_intersections_ico4.mat` reach 0.968
-(PORTING.md item 6). The young adult files were smoothed by the package from
-the snapped endpoints themselves, which is why they re-smooth exactly. The
-example above uses the other file only because the toolkit's demo subject has
-nothing else.
-
-On the example subject that is 383,760 streamlines and takes the file from
-**20.0 MB to 31.8 MB**. The group is optional, so a file without it is still
-valid -- it simply raises when you try to re-smooth.
-
-```python
-back = ContinuousConnectome.load("/work/users/x/y/xya/sub-example_desc-withendpoints_sc.h5")
+back = ContinuousConnectome.load("/work/users/x/y/xya/hcp-ya/data/sub-100307_sc.h5")
 back.has_endpoints                      # True
-back.endpoints.n_streamlines            # 383760
+back.endpoints.n_streamlines            # 803741
 back.endpoints.has_positions            # True: barycentric positions too
 
 resmoothed = back.smooth(kernel="rdk", eigenpairs=f"{TOOLKIT}/concon_estimate")
@@ -415,11 +404,11 @@ cutoff are visited per endpoint, found with a KD-tree.
 ![Smoothing, from endpoints to a comparable map](docs/figures/smoothing_power.png)
 
 *Why the density and not the counts: the far ends of the streamlines touching
-vertex 1234 (blue dots) in two random halves of sub-103010's 988,788
+vertex 1234 (blue dots) in two random halves of sub-100307's 803,741
 streamlines and in the whole set, and the smoothed density of the same vertex
-from each. Only 41 and 28 streamlines touch the vertex in the two halves, so
-their raw counts agree across the cortex at r = 0.46; smoothed they agree at
-r = 1.00, and half A matches the map from all streamlines at r = 1.00.*
+from each. Only 32 and 26 streamlines touch the vertex in the two halves, so
+their raw counts agree across the cortex at r = 0.41; smoothed they agree at
+r = 0.99, and half A matches the map from all streamlines at r = 1.00.*
 
 ## The cohort, end to end
 
@@ -440,10 +429,10 @@ from sbci.download import fetch_cohort
 paths = fetch_cohort(out="hcp-ya")                         # the eleven, 560 MB
 subjects = [sbci.load(p) for p in paths]
 
-# ENCORE on the densities: five minutes on eight cores for ten subjects
+# ENCORE on the densities: ten minutes on eight cores for the eleven
 alignment = sbci.align(subjects, max_iterations=10)
 alignment.aligned[0]                                       # subject 1's warped density, dense
-# ConSEAL on the endpoints (an hour; see the ConSEAL notes on its template)
+# ConSEAL on the endpoints (two hours; see the ConSEAL notes on its template)
 registration = sbci.endpoints_align(subjects, max_iterations=30)
 for i, cc in enumerate(subjects):
     cc.endpoints = registration.aligned_endpoints(i)
@@ -469,22 +458,20 @@ sbci.load(files[0]).plot(effect, mesh="fsaverage", engine="pyvista")
 
 `terms=[1]` tests the score column only: column 0 is the intercept the test
 adds, and columns 2 to 4, sex, the age band and the streamline count, stay in
-the model as nuisance.
-The streamline count matters: it is the largest source of difference between
-subjects' connectomes, and on 528 HCP-Aging subjects a rank-4 fit, which never
-reaches past it, missed the age effect a rank-20 fit found (PORTING.md item
-5).
+the model as nuisance. On the 943 with a score, one component of the twenty
+tracks it this way, component 13, at r = 0.11 (adjusted p 0.023); the README
+shows it and where on the cortex it sits. The rank matters: a rank-4 fit
+finds no component that tracks it, because the largest differences between
+these subjects lie elsewhere (PORTING.md item 5).
 
 **Running it on Longleaf.** `reduce` holds the cohort once, as one dense
-float64 array: 199 GB for 946 subjects, 111 GB for 528. Given paths, or a
-sequence whose items are loaded when indexed, it reads one subject at a time,
-so the files need not be held as well. The 528 peaked at 116 GiB; ask for
-230 GB for the 946.
-Ask for the cores as one task, `--ntasks=1 --cpus-per-task=8`: with eight
-one-CPU tasks the cluster sets `OMP_NUM_THREADS=1`, and the linear algebra
-then runs on one core. On the 528 HCP-Aging subjects the rank-20 fit took four
-hours that way; with eight threads it reads the cohort about three times
-faster.
+float64 array, 199 GB for 946 subjects. Given paths, or a sequence whose items
+are loaded when indexed, it reads one subject at a time, so the files need not
+be held as well. The fit of the 943 peaked at 196 GiB; ask for 230 GB. Ask for
+the cores as one task, `--ntasks=1 --cpus-per-task=8`: with eight one-CPU
+tasks the cluster sets `OMP_NUM_THREADS=1`, and the linear algebra then runs
+on one core. With eight threads the rank-20 fit of the 943 took five and a
+half hours, loading included.
 
 The pipeline is checked against a planted answer on a synthetic cohort
 (`sbci.example_cohort()`, one bundle scaled by a synthetic age) in PORTING.md
@@ -689,8 +676,8 @@ seconds per 100,000 streamlines rather than minutes. Six things to know:
   that subject: its cost is 0, it takes no iterations, and everyone else is
   registered onto its bundles. In the synthetic checks of PORTING.md item 7
   this happens at three degrees of anatomical spread (every subject 10 to 11 Fisher-Rao degrees
-  from the mean) and not at two, and it happens on the ten young adults of
-  the example cohort drawn at random: the median lands 0.001 degrees from sub-212116 and 24 to 27 from the
+  from the mean) and not at two, and it happens on the eleven released young
+  adults: the median lands 0.001 degrees from sub-212116 and 24 to 27 from the
   others, while every subject is 17 to 20 degrees from the mean. Pass `template=` a subject index or a
   precomputed square-root density -- the normalized mean of the subjects'
   `q_transform(kernel)` arrays, for one -- to choose.
@@ -705,14 +692,14 @@ seconds per 100,000 streamlines rather than minutes. Six things to know:
   (PORTING.md item 7).
 ![Alignment with a known answer](docs/figures/alignment_recovery.png)
 
-*The endpoints of sub-103010's 988,788 streamlines moved by a known smooth
+*The endpoints of sub-100307's 803,741 streamlines moved by a known smooth
 warp (degree 4, 1.7 degrees on average, 4 at most) and registered back onto
 the undeformed subject, both through the package's smoother. Top: how far the
 endpoints still are from where they started, vertex by vertex. Bottom: the
 same as a histogram, and the cost per iteration. ENCORE, with its default
-degree-6 basis, brings the endpoints back from 1.65 to 0.22 degrees in eight
+degree-6 basis, brings the endpoints back from 1.63 to 0.20 degrees in ten
 steps; ConSEAL with the paper's update (`delta=0.1, step_clamp=inf,
-viscosity=0`) and a stopping threshold of 1e-7 to 0.12 degrees in sixty. The
+viscosity=0`) and a stopping threshold of 1e-7 to 0.11 degrees in sixty. The
 reference has to go through the same smoother as the deformed copy, and the
 warp has to be one a smoothed density can see; PORTING.md item 4 shows what
 happens otherwise.*
@@ -760,7 +747,7 @@ points you handle yourself.
 
 ![Carrying a warp between templates](docs/figures/migration_power.png)
 
-*Measured on an HCP-Aging subject, since the young adult files carry no resting-state data; the HCP-Aging files are not distributed. Top: the subject's resting-state connectivity of vertex 1234 on fsaverage (163,842 vertices per hemisphere, correlation with the seed's time series), the same map moved by the known warp of the recovery figure (r = 0.87 with the original), and put back by ENCORE's warp carried from the grid with `migrate_warp` (r = 0.99). Bottom: ENCORE's warp on the grid (5,124 vertices), the same warp restated on fsaverage, and the known warp on fsaverage; the carried warp is 0.35 degrees from the true one over both hemispheres and 0.33 over the left one shown, where the true warp moved vertices 1.58 degrees on average.*
+*Top: sub-100307's own sulcal depth from its FreeSurfer reconstruction, on fsaverage (163,842 vertices per hemisphere), and what changes in it when the known warp of the recovery figure moves it (r = 0.95 with the original) and when ENCORE's warp, carried from the grid with `migrate_warp`, puts it back (r = 0.996). Bottom: ENCORE's warp on the grid (5,124 vertices), the same warp restated on fsaverage, and the known warp on fsaverage; the carried warp is 0.33 degrees from the true one, which moved vertices 1.58 degrees on average.*
 
 ```python
 alignment = sbci.align(subjects)                              # ENCORE
@@ -800,8 +787,8 @@ Three things to know:
 ```python
 from sbci import ContinuousConnectome
 
-sc = ContinuousConnectome.load("/work/users/x/y/xya/sbci-derivatives/sub-example_sc.h5")
-sc.to_cifti("/work/users/x/y/xya/sub-example_sc.dconn.nii")
+sc = ContinuousConnectome.load("/work/users/x/y/xya/hcp-ya/data/sub-100307_sc.h5")
+sc.to_cifti("/work/users/x/y/xya/hcp-ya/exchange/sub-100307_sc.dconn.nii")
 ```
 
 Three files are written: the dense connectome, a `.json` sidecar with the
@@ -812,7 +799,7 @@ totals, region means -- needs those areas; they are not recoverable from the
 
 **This does not belong on a login node.** The output is 64,984 x 64,984 in
 float32, **16.9 GB on disk**, and the writer needs about 25 GB of memory and
-three minutes. Use a batch job:
+four or five minutes. Use a batch job:
 
 ```bash
 sbatch --mem=60G --time=01:00:00 --wrap="module load python/3.12.4; source /work/users/x/y/xya/sbci-venv/bin/activate; python scripts/write_exchange_file.py"
@@ -825,7 +812,7 @@ a silent round trip would degrade the data:
 ```python
 import nibabel as nib, numpy as np
 
-img = nib.load("/work/users/x/y/xya/sub-example_sc.dconn.nii")
+img = nib.load("/work/users/x/y/xya/hcp-ya/exchange/sub-100307_sc.dconn.nii")
 axis = img.header.get_axis(0)          # BrainModelAxis, 64,984 elements
 row = np.asarray(img.dataobj[1234])    # one vertex's profile, memory-mapped
 ```
@@ -841,10 +828,10 @@ Longleaf. Use **1.5.0** -- the 2.0.1 build on this cluster is missing
 
 ```bash
 module load connectome/1.5.0
-wb_command -file-information /work/users/x/y/xya/sbci-derivatives/sub-example_space-fsLR_den-32k_desc-concon_sc.dconn.nii
+wb_command -file-information /work/users/x/y/xya/hcp-ya/exchange/sub-100307_space-fsLR_den-32k_desc-concon_sc.dconn.nii
 ```
 
-On the example subject this reports `Type: CIFTI - Dense`, `Structure:
+On sub-100307 this reports `Type: CIFTI - Dense`, `Structure:
 CortexLeft CortexRight`, 64984 x 64984, and `32492 out of 32492 vertices` for
 each hemisphere -- so Workbench's own reader agrees with the header the writer
 produced. The phrase "out of" is worth noting: it is Workbench saying the file

@@ -92,12 +92,14 @@ export SBCI_TOOLKIT=$PWD/SBCI_Toolkit
 python scripts/audit_api.py
 ```
 
-`scripts/audit_api.py` exercises fifteen rows of the API table in README.md on
-real data, in the order a user would: load, save, parcellate, seed, couple,
-plot, export, validate, smooth, reduce, test, align (its data paths are set at
-the top of the script, for Longleaf). It prints a value for each and exits
-non-zero if any fails. Expect `15 passed, 0 failed`. It smooths, reduces and
-aligns on the full grid, so run it inside a batch job.
+`scripts/audit_api.py` exercises the API table in README.md on the released
+young adults, in the order a user would: load, save, parcellate, seed, plot,
+export, validate, download, smooth, reduce, test, align with ENCORE and
+ConSEAL, and carry a warp to fs_LR (its data paths are set at the top of the
+script, for Longleaf). It prints a value for each and exits non-zero if any
+fails. Expect `16 passed, 0 failed, 1 skipped`: coupling is skipped, because
+the young adult files have no FC. It smooths, reduces and aligns on the full
+grid, so run it inside a batch job.
 
 **What this proves.** The documented API works end to end on a real subject,
 not only on fixtures.
@@ -260,8 +262,9 @@ region matrix. Files written before they are settled may need rewriting.
 
 **The example cohort is structural only.** The eleven HCP Young Adult subjects
 carry no FC, because the lab's copy of the cohort has no resting-state data.
-Coupling and the warp-migration figure are shown on HCP-Aging subjects, whose
-files are not distributed (SPEC_QUESTIONS.md item 6).
+Coupling, which needs FC, has no worked example on them, and the
+warp-migration figure carries the subject's own FreeSurfer sulcal depth
+instead of a resting-state map (SPEC_QUESTIONS.md item 6).
 
 ---
 
@@ -269,7 +272,7 @@ files are not distributed (SPEC_QUESTIONS.md item 6).
 
 - [ ] Tier 1 passes from a clean clone: tests, lint, wheel
 - [ ] `scripts/check_hcp_ya.py` passes on a machine with network access
-- [ ] `scripts/audit_api.py` reports 15 passed, 0 failed
+- [ ] `scripts/audit_api.py` reports 16 passed, 0 failed, 1 skipped (coupling, for want of FC)
 - [ ] Tier 4 reproduces the agreements in the table above
 - [ ] Alignment raises inter-subject correlation on a cohort of your choosing
 - [ ] The exchange file opens in Connectome Workbench

@@ -18,7 +18,7 @@ from nilearn import plotting as nlp
 
 W = "/work/users/x/y/xya"
 OUT = f"{W}/wb-out"
-DCONN = f"{W}/sbci-derivatives/sub-example_space-fsLR_den-32k_desc-concon_sc.dconn.nii"
+DCONN = f"{W}/hcp-ya/exchange/sub-100307_space-fsLR_den-32k_desc-concon_sc.dconn.nii"
 N_FSLR = 32492
 SEED_FSLR = 9286
 

@@ -47,24 +47,24 @@ sbci atlases --match Yeo                # the bundled atlases
 ```
 
 The young adult files are structural only for now. The lab's copy of the
-cohort has no resting-state data, so structure-function coupling is shown in
-USAGE.md on an HCP-Aging subject, whose files are not distributed.
+cohort has no resting-state data, so `coupling()`, which needs FC, has no
+worked example on them yet.
 
 `sbci.example()` still builds a synthetic connectome on the real grid, for the
 tests and for a machine without network access; nothing in this README is
 drawn from it.
 
-The figures in this README are drawn from the ten young adults of the cohort
-drawn at random, 22 to 35 years old by the HCP's open-access age bands, and
-the single-subject figures from one of them, sub-103010. All were rebuilt on
+The figures in this README are drawn from the eleven young adults of the
+example cohort, 22 to 35 years old by the HCP's open-access age bands, and the
+single-subject figures from sub-100307, the subject of the commands above. All
+were rebuilt on
 the ico4 grid from the lab's pipeline output with `tools/build_hcp_cohort.py`
 and drawn on FreeSurfer's fsaverage surface, rendered with smooth lighting
 through PyVista (`plot(mesh="fsaverage", engine="pyvista")`);
 `scripts/hcp_figures.py` draws them from a downloaded copy, and
 [docs/figures](docs/figures/README.md) describes each.
 The analysis of a whole cohort uses all 946 young adults with complete
-pipeline output. The one figure that needs a resting-state time series comes
-from an HCP-Aging subject and says so.
+pipeline output.
 
 ![The connectivity of one vertex over the cortex](docs/figures/seed_profile.png)
 
@@ -73,13 +73,12 @@ subject connects to. The value at each vertex is the density of streamlines
 between the seed (the orange dot, left temporal cortex) and that vertex,
 relative to the strongest, on the inflated surface shaded by sulcal depth.*
 
-**What smoothing does.** Tractography gives endpoints. sub-103010's 988,788
-streamlines were split into two random halves; 41 of them touch vertex 1234
-in one half and 28 in the other. That is few: more streamlines end at nearly
-nine in ten of this subject's cortical vertices. So the two halves' raw
-counts share little, and they agree across the cortex at only r = 0.46.
-Smoothed, they agree at r = 1.00, and half A's map matches the map from all
-streamlines at r = 1.00. The kernel pools the streamlines that end near the
+**What smoothing does.** Tractography gives endpoints. sub-100307's 803,741
+streamlines were split into two random halves; 32 of them touch vertex 1234
+in one half and 26 in the other. That is few: more streamlines end at 85% of
+this subject's cortical vertices. So the two halves' raw counts share little,
+and they agree across the cortex at only r = 0.41. Smoothed, they agree at
+r = 0.99, and half A's map matches the map from all streamlines at r = 1.00. The kernel pools the streamlines that end near the
 vertex, and that is what makes two subjects, or two sessions, comparable
 vertex by vertex.
 
@@ -101,8 +100,8 @@ cc.plot(p)                             # inflated-surface figure
 cc.to_cifti("sub-100307_sc.dconn.nii") # opens in Workbench; 16.9 GB
 ```
 
-The example cohort, sub-100307 and the ten young adults the figures are drawn
-from, is hosted on a public Google Drive ([the
+The example cohort, the eleven young adults the figures are drawn from, is
+hosted on a public Google Drive ([the
 folder](https://drive.google.com/drive/folders/1gG2ZmxxVm4w5dvlCQvMaEEOBypU7nDpx),
 for browsing) and fetched by the package:
 
@@ -219,19 +218,35 @@ and of 52 of 2,278 Desikan region pairs at FDR 0.05, never beyond |r| = 0.17,
 where sex reaches 1,177 vertices and 843 region pairs. PORTING.md item 5 has
 the table.
 
-Two choices make an analysis like this work, and a first try on 528
-HCP-Aging subjects without them found nothing. A rank-4 fit had no component
-that tracked age (the largest correlation was -0.11), because the largest
-differences between those subjects are not age: they follow how many
-streamlines tractography produced, 0.5 to 1.8 million per subject. Twenty
-components reach past the count, and the count belongs in the design as a
-nuisance covariate. With both, five of the twenty components track age after
-the false-discovery-rate correction, the strongest at r = 0.32 (adjusted p
-4e-12): connectivity falls with age at the frontal poles and in rostral
-middle frontal cortex and rises in inferior temporal cortex and at the
-temporal poles. The HCP-Aging files are not distributed; PORTING.md item 5
-has the measurements, and [its two figures](docs/figures/README.md) are kept
-with the others.
+Fit at rank 20, which captures 27% of the cohort's norm, one component tracks
+fluid intelligence after the false-discovery-rate correction across the
+twenty, with sex, the age band and the streamline count in the model:
+component 13, at r = 0.11 (adjusted p 0.023). Without the covariates a second
+joins it, component 7 (r = 0.10, adjusted p 0.029); with them it falls just
+short (0.052). The effect sits in right medial occipital cortex, where
+connectivity is higher in subjects who score higher. It is small, as the
+probe said it would be. Sex, for comparison, shows in 13 of the 20
+components, the strongest at adjusted p 2e-8.
+
+The rank matters. A rank-4 fit, which captures 17% of the norm, has no
+component that tracks fluid intelligence, with the covariates or without them
+(its largest correlation with the score is 0.06): the largest differences
+between these subjects lie elsewhere, and sex alone shows in all four.
+Twenty components reach past them. PORTING.md item 5 has the measurements.
+
+![The components most associated with fluid intelligence](docs/figures/cohort_trait_scores.png)
+
+*The two components of a rank-20 FPCA of 943 HCP Young Adult subjects most
+associated with fluid intelligence, given sex, age band and streamline count:
+each subject's score against the number of PMAT24 items answered correctly
+(women orange, men blue), the mean in each fifth of that range with its 95%
+interval, the least-squares line, and the adjusted p-value.*
+
+![Where fluid intelligence shows in the structural connectome](docs/figures/cohort_trait_effect.png)
+
+*The effect map of component 13, relative to its largest value: the fitted
+change in connectivity with fluid intelligence, summed over the other
+endpoint.*
 
 Alignment fits in front of `reduce`: `sbci.align(subjects)` (ENCORE) returns
 the warped densities as `aligned`, and `sbci.endpoints_align(subjects)`
@@ -239,15 +254,15 @@ the warped densities as `aligned`, and `sbci.endpoints_align(subjects)`
 `aligned_endpoints(i)` hands them back, and `smooth()` turns them into aligned
 connectomes (USAGE.md shows the three lines). Timings are for eight cores.
 
-**Alignment, with a known answer.** The endpoints of sub-103010's 988,788
+**Alignment, with a known answer.** The endpoints of sub-100307's 803,741
 streamlines were moved by a known smooth warp, a random field of
 spherical harmonic degree up to four, 1.7 degrees on average and 4 at most,
 and the deformed copy was registered back onto the undeformed subject, both
 through the package's smoother. ENCORE, searching its default degree-6 basis,
-undoes 87% of the displacement in eight steps: the endpoints come back from
-1.65 to 0.22 degrees, and the cost falls to 0.17 of its start. ConSEAL, with
+undoes 88% of the displacement in ten steps: the endpoints come back from
+1.63 to 0.20 degrees, and the cost falls to 0.16 of its start. ConSEAL, with
 the paper's update rule and a stopping threshold of 1e-7, brings them to
-within 0.12 degrees, 93%, in sixty iterations. The figure shows, vertex by
+within 0.11 degrees, 93%, in sixty iterations. The figure shows, vertex by
 vertex, how far the endpoints still are from where they started. An earlier
 version of this test had ENCORE undoing almost nothing, for two reasons
 PORTING.md item 4 measures: the reference was the pipeline's stored density,
@@ -259,17 +274,15 @@ scale, which a smoothed density cannot see.
 
 **Carrying the warp to another template.** The warp ENCORE found on the grid
 is an anatomical correspondence, and it applies to anything of the same
-subject on another sphere. The young adult files carry no resting-state data,
-so this was measured on an HCP-Aging subject, whose files are not
-distributed. The same known warp moved that subject's endpoints, which ENCORE
-registered back as above, and moved the subject's own resting-state map of
-the seed at fsaverage resolution (163,842 vertices per hemisphere, from the
-pipeline's time series) to a correlation of 0.87 with the original. ENCORE's
-warp, estimated from connectivity on 5,124 vertices and restated on fsaverage
-by `sbci.migrate_warp`, put the map back to 0.99. On fsaverage it sits 0.35
-degrees from the true warp over both hemispheres, which moved vertices 1.58
-degrees on average; on the left hemisphere, which the figure shows, the gap
-is 0.33 degrees.
+subject on another sphere. The map carried here is sub-100307's own sulcal
+depth from its FreeSurfer reconstruction, at fsaverage resolution (163,842
+vertices per hemisphere): a measure of anatomy the tractography never sees.
+The known warp of the recovery figure moved it to a correlation of 0.95 with
+the original. ENCORE's warp, estimated from connectivity on 5,124 vertices and
+restated on fsaverage by `sbci.migrate_warp`, put it back to 0.996, and on
+fsaverage it sits 0.33 degrees from the true warp, which moved vertices 1.58
+degrees on average. The figure shows the map, and what each warp changes in
+it.
 
 ![Carrying a warp between templates](docs/figures/migration_power.png)
 
@@ -279,25 +292,25 @@ cohort's anatomy jittered by three degrees the planted effect slips past a
 rank-4 FPCA's default start, `candidates=6` reaches it, ENCORE puts it first,
 and ConSEAL keeps it with its default regularization or a mean template.
 
-**Aligning ten subjects.** The ten drawn at random, registered onto a
-template estimated from them, with every density from the package's smoother, the subjects grow
+**Aligning the eleven subjects.** Registered onto a template estimated from
+the cohort, with every density from the package's smoother, the subjects grow
 more alike: the mean correlation between two subjects' connectomes rises from
-0.715 to 0.761 after ten ENCORE iterations and to 0.785 after thirty ConSEAL
+0.716 to 0.761 after ten ENCORE iterations and to 0.785 after thirty ConSEAL
 iterations, and the cost falls for every subject. ENCORE registers onto its
 Karcher median. ConSEAL registers onto the mean of the square-root densities
-instead, because its median settles on one subject: on these ten it comes
+instead, because its median settles on one subject: on these eleven it comes
 within 0.001 degrees of sub-212116 and sits 24 to 27 degrees from the others,
 which would register everyone onto that subject's connectome, while the mean
 sits 17 to 20 degrees from every subject. The USAGE notes explain when the
-median does this and how to pass a template. Ten subjects
-with 734,039 to 988,788 streamlines each take five minutes with ENCORE and an
-hour with ConSEAL on eight cores.
+median does this and how to pass a template. Eleven subjects with 734,039 to
+988,788 streamlines each take ten minutes with ENCORE and two hours with
+ConSEAL on eight cores.
 
-![Aligning the ten subjects](docs/figures/cohort_alignment.png)
+![Aligning the eleven subjects](docs/figures/cohort_alignment.png)
 
 *Left: each subject's registration cost per iteration, relative to its start,
 for ENCORE and ConSEAL. Right: the correlation between the connectomes of
-each of the 45 pairs of subjects before alignment and after each method, with
+each of the 55 pairs of subjects before alignment and after each method, with
 the mean.*
 
 ## Getting around the package

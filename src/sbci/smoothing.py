@@ -792,8 +792,8 @@ class Endpoints:
         intersections mapped barycentrically onto the grid. The pipeline's
         smoothed connectome is built from the snapped streamlines on the
         subject's registered high-resolution sphere instead, so endpoints read
-        from here do not re-smooth to it (r = 0.97 against 0.9997 on an
-        HCP-Aging subject; PORTING.md item 6). When ``snapped_fibers.npz`` and
+        from here do not re-smooth to it (r = 0.97 against 0.9997 where the
+        pipeline's connectome is on this grid; PORTING.md item 6). When ``snapped_fibers.npz`` and
         the registered spheres are at hand, :meth:`from_snapped` gives the
         endpoints that belong with the connectome.
         """
@@ -848,9 +848,10 @@ class Endpoints:
             ``(lh_grid, rh_grid)`` to locate on; the bundled ico4 grids by
             default.
 
-        On an HCP-Aging subject the coordinates reproduce the pipeline's own
-        ``subject_xing_sphere_avg_coords.tsv`` for every one of 903,797
-        streamlines to within 0.001 degrees (PORTING.md item 6).
+        Where the pipeline wrote ``subject_xing_sphere_avg_coords.tsv``, the
+        coordinates reproduce it for every streamline to within 0.001 degrees
+        (PORTING.md item 6), and the released young adult files were built
+        this way.
         """
         from .alignment import normalize_rows
         from .conseal import EndpointConnectome, default_grids

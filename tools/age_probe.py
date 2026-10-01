@@ -8,10 +8,9 @@ and either ``age_years`` or ``age_bin`` (a bin enters as its midpoint, ``36+``
 as 37), as ``sbci download`` writes it. With ``--table`` and ``--column`` the
 measure tested is that column of a table keyed by subject, either the HCP's
 open-access table (``Subject`` holds the bare id) or one with a ``subject``
-column; subjects without a value are left out. PORTING.md item 5, "Measured on
-the full HCP-Aging cohort", records what this found against age on the 528
-HCP-Aging subjects, and "Measured on the HCP Young Adult cohort" what it found
-against fluid intelligence on the 946 young adults.
+column; subjects without a value are left out. PORTING.md item 5, "Measured
+on the HCP Young Adult cohort", records what it found against fluid
+intelligence on the 946 young adults.
 
 Streams the SC files once and records, per subject: the area-weighted
 strength of every vertex, the Desikan region matrix, the interhemispheric and

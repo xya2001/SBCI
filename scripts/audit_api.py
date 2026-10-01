@@ -1,8 +1,13 @@
-"""End-to-end audit: every row of the documented API, on real data, in order.
+"""End-to-end audit: every row of the documented API, on the released subjects, in order.
 
-Each check either passes with the value it produced, or fails loudly. Nothing
-is mocked and nothing is synthetic except where a cohort is needed and only one
-real subject is on hand.
+    python scripts/audit_api.py            # a batch job: eight cores, 32 GB, about half an hour
+
+Each check either passes with the value it produced, or fails loudly; a check
+that needs data the release does not have is reported as skipped, with the
+reason. The subjects are the HCP Young Adult example cohort as
+``sbci download hcp-ya`` writes it (D below is the lab's copy). Nothing is
+mocked; the one synthetic input is the planted effect that checks
+``local_test`` against a known answer.
 """
 
 import os
@@ -10,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import warnings
+from pathlib import Path
 
 import matplotlib
 
@@ -18,11 +24,13 @@ import numpy as np
 
 warnings.filterwarnings("ignore")
 
-D = "/work/users/x/y/xya/sbci-derivatives"
+D = "/work/users/x/y/xya/hcp-ya/data"
+EXCHANGE = "/work/users/x/y/xya/hcp-ya/exchange"
 TOOLKIT = "/work/users/x/y/xya/sbci-reference/SBCI_Toolkit"
 os.environ["SBCI_LBO_DIR"] = f"{TOOLKIT}/concon_estimate"
+FIRST = ["sub-100307", "sub-103010", "sub-108121", "sub-116221"]
 
-passed, failed = [], []
+passed, failed, skipped = [], [], []
 
 
 def check(row, fn):
@@ -35,18 +43,25 @@ def check(row, fn):
         print(f"  FAIL  {row:<46s} {type(e).__name__}: {str(e)[:60]}")
 
 
+def skip(row, why):
+    skipped.append((row, why))
+    print(f"  SKIP  {row:<46s} {why}")
+
+
 import sbci
 import sbci.stats
 from sbci import ContinuousConnectome, load_atlas, load_surface
 
 print("=== 1. the computational file ===")
-sc = ContinuousConnectome.load(f"{D}/sub-example_sc.h5")
-fc = ContinuousConnectome.load(f"{D}/sub-example_fc.h5")
-sc_e = ContinuousConnectome.load(f"{D}/sub-example_desc-withendpoints_sc.h5")
+sc = ContinuousConnectome.load(f"{D}/sub-100307_sc.h5")
 area = np.asarray(sc.area, dtype=np.float64)
 
 check(
-    "ContinuousConnectome.load(path)", lambda: f"{sc.n_vertices} vertices, modality {sc.modality!r}"
+    "ContinuousConnectome.load(path)",
+    lambda: (
+        f"{sc.n_vertices} vertices, modality {sc.modality!r}, "
+        f"{sc.endpoints.n_streamlines:,} streamlines"
+    ),
 )
 
 
@@ -56,7 +71,8 @@ def save_roundtrip():
         back = ContinuousConnectome.load(path)
         assert np.array_equal(back.data, sc.data), "connectivity changed"
         assert back.metadata.fields == sc.metadata.fields, "metadata changed"
-        return f"round trip exact, {os.path.getsize(path) / 1e6:.1f} MB"
+        assert back.endpoints.n_streamlines == sc.endpoints.n_streamlines, "endpoints changed"
+        return f"round trip exact, {os.path.getsize(path) / 1e6:.1f} MB with endpoints"
 
 
 check(".save(path)", save_roundtrip)
@@ -87,23 +103,7 @@ def seed():
 
 
 check(".seed(vertex=...) / .seed(region=...)", seed)
-
-
-def coupling():
-    atlas = load_atlas("Desikan")
-    glob = sc.coupling(fc, scope="global")
-    region = sc.coupling(fc, scope="region", labels=atlas.labels)
-    from sbci.coupling import discrete_coupling
-
-    discrete = discrete_coupling(sc.to_atlas(atlas), fc.to_atlas(atlas))
-    assert glob.shape == (5124,) and region.shape == (5124,) and discrete.shape == (68,)
-    return (
-        f"global mean {np.nanmean(glob):.4f}, region {np.nanmean(region):.4f}, "
-        f"discrete {np.nanmean(discrete):.4f}"
-    )
-
-
-check(".coupling(fc, scope=...)", coupling)
+skip(".coupling(fc, scope=...)", "needs FC; the released young adults have none yet")
 
 
 def plot():
@@ -124,9 +124,9 @@ print("\n=== 3. the exchange file ===")
 def to_cifti():
     import nibabel as nib
 
-    path = f"{D}/sub-example_space-fsLR_den-32k_desc-concon_sc.dconn.nii"
+    path = f"{EXCHANGE}/sub-100307_space-fsLR_den-32k_desc-concon_sc.dconn.nii"
     if not os.path.exists(path):
-        raise FileNotFoundError(f"{path} not written yet")
+        raise FileNotFoundError(f"{path} not written yet: run scripts/write_exchange_file.py")
     image = nib.load(path)
     axis = image.header.get_axis(0)
     assert image.shape == (64984, 64984), image.shape
@@ -141,7 +141,7 @@ print("\n=== 4. the command line ===")
 
 def validate_cli():
     result = subprocess.run(
-        ["sbci", "validate", f"{D}/sub-example_sc.h5"],
+        ["sbci", "validate", f"{D}/sub-100307_sc.h5"],
         capture_output=True,
         text=True,
         timeout=600,
@@ -154,15 +154,35 @@ def validate_cli():
 
 check("sbci validate <file>", validate_cli)
 
+
+def download():
+    with tempfile.TemporaryDirectory() as tmp:
+        result = subprocess.run(
+            ["sbci", "download", "hcp-ya", "--subject", "100307"],
+            capture_output=True,
+            text=True,
+            timeout=900,
+            cwd=tmp,
+        )
+        assert result.returncode == 0, result.stderr[:200]
+        here = Path(tmp)
+        got = ContinuousConnectome.load(here / "sub-100307_sc.h5")
+        assert np.array_equal(got.data, sc.data), "the download differs from the lab's copy"
+        assert (here / "DATA_USE.txt").exists() and (here / "manifest.csv").exists()
+    return "sub-100307 fetched into the current directory, verified, terms beside it"
+
+
+check("sbci download hcp-ya", download)
+
 print("\n=== 5. smoothing ===")
 
 
 def smooth():
-    out = sc_e.smooth(kernel="rdk")
+    out = sc.smooth(kernel="rdk")
     dense = out.dense().astype(np.float64)
     mass = float(area @ dense @ area)
     assert abs(mass - 1) < 1e-8, mass
-    matern = sc_e.smooth(kernel="matern")
+    matern = sc.smooth(kernel="matern")
     assert matern.metadata["kernel"] == "matern"
     return f"rdk bandwidth {out.metadata['bandwidth']:.6f}, unit mass {mass:.10f}; matern also fits"
 
@@ -171,48 +191,12 @@ check(".smooth(kernel=..., bandwidth=...)", smooth)
 
 
 def smooth_default():
-    """The default kernel is shk, and it now works rather than raising.
-
-    It reproduces c3_main at r = 1.000000 across five ADNI subjects; see
-    PORTING.md item 6. The density it returns can carry medial-wall mass,
-    exactly as both references do, so this checks mass and finiteness rather
-    than running the validator -- SPEC_QUESTIONS.md item 14.
-    """
-    # The spherical kernel is evaluated per endpoint, so a whole subject takes
-    # the better part of an hour. This audit exists to exercise the documented
-    # API, not to re-measure agreement -- that is PORTING.md item 6, five
-    # subjects at r = 1.000000 -- so it runs on a slice of the endpoints.
-    endpoints = sc_e.endpoints
-    keep = slice(0, 20_000)
-    small = type(endpoints)(
-        surf_in=endpoints.surf_in[keep],
-        surf_out=endpoints.surf_out[keep],
-        vtx_in=endpoints.vtx_in[keep],
-        vtx_out=endpoints.vtx_out[keep],
-        n_per_hemi=endpoints.n_per_hemi,
-        tri_in=None if endpoints.tri_in is None else endpoints.tri_in[keep],
-        tri_out=None if endpoints.tri_out is None else endpoints.tri_out[keep],
-        bary_in=None if endpoints.bary_in is None else endpoints.bary_in[keep],
-        bary_out=None if endpoints.bary_out is None else endpoints.bary_out[keep],
-    )
-    sliced = type(sc_e)(
-        data=sc_e.data,
-        area=sc_e.area,
-        mask=sc_e.mask,
-        metadata=sc_e.metadata,
-        coords=sc_e.coords,
-        endpoints=small,
-    )
-    out = sliced.smooth()
+    """The default kernel, shk, gives back the stored connectome from the stored endpoints."""
+    out = sc.smooth(mask_medial_wall=True)
     assert out.metadata["kernel"] == "shk", out.metadata["kernel"]
-    dense = out.dense().astype(np.float64)
-    mass = float(area @ dense @ area)
-    assert abs(mass - 1) < 1e-8, mass
-    assert np.isfinite(dense).all() and dense.min() >= 0.0
-    return (
-        f"shk sigma {out.metadata['bandwidth']}, unit mass {mass:.10f}, "
-        f"on {small.n_streamlines:,} endpoints"
-    )
+    r = float(np.corrcoef(np.asarray(out.data), np.asarray(sc.data))[0, 1])
+    assert r > 0.999999, r
+    return f"shk sigma {out.metadata['bandwidth']}, r = {r:.7f} with the stored connectome"
 
 
 check("  .smooth() default kernel shk", smooth_default)
@@ -231,23 +215,17 @@ check(".reduce(rank=K)", reduce_one)
 
 
 def reduce_cohort():
-
-    base = sc.dense().astype(np.float64)
-    cohort = []
-    for i in range(4):
-        field = 1.0 + 0.2 * np.sin(np.linspace(0, (i + 2) * np.pi, base.shape[0]))
-        matrix = base * np.outer(field, field)
-        cohort.append((matrix + matrix.T) / 2)
-    result = sbci.reduce(cohort, rank=2, max_outer=3, seed=0)
-    scores = sbci.reduction.project(result, np.stack(cohort) - np.mean(cohort, axis=0))
-    assert scores.shape == (4, 2)
-    return f"4 subjects, rank 2, explained {result.explained[-1]:.4f}"
+    paths = [f"{D}/{s}_sc.h5" for s in FIRST]
+    result = sbci.reduce(paths, rank=2, max_outer=3, seed=0)  # read one file at a time
+    assert result.scores.shape == (len(paths), 2)
+    return f"{len(paths)} subjects from their files, rank 2, explained {result.explained[-1]:.4f}"
 
 
 check("sbci.reduce(cc_list, rank=K)", reduce_cohort)
 
 
 def local_test():
+    # A planted effect, so the answer is known: the one synthetic input here.
     rng = np.random.default_rng(1)
     scores = rng.standard_normal((30, 6))
     covariate = rng.standard_normal(30)
@@ -260,52 +238,57 @@ def local_test():
 check("sbci.stats.local_test(scores, design)", local_test)
 
 print("\n=== 7. alignment ===")
+pair = [ContinuousConnectome.load(f"{D}/{s}_sc.h5") for s in FIRST[:2]]
+alignment = None
 
 
 def align():
-    sys.path.insert(0, "/nas/longleaf/home/xya/sbci/tests")
-    from sbci.alignment import SphericalGrid, rotate_off_poles
-    from test_alignment import icosphere
-
-    vertices, faces = icosphere(2)
-    grid = SphericalGrid(rotate_off_poles(vertices), faces, order=3)
-    n = 2 * grid.n_vertices
-    rng = np.random.default_rng(2)
-    cohort = []
-    for _ in range(3):
-        matrix = rng.random((n, n))
-        matrix = matrix + matrix.T
-        np.fill_diagonal(matrix, 0.0)
-        cohort.append(matrix)
-    result = sbci.align(cohort, grids=(grid, grid), order=3, max_iterations=3)
-    assert len(result.warps) == 3
-    assert all(w.lh_jacobian.min() > 0 for w in result.warps), "warp not diffeomorphic"
+    global alignment
+    alignment = sbci.align(pair, max_iterations=3)
+    assert len(alignment.warps) == 2
+    assert all(w.lh_jacobian.min() > 0 for w in alignment.warps), "warp not diffeomorphic"
+    assert all(trace[-1] < trace[0] for trace in alignment.traces), "a cost did not fall"
     with tempfile.TemporaryDirectory() as tmp:
-        path = result.warps[0].save(f"{tmp}/warp.npz")
+        path = alignment.warps[1].save(f"{tmp}/warp.npz")
         from sbci.alignment import Warp
 
         back = Warp.load(path)
-        assert np.array_equal(back.lh_vertices, result.warps[0].lh_vertices)
-    return "3 subjects, warps positive-Jacobian, save/load exact"
+        assert np.array_equal(back.lh_vertices, alignment.warps[1].lh_vertices)
+    return "2 subjects on ico4, costs fall, warps positive-Jacobian, save/load exact"
 
 
-check('sbci.align(cc_list, method="encore")', align)
-
-print("\n=== 8. what is deliberately absent ===")
+check("sbci.align(cc_list, template=None)", align)
 
 
-def download():
-    result = subprocess.run(
-        ["sbci", "download", "hcp-ya"], capture_output=True, text=True, timeout=120
+def endpoints_align():
+    result = sbci.endpoints_align(pair, template=0, max_iterations=3, threshold=1e-7)
+    costs = result.costs[1]
+    assert costs[-1] < costs[0], costs
+    back = result.aligned_endpoints(1)
+    assert back.n_streamlines == pair[1].endpoints.n_streamlines
+    return f"cost {costs[0]:.5f} -> {costs[-1]:.5f}, endpoints handed back"
+
+
+check("sbci.endpoints_align(cc_list, template=None)", endpoints_align)
+
+
+def migrate():
+    if alignment is None:
+        raise RuntimeError("the ENCORE row failed, so there is no warp to carry")
+    carried = sbci.migrate_warp(
+        alignment.warps[1], to="fs_LR_32k", grid_rotations=alignment.grid_rotations
     )
-    assert "SPEC_QUESTIONS" in result.stdout or "SPEC_QUESTIONS" in result.stderr
-    return "explains that it needs the data release"
+    assert carried.lh_vertices.shape == (32492, 3)
+    assert np.allclose(np.linalg.norm(carried.lh_vertices, axis=1), 1.0, atol=1e-6)
+    return "ENCORE warp restated on fs_LR 32k, 32,492 vertices per hemisphere"
 
 
-check("sbci download", download)
+check('sbci.migrate_warp(warp, to="fs_LR_32k")', migrate)
 
 print(f"\n{'=' * 70}")
-print(f"{len(passed)} passed, {len(failed)} failed")
+print(f"{len(passed)} passed, {len(failed)} failed, {len(skipped)} skipped")
 for row, why in failed:
-    print(f"  FAILED  {row}: {why}")
+    print(f"  FAILED   {row}: {why}")
+for row, why in skipped:
+    print(f"  SKIPPED  {row}: {why}")
 sys.exit(1 if failed else 0)

@@ -16,8 +16,7 @@ subjects give 44 bundles.
 ``manifest`` turns ``bundles.json`` and the Zenodo record id into
 ``src/sbci/data/<cohort>.json``, the manifest ``sbci download <cohort>``
 reads once the cohort is added to ``sbci.download.MANIFESTS``. Run it after the
-record is published, since the file URLs carry the record id. It was written
-for the 528-subject HCP-Aging cohort, which is not to be released; nothing is
+record is published, since the file URLs carry the record id. Nothing is
 released this way at present.
 """
 

@@ -1,4 +1,4 @@
-"""Cortical surface plotting, five worked examples.
+"""Cortical surface plotting, five worked examples, on a released subject.
 
 module load python/3.12.4
 source /work/users/x/y/xya/sbci-venv/bin/activate
@@ -14,19 +14,21 @@ import numpy as np
 
 from sbci import ContinuousConnectome, load_atlas
 
-DATA = "/work/users/x/y/xya/sbci-derivatives"
+DATA = "/work/users/x/y/xya/hcp-ya/data"  # sbci download hcp-ya, the lab's copy
 OUT = "/work/users/x/y/xya/sbci-figures"
 
-sc = ContinuousConnectome.load(f"{DATA}/sub-example_sc.h5")
-fc = ContinuousConnectome.load(f"{DATA}/sub-example_fc.h5")
+sc = ContinuousConnectome.load(f"{DATA}/sub-100307_sc.h5")
 
 
 # --------------------------------------------------------------- 1. simplest
 # A per-vertex map, one value for each of the 5124 vertices. Defaults to the
-# inflated surface and a lateral + medial view of each hemisphere.
-coupling = sc.coupling(fc, scope="global")
+# inflated surface and a lateral + medial view of each hemisphere. The
+# connectivity strength of each vertex, its row of the connectome integrated
+# against the vertex areas, is the map used throughout.
+strength = sc.dense() @ sc.area
+strength = strength / strength.max()
 
-figure = sc.plot(coupling)
+figure = sc.plot(strength)
 figure.savefig(f"{OUT}/ex1_default.png", dpi=110)
 plt.close(figure)
 print("1. sc.plot(map)                       -> ex1_default.png")
@@ -34,7 +36,7 @@ print("1. sc.plot(map)                       -> ex1_default.png")
 
 # ------------------------------------------------------- 2. choosing surfaces
 for surface in ("inflated", "white", "sphere"):
-    figure = sc.plot(coupling, surface=surface, title=f"coupling, {surface}")
+    figure = sc.plot(strength, surface=surface, title=f"connectivity strength, {surface}")
     figure.savefig(f"{OUT}/ex2_{surface}.png", dpi=110)
     plt.close(figure)
 print("2. surface='inflated'|'white'|'sphere' -> ex2_*.png")
@@ -43,9 +45,9 @@ print("2. surface='inflated'|'white'|'sphere' -> ex2_*.png")
 # ------------------------------------------------------------- 3. more views
 # Any of: lateral, medial, dorsal, ventral, anterior, posterior.
 figure = sc.plot(
-    coupling,
+    strength,
     views=("lateral", "medial", "dorsal"),
-    cmap="RdBu_r",
+    cmap="viridis",
     title="three views per hemisphere",
 )
 figure.savefig(f"{OUT}/ex3_views.png", dpi=110)
@@ -86,10 +88,10 @@ plt.close(figure)
 # threshold hides values whose magnitude is below the cut, letting the
 # underlying surface show through.
 figure = sc.plot(
-    coupling,
+    strength,
     threshold=0.3,
-    cmap="coolwarm",
-    title="coupling above 0.3 only",
+    cmap="viridis",
+    title="strength above 0.3 of its peak only",
 )
 figure.savefig(f"{OUT}/ex5_threshold.png", dpi=110)
 plt.close(figure)
