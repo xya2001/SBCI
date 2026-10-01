@@ -167,7 +167,7 @@ runs it from a blank environment on every push.
 | `.reduce(rank=K)` / `sbci.reduce(cc_list, rank=K)` | implemented; takes connectomes or the paths of their files, which it reads one at a time; matches the MATLAB reference to float64 rounding (PORTING.md item 5) |
 | `sbci.align(cc_list, template=None)` | implemented; ENCORE. Registers every connectome onto one template: with no `template=` it first estimates one, the Karcher median of the cohort's square-root densities, so that no subject is the reference (the default for a cohort); with `template=` a square-root density (an earlier run's `result.template`, or one subject's) it registers onto that instead, which is how a new subject joins a cohort or one subject is registered onto another. Geometry and template match MATLAB to float64 rounding, the registration to r = 0.99999979 (PORTING.md item 4) |
 | `sbci.endpoints_align(cc_list, template=None)` | implemented; ConSEAL, which warps the streamline endpoints themselves, used the same way: no `template=` estimates the Karcher median first and registers everyone onto it; `template=k` registers everyone onto subject `k`, which stays put; a square-root density registers onto that. Every stage matches the public MATLAB to the single precision it carries; four errors in that reference are corrected by default and reproducible with `strict_upstream=True` (PORTING.md item 7) |
-| `sbci.stats.local_test(scores, design)` | implemented; **no reference exists**, so verified against `scipy.stats` and against the procedures' own guarantees (PORTING.md item 5) |
+| `sbci.stats.local_test(scores, design)` | implemented; **no reference exists**, so verified against `scipy.stats` and against the procedures' own guarantees. `groups=` treats related subjects, families of twins and siblings, as clusters, with cluster-robust standard errors that match statsmodels to 1e-9 (PORTING.md item 5) |
 | `sbci.example(modality="sc"\|"fc")` | implemented; a synthetic connectome on the real grid with 20,000 synthetic endpoints, for the tests and for a machine without network access; the documentation's examples use the released subjects instead |
 | `sbci.example_cohort(n_subjects, seed, effect)` | implemented; a synthetic cohort with one bundle scaled by a synthetic age, with which `reduce`, `local_test` and the alignments are checked against a planted answer (PORTING.md items 5 and 7) |
 | `sbci info <file>` | implemented; what a file holds, without opening Python |
@@ -186,7 +186,12 @@ the eleven are distributed; with HCP access and the pipeline's output,
 question is whether fluid intelligence, the number of Penn Matrix Test items
 a subject answered correctly (`PMAT24_A_CR` in the HCP's open-access table),
 shows in the structural connectome, with sex, age band and the streamline
-count in the model:
+count in the model. The young adults are not independent: the 946 come from
+423 families of twins and siblings, and a test that counts them as
+independent makes every p-value too small. `groups=` treats the families as
+clusters. Family membership is in the HCP's restricted table, which has its
+own data use agreement: it is read at analysis time, and nothing from it is in
+this package or its figures.
 
 ```python
 import csv
@@ -195,6 +200,7 @@ import numpy as np
 import sbci
 
 table = {f"sub-{r['Subject']}": r for r in csv.DictReader(open("unrestricted.csv"))}  # the HCP's open-access table
+family = {f"sub-{r['Subject']}": r["Family_ID"] for r in csv.DictReader(open("RESTRICTED.csv"))}  # restricted
 subjects = [p.name.split("_")[0] for p in sorted(Path("hcp-ya-full").glob("sub-*_sc.h5"))]
 subjects = [s for s in subjects if table[s]["PMAT24_A_CR"]]    # those with a score
 paths = [f"hcp-ya-full/{s}_sc.h5" for s in subjects]
@@ -204,49 +210,48 @@ score = np.array([float(r["PMAT24_A_CR"]) for r in rows])
 female = np.array([r["Gender"] == "F" for r in rows], dtype=float)
 band = np.array([{"22-25": 23.5, "26-30": 28, "31-35": 33, "36+": 37}[r["Age"]] for r in rows])
 count = np.array([sbci.load(p).metadata["streamline_count"] for p in paths]) / 1e6
-design = np.column_stack([score, female, band, count])   # the trait; sex, age band and count as nuisance
-result = sbci.local_test(reduction.scores, design, terms=[1])
-result.significant()
-effect = result.effect_map(reduction, alpha=0.05)         # one value per vertex, significant components only
+design = np.column_stack([score, female, band, count])   # column 0 is the intercept local_test adds
+groups = [family[s] for s in subjects]
+trait = sbci.local_test(reduction.scores, design, terms=[1], groups=groups)   # fluid intelligence
+trait.significant()                                       # the components that survive: none
+sex = sbci.local_test(reduction.scores, design, terms=[2], groups=groups)     # sex, the trait as nuisance
+effect = sex.effect_map(reduction, alpha=0.05)            # one value per vertex, surviving components only
 sbci.load(paths[0]).plot(effect, mesh="fsaverage", engine="pyvista")
 ```
 
-Streamed once, before any fit (`tools/age_probe.py`, fifteen minutes on four
-cores), the 943 subjects with a score show fluid intelligence in the data but
-weakly. It correlates with the connectivity of 217 of 4,685 cortical vertices
-and of 52 of 2,278 Desikan region pairs at FDR 0.05, never beyond |r| = 0.17,
-where sex reaches 1,177 vertices and 843 region pairs. PORTING.md item 5 has
-the table.
+Fluid intelligence is in the data, but too weakly for the components to
+carry it once the families are clusters. Streamed once, before any fit
+(`tools/age_probe.py`), the 943 subjects with a score show it in the
+connectivity strength of 113 of 4,685 cortical vertices at FDR 0.05, never
+beyond |r| = 0.17, and in no Desikan region pair. Fit at rank 20, which
+captures 27% of the cohort's norm, no component tracks it after the
+false-discovery-rate correction across the twenty: the closest, component 13,
+correlates with the score at r = 0.11 (adjusted p 0.064), and component 7 at
+0.10 (0.083). Counting the 943 as independent would have put component 13 at
+0.023 and the vertices at 217; the families are the difference. A rank-4 fit
+comes nowhere near (smallest adjusted p 0.32).
 
-Fit at rank 20, which captures 27% of the cohort's norm, one component tracks
-fluid intelligence after the false-discovery-rate correction across the
-twenty, with sex, the age band and the streamline count in the model:
-component 13, at r = 0.11 (adjusted p 0.023). Without the covariates a second
-joins it, component 7 (r = 0.10, adjusted p 0.029); with them it falls just
-short (0.052). The effect sits in right medial occipital cortex, where
-connectivity is higher in subjects who score higher. It is small, as the
-probe said it would be. Sex, for comparison, shows in 13 of the 20
-components, the strongest at adjusted p 2e-8.
-
-The rank matters. A rank-4 fit, which captures 17% of the norm, has no
-component that tracks fluid intelligence, with the covariates or without them
-(its largest correlation with the score is 0.06): the largest differences
-between these subjects lie elsewhere, and sex alone shows in all four.
-Twenty components reach past them. PORTING.md item 5 has the measurements.
+Sex, tested in the same model with fluid intelligence as a nuisance, does
+show: in 11 of the 20 components, the strongest at adjusted p 2e-8, in all
+four of a rank-4 fit, and in 1,020 vertices and 761 Desikan pairs. The effect
+map places it at the occipital poles, where connectivity is relatively higher
+in men; head size, which differs between the sexes, is not in the model.
+PORTING.md item 5 has the measurements.
 
 ![The components most associated with fluid intelligence](docs/figures/cohort_trait_scores.png)
 
 *The two components of a rank-20 FPCA of 943 HCP Young Adult subjects most
-associated with fluid intelligence, given sex, age band and streamline count:
-each subject's score against the number of PMAT24 items answered correctly
-(women orange, men blue), the mean in each fifth of that range with its 95%
-interval, the least-squares line, and the adjusted p-value.*
+associated with fluid intelligence, given sex, age band and streamline count,
+with families as clusters: each subject's score against the number of PMAT24
+items answered correctly (women orange, men blue), the mean in each fifth of
+that range with its 95% interval, the least-squares line, and the adjusted
+p-value. Neither survives the correction.*
 
-![Where fluid intelligence shows in the structural connectome](docs/figures/cohort_trait_effect.png)
+![Where sex shows in the structural connectome](docs/figures/cohort_sex_effect.png)
 
-*The effect map of component 13, relative to its largest value: the fitted
-change in connectivity with fluid intelligence, summed over the other
-endpoint.*
+*The effect map over the 11 components that track sex, families as clusters,
+relative to its largest value: the fitted difference in connectivity between
+women and men (positive: higher in women), summed over the other endpoint.*
 
 Alignment fits in front of `reduce`: `sbci.align(subjects)` (ENCORE) returns
 the warped densities as `aligned`, and `sbci.endpoints_align(subjects)`

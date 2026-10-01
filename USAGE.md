@@ -417,7 +417,9 @@ goes to all 946 HCP Young Adult subjects with complete pipeline output, which
 are not distributed; `tools/build_hcp_cohort.py --layout young-adult` builds
 them from the pipeline's output for anyone with HCP access. Sex, the age band
 and fluid intelligence come from the HCP's open-access table, and the age
-band enters as its midpoint.
+band enters as its midpoint. The 946 are not independent: they come from 423
+families of twins and siblings, and family membership comes from the HCP's
+restricted table, which has its own data use agreement.
 
 ```python
 import csv
@@ -440,6 +442,7 @@ aligned = [cc.smooth(kernel="shk", mask_medial_wall=True) for cc in subjects]
 
 # the association, on the 946: a batch job with 230 GB of memory
 table = {f"sub-{r['Subject']}": r for r in csv.DictReader(open("unrestricted.csv"))}  # the HCP's open-access table
+family = {f"sub-{r['Subject']}": r["Family_ID"] for r in csv.DictReader(open("RESTRICTED.csv"))}  # restricted
 cohort = [p.name.split("_")[0] for p in sorted(Path("hcp-ya-full").glob("sub-*_sc.h5"))]
 cohort = [s for s in cohort if table[s]["PMAT24_A_CR"]]    # those with a score
 files = [f"hcp-ya-full/{s}_sc.h5" for s in cohort]
@@ -450,19 +453,26 @@ female = np.array([r["Gender"] == "F" for r in rows], dtype=float)
 band = np.array([{"22-25": 23.5, "26-30": 28, "31-35": 33, "36+": 37}[r["Age"]] for r in rows])
 count = np.array([sbci.load(f).metadata["streamline_count"] for f in files]) / 1e6
 design = np.column_stack([score, female, band, count])
-result = sbci.local_test(reduction.scores, design, terms=[1])
+groups = [family[s] for s in cohort]
+result = sbci.local_test(reduction.scores, design, terms=[1], groups=groups)
 result.significant()                                       # components tracking the score, given the rest
-effect = result.effect_map(reduction, alpha=0.05)          # one value per vertex, significant components only
+sex = sbci.local_test(reduction.scores, design, terms=[2], groups=groups)
+effect = sex.effect_map(reduction, alpha=0.05)             # one value per vertex, significant components only
 sbci.load(files[0]).plot(effect, mesh="fsaverage", engine="pyvista")
 ```
 
 `terms=[1]` tests the score column only: column 0 is the intercept the test
 adds, and columns 2 to 4, sex, the age band and the streamline count, stay in
-the model as nuisance. On the 943 with a score, one component of the twenty
-tracks it this way, component 13, at r = 0.11 (adjusted p 0.023); the README
-shows it and where on the cortex it sits. The rank matters: a rank-4 fit
-finds no component that tracks it, because the largest differences between
-these subjects lie elsewhere (PORTING.md item 5).
+the model as nuisance; `terms=[2]` tests sex the same way. `groups=` makes the
+families the units of the test (*Testing scores against a covariate*, below).
+On the 943 with a score, no component of the twenty tracks fluid intelligence once the families
+are clusters: the closest, component 13, has r = 0.11 and adjusted p 0.064.
+Counted as 943 independent subjects, the same component passes at 0.023,
+which is the error `groups=` is there to prevent. Sex shows in 11 of the
+twenty, the strongest at adjusted p 2e-8; the README shows where. The rank
+matters as well: a rank-4 fit comes nowhere near for fluid intelligence
+(smallest adjusted p 0.32), because the largest differences between these
+subjects lie elsewhere (PORTING.md item 5).
 
 **Running it on Longleaf.** `reduce` holds the cohort once, as one dense
 float64 array, 199 GB for 946 subjects. Given paths, or a sequence whose items
@@ -540,13 +550,33 @@ test = sbci.stats.local_test(result.scores, age)
 test.significant(0.05)            # which components carry an association
 test.adjusted                     # Benjamini-Hochberg p-values
 test.effect_map(result, alpha=0.05)   # where on the cortex the effect sits
+
+related = sbci.stats.local_test(result.scores, age, groups=family)   # one family label per subject
 ```
 
-Pass `method="bonferroni"` for family-wise control, or `permutations=5000` to
-drop the Gaussian assumption. `effect_map` pushes the fitted coefficients back
-through the basis and sums over one endpoint, giving one value per vertex --
-it describes where the fitted effect lives; the p-values belong to the
-components, not to individual vertices.
+Pass `method="bonferroni"` to bound the chance of any false positive rather
+than the false-discovery rate, or `permutations=5000` to drop the Gaussian
+assumption. `effect_map` pushes the fitted coefficients back through the
+basis and sums over one endpoint, giving one value per vertex -- it describes
+where the fitted effect lives; the p-values belong to the components, not to
+individual vertices.
+
+**Related subjects.** The test assumes the subjects are independent. Twins
+and siblings are not, and a cohort with families in it, such as the HCP Young
+Adults, gives p-values that are too small. With `groups=`, one label per
+subject (its family), the standard errors are cluster-robust -- the sandwich
+estimator with the usual small-sample factor, which allows any dependence
+inside a family -- and the F test takes its degrees of freedom from the number
+of families. It is the same test as statsmodels' `OLS(...).fit(cov_type="cluster")`
+and agrees with it to 1e-9. Families can be of any size, and a subject with
+no relative in the cohort is a family of one. The test needs hundreds of
+families, not dozens. In simulated cohorts with no association, families of
+one to four sharing both the covariate and the scores, a test at 0.05 that
+ignores the families rejects 16% of the time; with them as clusters it
+rejects 9.7% of the time with 20 families, 6.7% with 50, 6.0% with 100 and
+5.1% with 422, the number in the HCP analysis (`tools/clustered_null.py`).
+`permutations=` with `groups=` is refused: shuffling subjects between
+families of different make-up, twins against siblings, is not exchangeable.
 
 **Read this one more sceptically than the rest.** Every other function here is
 checked against a MATLAB run of the original. There is no reference

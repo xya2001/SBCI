@@ -3,7 +3,7 @@
     python scripts/hcp_figures.py hcp-ya docs/figures \
         [--skip-cohort | --only-cohort | --surfaces-only | --only-recovery | --only-migration]
         [--anatomy /path/to/the/first/subject's/pipeline/directory]
-        [--full-cohort DIR --traits CSV [--rank 20] [--candidates 1]]
+        [--full-cohort DIR --traits CSV [--groups CSV] [--rank 20] [--candidates 1]]
         [--dataset NAME]
 
 The cohort directory is what ``sbci download hcp-ya`` writes, or what
@@ -849,6 +849,22 @@ def open_access_table(path: Path, trait: str) -> dict:
     }
 
 
+def mean_interval(values: np.ndarray, labels: np.ndarray | None) -> float:
+    """Half-width of the 95% interval of the mean of ``values``.
+
+    With ``labels`` (the family of each value) the standard error is the
+    cluster-robust one, the residuals summed within each family first; without,
+    it is the usual one, which is the same with every subject its own family.
+    """
+    residual = values - values.mean()
+    if labels is None:
+        return float(1.96 * residual.std(ddof=1) / np.sqrt(values.size))
+    _, codes = np.unique(labels, return_inverse=True)
+    sums = np.bincount(codes, weights=residual)
+    n_groups = sums.size
+    return float(1.96 * np.sqrt(n_groups / (n_groups - 1) * (sums**2).sum()) / values.size)
+
+
 def cohort_trait(
     out: Path,
     directory: Path,
@@ -857,6 +873,7 @@ def cohort_trait(
     label: str = "fluid intelligence (PMAT24 correct responses)",
     rank: int = 20,
     candidates: int = 1,
+    groups: Path | None = None,
 ) -> None:
     """FPCA of a full young adult cohort against a trait, given sex, age band and streamline count.
 
@@ -865,6 +882,12 @@ def cohort_trait(
     age band and ``trait``. Subjects without a value are left out. The fit is
     saved beside the data as ``fpca_rank<rank>_c<candidates>.npz`` and reused on
     the next run, so the figures can be redrawn without refitting.
+
+    ``groups`` is a table with ``subject`` and ``group`` columns, the family of
+    each subject. The HCP young adults are twins and siblings, so the tests
+    treat families as clusters (``local_test(..., groups=...)``); family
+    membership is restricted HCP data, so the table belongs in private storage,
+    never in the repository.
     """
     from sbci.reduction import Reduction
 
@@ -924,9 +947,43 @@ def cohort_trait(
         flush=True,
     )
     millions = count / 1e6
+    family = None
+    if groups is not None:
+        with open(groups, newline="") as handle:
+            group_of = {r["subject"]: r["group"] for r in csv.DictReader(handle)}
+        missing = [r["subject"] for r in rows if r["subject"] not in group_of]
+        if missing:
+            raise ValueError(
+                f"{len(missing)} subjects have no group in {groups.name}: {missing[:3]}"
+            )
+        family = np.array([group_of[r["subject"]] for r in rows])
+        print(f"  {np.unique(family).size} families: the tests treat them as clusters", flush=True)
     design = np.column_stack([score, female, band, millions])
-    result = sbci.local_test(reduction.scores, design, terms=[1])
-    alone = sbci.local_test(reduction.scores, score)
+    result = sbci.local_test(reduction.scores, design, terms=[1], groups=family)
+    alone = sbci.local_test(reduction.scores, score, groups=family)
+    sexes = sbci.local_test(
+        reduction.scores, np.column_stack([female, score, band, millions]), terms=[1], groups=family
+    )
+    if rank > 4:  # what a rank-4 fit, the first four of these components, would say
+        rank4 = sbci.local_test(reduction.scores[:, :4], design, terms=[1], groups=family)
+        rank4_sexes = sbci.local_test(
+            reduction.scores[:, :4],
+            np.column_stack([female, score, band, millions]),
+            terms=[1],
+            groups=family,
+        )
+        print(
+            f"  rank 4 (the first four, explained {reduction.explained[3]:.3f}): {trait} "
+            f"significant {rank4.significant().tolist()}, smallest adjusted p "
+            f"{np.nanmin(rank4.adjusted):.2g}; sex significant "
+            f"{rank4_sexes.significant().tolist()}",
+            flush=True,
+        )
+    print(
+        f"  sex given the rest, rank {rank}: significant {sexes.significant().tolist()}, smallest "
+        f"adjusted p {np.nanmin(sexes.adjusted):.2g}",
+        flush=True,
+    )
     found = result.significant()
     correlations = [float(np.corrcoef(reduction.scores[:, k], score)[0, 1]) for k in range(rank)]
     for name, test in (
@@ -949,7 +1006,8 @@ def cohort_trait(
 
     # The two components most associated with the trait. At r near 0.1 a scatter of 943
     # subjects is a cloud, so the trend is drawn as the mean score in each fifth of the
-    # trait's range, with its 95% interval, over the subjects themselves.
+    # trait's range, with its 95% interval (families as clusters, as in the tests), over
+    # the subjects themselves.
     shown = np.argsort(result.adjusted)[: min(2, rank)]
     edges = np.unique(np.quantile(score, np.linspace(0, 1, 6)))
     groups = np.clip(np.digitize(score, edges[1:-1], right=True), 0, edges.size - 2)
@@ -973,7 +1031,7 @@ def cohort_trait(
         bins = [groups == g for g in range(edges.size - 1)]
         centres = [score[b].mean() for b in bins]
         means = [scores[b].mean() for b in bins]
-        half = [1.96 * scores[b].std(ddof=1) / np.sqrt(b.sum()) for b in bins]
+        half = [mean_interval(scores[b], None if family is None else family[b]) for b in bins]
         axis.errorbar(
             centres,
             means,
@@ -998,39 +1056,58 @@ def cohort_trait(
         axis.set_xlabel(label)
     axes[0].set_ylabel("score on the component")
     axes[0].legend(frameon=False, markerscale=2, loc="upper left", fontsize=9)
+    clusters = "; families as clusters" if family is not None else ""
     figure.suptitle(
         f"FPCA of {len(rows)} HCP Young Adult subjects, rank {rank}: the two components most "
-        "associated with fluid intelligence, given sex, age band and streamline count",
+        f"associated with fluid intelligence, given sex, age band and streamline count{clusters}",
         fontsize=13,
     )
     save(figure, out, "cohort_trait_scores.png")
-    if not found.size:
-        print("  no component reaches significance; no effect map drawn", flush=True)
-        return
-    effect = result.effect_map(reduction, alpha=0.05)
-    effect = effect / np.abs(effect).max()
-    figure = first.plot(
-        effect,
-        views=VIEWS,
-        cmap="coolwarm",
-        symmetric=True,
-        threshold=0.05,
-        mesh=DISPLAY_MESH,
-        engine=DISPLAY_ENGINE,
-    )
-    which = (
-        f"component {found[0] + 1}, the one of {rank} significant at FDR 0.05"
-        if found.size == 1
-        else f"the {found.size} components of {rank} significant at FDR 0.05"
-    )
-    figure.suptitle(
-        f"Where fluid intelligence shows in the structural connectome of {len(rows)} HCP Young "
-        f"Adult subjects: the effect of {which},\n"
-        "relative to its largest value (positive: connectivity higher with higher scores)",
-        fontsize=TITLE_SIZE,
-        y=1.11,
-    )
-    save(figure, out, "cohort_trait_effect.png")
+
+    def surface(test, name, sign):
+        """The effect map over a test's significant components, on fsaverage."""
+        significant = test.significant()
+        effect = test.effect_map(reduction, alpha=0.05)
+        effect = effect / np.abs(effect).max()
+        figure = first.plot(
+            effect,
+            views=VIEWS,
+            cmap="coolwarm",
+            symmetric=True,
+            threshold=0.05,
+            mesh=DISPLAY_MESH,
+            engine=DISPLAY_ENGINE,
+        )
+        which = (
+            f"component {significant[0] + 1}, the one of {rank} significant at FDR 0.05"
+            if significant.size == 1
+            else f"the {significant.size} components of {rank} significant at FDR 0.05"
+        )
+        figure.suptitle(
+            f"Where {name} shows in the structural connectome of {len(rows)} HCP Young "
+            f"Adult subjects: the effect of {which}{clusters},\n"
+            f"relative to its largest value (positive: {sign})",
+            fontsize=TITLE_SIZE,
+            y=1.11,
+        )
+        return figure
+
+    if found.size:
+        save(
+            surface(result, "fluid intelligence", "connectivity higher with higher scores"),
+            out,
+            "cohort_trait_effect.png",
+        )
+    else:
+        print("  no component tracks the trait at FDR 0.05; no effect map for it", flush=True)
+    # Sex, from the same fit and the same model with the roles swapped: what the
+    # analysis finds when the effect is there to be found.
+    if sexes.significant().size:
+        save(
+            surface(sexes, "sex", "connectivity higher in women"),
+            out,
+            "cohort_sex_effect.png",
+        )
 
 
 def main(argv: list[str]) -> int:
@@ -1052,11 +1129,12 @@ def main(argv: list[str]) -> int:
             return 2
         directory = Path(argv[argv.index("--full-cohort") + 1])
         traits = Path(argv[argv.index("--traits") + 1])
+        groups = Path(argv[argv.index("--groups") + 1]) if "--groups" in argv else None
         rank = int(argv[argv.index("--rank") + 1]) if "--rank" in argv else 20
         candidates = int(argv[argv.index("--candidates") + 1]) if "--candidates" in argv else 1
         out.mkdir(parents=True, exist_ok=True)
         print("full cohort", flush=True)
-        cohort_trait(out, directory, traits, rank=rank, candidates=candidates)
+        cohort_trait(out, directory, traits, rank=rank, candidates=candidates, groups=groups)
         return 0
     # --anatomy DIR: the first subject's pipeline directory (its FreeSurfer ?h.sulc and
     # registered spheres), for the warp-migration figure; skipped without it.

@@ -28,6 +28,22 @@ Two different things, and both are provided:
 
 The surface map is a description of the fitted effect, not a test at each
 vertex: the p-values belong to the components.
+
+Related subjects
+----------------
+The tests assume independent subjects. A cohort of families is not: the HCP
+Young Adult subjects come in families of up to six, twins and siblings, and
+treating them as independent makes every p-value too small. ``groups=`` (the
+family of each subject) replaces the classical standard errors by
+cluster-robust ones, which allow any dependence inside a family, and takes the
+degrees of freedom from the number of families, not of subjects. Like any
+cluster-robust test it needs many families: in simulated cohorts with no
+association it rejects at 0.05 9.7% of the time with 20 families, 6.0% with
+100 and 5.1% with 422, where the test that ignores the families rejects 16%
+(``tools/clustered_null.py``). Permutation is not offered with groups:
+shuffling members between families of different make-up (twins against
+siblings) is not exchangeable, and doing it properly needs each family's
+structure, not just its label.
 """
 
 from __future__ import annotations
@@ -101,6 +117,10 @@ class LocalTest:
     """How many permutations produced the p-values, or 0 if parametric."""
     terms: tuple = ()
     """Columns of the design matrix that were tested."""
+    groups: int = 0
+    """How many groups (families) the subjects fall in when ``groups=`` was
+    given, and the p-values come from cluster-robust standard errors with
+    ``groups - 1`` denominator degrees of freedom; 0 for independent subjects."""
 
     def significant(self, alpha: float = 0.05) -> np.ndarray:
         """Indices of components whose adjusted p-value is at or below ``alpha``."""
@@ -142,6 +162,7 @@ def local_test(
     add_intercept: bool = True,
     permutations: int = 0,
     seed=None,
+    groups=None,
 ) -> LocalTest:
     """Test each component's scores for association with the design.
 
@@ -171,6 +192,16 @@ def local_test(
         to the permutation p-values.
     seed
         Seed for the permutations.
+    groups
+        ``(n_subjects,)`` labels, one per subject, for subjects that are not
+        independent: the family of each, in a cohort of twins and siblings.
+        The tested terms are then judged by a Wald test with cluster-robust
+        standard errors (the usual small-sample correction,
+        ``G / (G - 1) * (n - 1) / (n - p)`` for ``G`` groups and ``p``
+        columns), and the F statistic's denominator has ``G - 1`` degrees of
+        freedom instead of ``n - p``. It needs a design of full column rank
+        and hundreds of groups rather than dozens (the module notes), and
+        cannot be combined with ``permutations``.
 
     Examples
     --------
@@ -196,6 +227,20 @@ def local_test(
         tested = list(np.atleast_1d(terms))
     if not tested:
         raise ValueError("no terms to test; the design is an intercept alone")
+
+    codes = None
+    if groups is not None:
+        labels = np.asarray(groups).ravel()
+        if labels.size != n_subjects:
+            raise ValueError(f"{labels.size} group labels for {n_subjects} subjects")
+        _, codes = np.unique(labels, return_inverse=True)
+        if codes.max() + 1 < 2:
+            raise ValueError("groups= needs at least two groups")
+        if permutations > 0:
+            raise ValueError(
+                "permutations= does not respect groups=: shuffling subjects between families "
+                "of different make-up is not exchangeable; use the parametric test with groups="
+            )
 
     reduced_columns = [i for i in range(n_terms) if i not in tested]
     reduced = matrix[:, reduced_columns] if reduced_columns else np.zeros((n_subjects, 0))
@@ -245,6 +290,16 @@ def local_test(
         reduced_ss = (scores * scores).sum(axis=0)
         fitted = np.zeros_like(scores)
     statistic = f_statistic(reduced_ss, full_ss)
+    n_groups = 0
+    denominator_dof = residual_dof
+    if codes is not None:
+        n_groups = int(codes.max()) + 1
+        if rank_full < n_terms:
+            raise ValueError("groups= needs a design of full column rank")
+        statistic = _clustered_wald(
+            matrix, scores, full_beta, codes, n_groups, tested, np.isfinite(statistic)
+        )
+        denominator_dof = n_groups - 1
 
     if permutations > 0:
         # Freedman-Lane: permute the residuals of the reduced model, add its fit
@@ -268,7 +323,7 @@ def local_test(
     else:
         from scipy.stats import f as f_distribution
 
-        pvalue = f_distribution.sf(statistic, numerator_dof, residual_dof)
+        pvalue = f_distribution.sf(statistic, numerator_dof, denominator_dof)
 
     if method == "fdr":
         adjusted = benjamini_hochberg(pvalue)
@@ -287,4 +342,36 @@ def local_test(
         method=method,
         permutations=permutations,
         terms=tuple(int(t) for t in tested),
+        groups=n_groups,
     )
+
+
+def _clustered_wald(matrix, scores, beta, codes, n_groups, tested, testable):
+    """Wald F statistics for the ``tested`` columns, with cluster-robust standard errors.
+
+    For each component, the coefficients' covariance is the sandwich
+    ``c * B @ M @ B`` with ``B = (X'X)^-1`` and ``M`` the sum over groups of
+    ``(X_g' e_g)(X_g' e_g)'``, where ``e_g`` is the group's residuals and
+    ``c = G / (G - 1) * (n - 1) / (n - p)``; the statistic is
+    ``b' V^-1 b / q`` over the ``q`` tested coefficients ``b``.
+    """
+    n_subjects, n_terms = matrix.shape
+    residual = scores - matrix @ beta
+    # Each group's score X_g' e_g, for every component: (groups, terms, components).
+    contributions = np.zeros((n_groups, n_terms, scores.shape[1]))
+    np.add.at(contributions, codes, matrix[:, :, None] * residual[:, None, :])
+    meat = np.einsum("gik,gjk->kij", contributions, contributions)
+    bread = np.linalg.inv(matrix.T @ matrix)
+    correction = n_groups / (n_groups - 1) * (n_subjects - 1) / (n_subjects - n_terms)
+    covariance = correction * np.einsum("ij,kjl,lm->kim", bread, meat, bread)
+    index = np.asarray(tested)
+    tested_beta = beta[index].T  # (components, q)
+    block = covariance[:, index][:, :, index]  # (components, q, q)
+    statistic = np.full(scores.shape[1], np.nan)
+    for k in np.flatnonzero(testable):
+        try:
+            solved = np.linalg.solve(block[k], tested_beta[k])
+        except np.linalg.LinAlgError:
+            continue
+        statistic[k] = float(tested_beta[k] @ solved) / index.size
+    return statistic

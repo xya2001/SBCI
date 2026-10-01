@@ -284,3 +284,106 @@ def test_permutation_pvalues_are_uniform_under_the_null_with_a_correlated_nuisan
     pvalues = np.asarray(pvalues)
     assert 0.35 < pvalues.mean() < 0.65
     assert (pvalues <= 0.05).mean() < 0.15
+
+
+def _families(rng, n_families, largest=4, shared=1.0):
+    """A cohort of families: group labels and a covariate shared within each family.
+
+    Members of a family are correlated in the covariate, as the scores built on
+    the same labels will be.
+    """
+    sizes = rng.integers(1, largest + 1, n_families)
+    groups = np.repeat(np.arange(n_families), sizes)
+    covariate = shared * rng.standard_normal(n_families)[groups] + rng.standard_normal(groups.size)
+    return groups, covariate
+
+
+def test_clustered_standard_errors_match_an_explicit_sandwich():
+    """``groups=`` against the cluster-robust covariance written out group by group."""
+    from scipy.stats import f as f_distribution
+
+    rng = np.random.default_rng(11)
+    groups, covariate = _families(rng, 60)
+    nuisance = rng.standard_normal(groups.size)
+    scores = rng.standard_normal((groups.size, 3)) + 0.3 * covariate[:, None]
+    result = local_test(scores, np.column_stack([covariate, nuisance]), terms=[1], groups=groups)
+
+    X = np.column_stack([np.ones(groups.size), covariate, nuisance])
+    n, p = X.shape
+    G = np.unique(groups).size
+    bread = np.linalg.inv(X.T @ X)
+    for k in range(scores.shape[1]):
+        beta = bread @ X.T @ scores[:, k]
+        residual = scores[:, k] - X @ beta
+        meat = np.zeros((p, p))
+        for g in np.unique(groups):
+            score = X[groups == g].T @ residual[groups == g]
+            meat += np.outer(score, score)
+        covariance = G / (G - 1) * (n - 1) / (n - p) * bread @ meat @ bread
+        statistic = beta[1] ** 2 / covariance[1, 1]
+        assert result.statistic[k] == pytest.approx(statistic, rel=1e-10)
+        assert result.pvalue[k] == pytest.approx(f_distribution.sf(statistic, 1, G - 1), rel=1e-10)
+    assert result.groups == G
+
+
+def test_clustered_test_matches_statsmodels():
+    """The same Wald tests as statsmodels' cluster-robust OLS, one term and two."""
+    sm = pytest.importorskip("statsmodels.api")
+    rng = np.random.default_rng(3)
+    groups, covariate = _families(rng, 120)
+    design = np.column_stack(
+        [covariate, rng.standard_normal(groups.size), rng.integers(0, 2, groups.size)]
+    )
+    scores = rng.standard_normal((groups.size, 4)) + rng.standard_normal((120, 4))[groups]
+    scores += 0.15 * covariate[:, None]
+    X = sm.add_constant(design)
+    for terms in ([1], [1, 2]):
+        ours = local_test(scores, design, terms=terms, groups=groups, method="none")
+        restriction = np.zeros((len(terms), X.shape[1]))
+        restriction[np.arange(len(terms)), terms] = 1.0
+        for k in range(scores.shape[1]):
+            fit = sm.OLS(scores[:, k], X).fit(
+                cov_type="cluster", cov_kwds={"groups": groups}, use_t=True
+            )
+            theirs = fit.f_test(restriction)
+            assert ours.statistic[k] == pytest.approx(float(np.squeeze(theirs.fvalue)), rel=1e-9)
+            assert ours.pvalue[k] == pytest.approx(float(theirs.pvalue), rel=1e-9)
+
+
+def test_families_inflate_the_naive_test_and_not_the_clustered_one():
+    """Under the null, families inflate the naive test and not the clustered one.
+
+    With covariate and scores both shared within families, the test that
+    assumes independent subjects rejects too often; the clustered one holds.
+    """
+    rng = np.random.default_rng(12)
+    naive, clustered = [], []
+    for _ in range(40):
+        groups, covariate = _families(rng, 150, shared=1.5)
+        scores = 1.5 * rng.standard_normal((150, 50))[groups] + rng.standard_normal(
+            (groups.size, 50)
+        )
+        naive.append(local_test(scores, covariate, method="none").pvalue)
+        clustered.append(local_test(scores, covariate, method="none", groups=groups).pvalue)
+    naive_rate = float(np.mean(np.concatenate(naive) < 0.05))
+    clustered_rate = float(np.mean(np.concatenate(clustered) < 0.05))
+    assert naive_rate > 0.10, naive_rate
+    assert 0.03 < clustered_rate < 0.07, clustered_rate
+
+
+def test_groups_are_checked():
+    rng = np.random.default_rng(13)
+    scores = rng.standard_normal((30, 3))
+    covariate = rng.standard_normal(30)
+    groups = np.repeat(np.arange(10), 3)
+    with pytest.raises(ValueError, match="group labels for 30 subjects"):
+        local_test(scores, covariate, groups=groups[:-1])
+    with pytest.raises(ValueError, match="at least two groups"):
+        local_test(scores, covariate, groups=np.zeros(30))
+    with pytest.raises(ValueError, match="does not respect groups"):
+        local_test(scores, covariate, groups=groups, permutations=10)
+    nuisance = rng.standard_normal(30)
+    collinear = np.column_stack([covariate, nuisance, nuisance])  # the nuisance twice
+    with pytest.raises(ValueError, match="full column rank"):
+        local_test(scores, collinear, terms=[1], groups=groups)
+    assert local_test(scores, covariate).groups == 0

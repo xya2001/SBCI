@@ -235,7 +235,14 @@ the method authors'. It is verified against `scipy.stats` and against the
 procedures' own guarantees (null uniformity by Kolmogorov-Smirnov, false
 discovery held in simulation, power rising with effect size), which establishes
 that the statistics are correctly *implemented*, not that they are the right
-statistics. **Ask whoever specified the API to confirm the intent.**
+statistics. **Ask whoever specified the API to confirm the intent.** For
+related subjects, `groups=` swaps in cluster-robust standard errors with the
+families as clusters, which agree with statsmodels to 1e-9 and hold the
+nominal false-positive rate in simulation with hundreds of families, not with
+dozens (PORTING.md item 5, *Related subjects*). The README's analysis shows
+why it matters: counted as 943 independent subjects, one component tracked
+fluid intelligence (adjusted p 0.023); with their 422 families as clusters,
+none does (0.064).
 
 **The spherical kernel ships, and is verified against the binary itself.**
 `kernel="shk"` is the default by the WP1 decision and it works. It reproduces

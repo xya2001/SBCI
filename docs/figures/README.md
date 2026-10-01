@@ -25,9 +25,14 @@ code on a machine without the data; no document uses those.
 
 The analysis of the 946 young adults with complete pipeline output, which are
 not distributed, has its own flags: `scripts/hcp_figures.py hcp-ya
-docs/figures --full-cohort DIR --traits CSV` draws `cohort_trait_*.png` from
-the built files and a table of open-access fields. There is no coupling
-figure: coupling needs FC, which the young adult files do not have yet.
+docs/figures --full-cohort DIR --traits CSV --groups CSV` draws
+`cohort_trait_scores.png` and `cohort_sex_effect.png`, and
+`cohort_trait_effect.png` when a component tracks the trait, from the built
+files, a table of open-access fields and a table of each subject's family.
+The young adults are twins and siblings, and the tests treat the families as
+clusters; family membership is restricted HCP data, so that table stays out
+of the repository. There is no coupling figure: coupling needs FC, which the
+young adult files do not have yet.
 
 Every surface is drawn on FreeSurfer's fsaverage (163,842 vertices per
 hemisphere) with the map interpolated onto it and rendered through PyVista
@@ -47,5 +52,5 @@ the shading shows where there is nothing to see.
 | `alignment_recovery.png` | sub-100307's streamline endpoints moved by a known smooth warp (degree 4, 1.7 degrees on average) and registered back onto the undeformed subject by ENCORE and by ConSEAL, both through the package's smoother: how far each endpoint still is from where it started, vertex by vertex on the surface and as a histogram (1.63 degrees as deformed; 0.20 after ENCORE, 0.11 after ConSEAL), and the cost per iteration |
 | `migration_power.png` | the same known warp applied to sub-100307's own FreeSurfer sulcal depth at fsaverage resolution (163,842 vertices), shown with what it changes in the map (r = 0.95 with the original once moved), and what is left once ENCORE's warp, carried from the grid with `migrate_warp`, puts it back (r = 0.996); below, ENCORE's warp on the grid, restated on fsaverage, and the known warp there, 0.33 degrees apart on average |
 | `cohort_alignment.png` | registering the eleven subjects with ENCORE (onto its Karcher median) and with ConSEAL (onto the mean square-root density, since its median settles on one subject), every density from the package's smoother: each subject's cost per iteration, and the correlation between each of the 55 pairs of subjects' connectomes before and after (mean 0.716, then 0.761 after ENCORE and 0.785 after ConSEAL) |
-| `cohort_trait_scores.png` | a rank-20 FPCA of the 943 young adults with a fluid-intelligence score: the two components most associated with it given sex, age band and streamline count, each subject's score against the number of PMAT24 items answered correctly, with the mean in each fifth of that range and its 95% interval (component 13, r = 0.11, adjusted p 0.023; component 7, r = 0.10, 0.052) |
-| `cohort_trait_effect.png` | the effect map of component 13, the one significant at FDR 0.05: connectivity higher with higher scores in right medial occipital cortex, relative to its largest value |
+| `cohort_trait_scores.png` | a rank-20 FPCA of the 943 young adults with a fluid-intelligence score: the two components most associated with it given sex, age band and streamline count, families as clusters, each subject's score against the number of PMAT24 items answered correctly, with the mean in each fifth of that range and its 95% interval (component 13, r = 0.11, adjusted p 0.064; component 7, r = 0.10, 0.083: neither survives the correction) |
+| `cohort_sex_effect.png` | the effect map over the 11 components of the same fit that track sex given the rest, families as clusters: the fitted difference in connectivity between women and men, relative to its largest value, at the occipital poles, where it is higher in men |

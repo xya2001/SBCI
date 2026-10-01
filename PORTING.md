@@ -347,8 +347,10 @@ the poles, which is why this has not bitten anyone.
   properties that define the procedures: p-values uniform under the null
   (Kolmogorov-Smirnov), false discovery held below the nominal rate in
   simulation, power rising with effect size, Bonferroni never less
-  conservative than the FDR correction. **This should be reviewed by whoever
-  specified the API**, because the choice of test is mine, not the
+  conservative than the FDR correction. `groups=` makes the test hold for
+  related subjects, families of twins and siblings, with cluster-robust
+  standard errors (*Related subjects* below). **This should be reviewed by
+  whoever specified the API**, because the choice of test is mine, not the
   reference's.
 
 ### The dependencies were not the blocker
@@ -472,42 +474,109 @@ difference of BLAS summation order:
 Ten ico4 subjects at rank 4 take about 40 s on four cores of a compute node,
 down from 66 s, and 2.1 GB rather than 4.2 GB.
 
+### Related subjects
+
+The F test assumes independent subjects. The HCP Young Adult study recruited
+families, twins and their siblings, and members of a family resemble each
+other in their connectomes and in their traits; counting them as independent
+makes every p-value too small. `local_test(..., groups=)` takes one family
+label per subject and judges the tested terms by a Wald test with
+cluster-robust standard errors, `c * B @ M @ B` with `B = (X'X)^-1`, `M` the
+sum over families of each family's `X_g' e_g` outer product, and the usual
+small-sample factor `c = G / (G - 1) * (n - 1) / (n - p)`; the F statistic's
+denominator degrees of freedom are `G - 1`, for `G` families. Only the labels
+are needed, not who is a twin of whom.
+
+How it is verified:
+
+- Against **statsmodels**, an independent implementation: `OLS(...).fit(
+  cov_type="cluster", cov_kwds={"groups": ...}, use_t=True).f_test` gives the
+  same statistic and p-value to 1e-9, for one tested term and for two
+  (`tests/test_stats.py`; statsmodels comes with the `test` extra, and the
+  test is skipped where it is not installed).
+- Against the **sandwich written out family by family**, in a loop, to 1e-10.
+- **Under the null**, in simulated cohorts of families of one to four in which
+  the covariate and the score are both shared within a family (intra-family
+  correlation 0.69 in each) and unrelated to each other, 10,000 independent
+  cohorts for each number of families (`tools/clustered_null.py`):
+
+  | families | rejected at 0.05, as independent subjects | with families as clusters |
+  | --- | --- | --- |
+  | 20 | 0.166 | 0.097 |
+  | 50 | 0.161 | 0.067 |
+  | 100 | 0.156 | 0.060 |
+  | 422 | 0.163 | 0.051 |
+
+  Ignoring the families triples the false-positive rate; clustering holds it
+  at the nominal rate with hundreds of families, as in the HCP analysis, and
+  not with dozens, as is known of cluster-robust tests. The test suite checks
+  a smaller version (150 families: 17.1% against 5.9%).
+- **Permutation is refused with groups.** Freedman-Lane shuffles subjects
+  freely, and shuffling between families of different make-up, twins against
+  siblings, is not exchangeable. A permutation test for family data needs the
+  structure inside each family, who is a monozygotic twin of whom and who
+  shares which parents, as the multi-level block permutation of Winkler et
+  al. (NeuroImage, 2015) does with the same restricted table; it is not
+  implemented.
+
 ### Measured on the HCP Young Adult cohort
 
 The 946 young adults with complete pipeline output (item 6, *The HCP Young
 Adult cohort, rebuilt on ico4*) are the README's association example: fluid
 intelligence, the number of Penn Matrix Test items answered correctly
 (`PMAT24_A_CR` in the HCP's open-access table, 4 to 24), which 943 of them
-have. `tools/age_probe.py --table ... --column ...` streams the cohort once,
-in fifteen minutes on four cores, and shows the trait is in the data but
-weakly, far more weakly than sex:
+have. They come from 423 families, and 850 of them have a relative among the
+946; the 943 come from 422. Every test below treats the families as clusters.
+The first version of this analysis did not, and reported a component as
+significant that is not; its numbers are kept beside the corrected ones,
+because the difference is the point. Family membership is in the HCP's
+restricted table: it was read on Longleaf from a private copy, and nothing
+from it is in the repository or its figures.
 
-| measured on each subject | fluid intelligence | sex |
-| --- | --- | --- |
-| area-weighted strength of each cortical vertex | 217 of 4,685 significant at FDR 0.05, \|r\| up to 0.17 | 1,177, \|r\| up to 0.31 |
-| each Desikan region pair | 52 of 2,278, \|r\| up to 0.16 | 843, \|r\| up to 0.35 |
-| interhemispheric share of the connectivity | r = 0.04, p 0.29 | r = 0.14 |
-| long-range share, over 50 mm | r = -0.03, p 0.37 | r = 0.28 |
-| the leading eight principal directions, vertex level | \|r\| up to 0.16 (the fifth) | up to 0.22 (the second) |
+`tools/age_probe.py --table ... --column ... --groups ...` streams the cohort
+once, in fifteen minutes on four cores (`--measures` repeats the tests on the
+saved measures in seconds), and shows the trait is in the data but weakly,
+far more weakly than sex:
+
+| measured on each subject | fluid intelligence | counted as independent | sex |
+| --- | --- | --- | --- |
+| area-weighted strength of each cortical vertex | 113 of 4,685 significant at FDR 0.05, \|r\| up to 0.17 | 217 | 1,020, \|r\| up to 0.31 (1,177 counted as independent) |
+| each Desikan region pair | none of 2,278, \|r\| up to 0.16 | 52 | 761, \|r\| up to 0.35 (843) |
+| interhemispheric share of the connectivity | r = 0.04, p 0.30 | p 0.29 | r = 0.14 |
+| long-range share, over 50 mm | r = -0.03, p 0.41 | p 0.37 | r = 0.28 |
+| the leading eight principal directions, vertex level | \|r\| up to 0.16 (the fifth) | | up to 0.22 (the second) |
 
 The streamline count, 0.60 to 1.07 million per subject, correlates with the
 trait at r = -0.08 and with the fourth and fifth vertex-level directions at
 -0.36; the trait correlates with sex at -0.14.
 
-At rank 20 (`candidates=1`, 27% of the cohort's norm) one component tracks
-the score after the false-discovery-rate correction across the twenty, with
-sex, the age band and the streamline count as covariates: component 13,
-r = 0.11, adjusted p 0.023, an effect in right medial occipital cortex where
-connectivity is higher in subjects who score higher. Without the covariates
-component 7 joins it (r = 0.10, adjusted p 0.029); with them it reaches 0.052.
+At rank 20 (`candidates=1`, 27% of the cohort's norm), with sex, the age band
+and the streamline count as covariates, no component tracks the score after
+the false-discovery-rate correction across the twenty. The closest are
+component 13, r = 0.11, adjusted p 0.064, and component 7, r = 0.10, adjusted
+p 0.083; without the covariates both are at 0.051. Counted as 943 independent
+subjects, component 13 passed at 0.023 (and component 7 at 0.029 without the
+covariates), which is what the first version reported, with an effect map in
+right medial occipital cortex. A check that needs no clustering agrees with
+the correction: keeping one subject per family, the first met in a random
+order (`numpy.random.default_rng(seed).permutation`, seeds 0 to 4), leaves
+422 independent subjects, in whom component 13 correlates with the score at
+r = 0.10 to 0.12 with adjusted p 0.22 to 0.48. The effect's size holds; its
+significance does not.
+
 At rank 4, the first four of the same components (17% of the norm), nothing
-tracks the score, with the covariates or without (the largest correlation is
-0.06), while sex shows in all four; at rank 20 sex shows in thirteen, the
-strongest at adjusted p 2e-8. The streamline count matters less here than
-the rank does: it correlates with the first component at -0.12 and with no
-other beyond 0.18. The fit read the cohort one file at a time, held it as
-199 GB of float64 and peaked at 196 GiB, and took 5.4 hours on eight threads,
-loading included.
+comes close (smallest adjusted p 0.32), while sex shows in all four. At rank
+20 sex, tested with the score among the covariates, shows in eleven
+components (1, 2, 3, 5, 6, 8, 9, 12, 15, 16 and 18; thirteen counted as
+independent), the strongest at adjusted p 2e-8. Its effect map over those
+eleven (`docs/figures/cohort_sex_effect.png`) sits at the occipital poles of
+both hemispheres, where connectivity is relatively higher in men, and nowhere
+else above a twentieth of its largest value. Head size differs between the
+sexes and is not in the model, so part of that may be size. The streamline
+count matters less here than the rank does: it correlates with the first
+component at -0.12 and with no other beyond 0.18. The fit read the cohort one
+file at a time, held it as 199 GB of float64 and peaked at 196 GiB, and took
+5.4 hours on eight threads, loading included.
 
 ### Measured earlier on HCP-Aging subjects, whose files are not distributed
 

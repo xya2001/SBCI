@@ -34,7 +34,8 @@ dependencies = [
 [project.optional-dependencies]
 plotting = ["nilearn>=0.10", "matplotlib>=3.7"]
 render = ["sbci[plotting]", "pyvista>=0.43"]
-test = ["pytest>=7.4", "pytest-cov>=4.1"]
+# statsmodels is the independent implementation local_test(groups=) is checked against.
+test = ["pytest>=7.4", "pytest-cov>=4.1", "statsmodels>=0.14"]
 dev = ["sbci[render,test]", "ruff>=0.5"]
 
 [project.scripts]
