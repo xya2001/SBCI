@@ -90,15 +90,15 @@ HCP=${SBCI_HCP_DIR:-/work/users/x/y/xya/hcp-ya/data}
 if [ -z "${SLURM_JOB_ID:-}" ]; then
     # The audit smooths, reduces and aligns on the full grid: hours of CPU
     # and gigabytes of memory, which belong on a compute node, never the login node.
-    record SKIP "API audit (17 README rows)" "heavy compute: run inside sbatch/srun"
+    record SKIP "API audit (17 checks)" "heavy compute: run inside sbatch/srun"
 elif [ -f "$HCP/sub-100307_sc.h5" ] && [ -f "$HCP/sub-100307_fc.h5" ]; then
     if OUT=$(python scripts/audit_api.py 2>&1 | tail -1); then
-        record PASS "API audit (17 README rows)" "$OUT"
+        record PASS "API audit (17 checks)" "$OUT"
     else
-        record FAIL "API audit (17 README rows)" "$OUT"
+        record FAIL "API audit (17 checks)" "$OUT"
     fi
 else
-    record SKIP "API audit (17 README rows)" "no sub-100307 at $HCP: sbci download hcp-ya --out $HCP"
+    record SKIP "API audit (17 checks)" "no sub-100307 at $HCP: sbci download hcp-ya --out $HCP"
 fi
 
 # --- tier 4 ---------------------------------------------------------------

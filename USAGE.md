@@ -151,7 +151,8 @@ load_atlas("Glasser").n_regions        # 360
 ```
 
 44 atlases ship inside the package (332 KB), so this needs no download, no
-FreeSurfer and no MATLAB. Short names resolve to the stored names ignoring
+FreeSurfer and no MATLAB; `tools/convert_atlases.py` regenerates them from the
+toolkit's files, and the output is committed so no release step needs MATLAB. Short names resolve to the stored names ignoring
 case, spaces, hyphens and underscores. `list_atlases()` gives the full set,
 which also includes Gordon, Yeo, the PALS-B12 family and CoCoNest at 22 scales.
 
@@ -219,7 +220,7 @@ The maps agree across subjects (r = 0.53 to 0.71) and follow the gradient
 coupling is known for (Vázquez-Rodríguez et al., PNAS 2019; Baum et al., PNAS
 2020): 0.30 on average over primary and unimodal sensory and motor regions
 against 0.19 over association regions, highest in visual cortex and lowest in
-the cingulate and entorhinal cortex (the README's figure). Most of the map is
+the cingulate and entorhinal cortex (the figure in docs/RESULTS.md). Most of the map is
 shared between people. Pairing one subject's SC with another's FC lowers the
 mean only from 0.233 to 0.225, and a subject's own FC fits it better than
 another subject's in 60% of pairs, so on eleven subjects individual
@@ -749,7 +750,7 @@ On the 943 with a score, no component of the twenty tracks fluid intelligence on
 are clusters: the closest, component 13, has r = 0.11 and adjusted p 0.064.
 Counted as 943 independent subjects, the same component passes at 0.023,
 which is the error `groups=` is there to prevent. Sex shows in 11 of the
-twenty, the strongest at adjusted p 2e-8; the README shows where. The rank
+twenty, the strongest at adjusted p 2e-8; docs/RESULTS.md shows where. The rank
 matters as well: a rank-4 fit comes nowhere near for fluid intelligence
 (smallest adjusted p 0.32), because the largest differences between these
 subjects lie elsewhere (PORTING.md item 5).
@@ -964,7 +965,70 @@ strengthens every measure:
 The released files follow the pipeline and are not band-passed. `--no-gsr`
 keeps the global signal.
 
+## Using legacy pipeline output
+
+`tools/import_legacy.py` converts existing SBCI `.mat` output into the HDF5
+format, so a cohort processed with the old pipeline can be used today without
+reprocessing:
+
+```bash
+python tools/import_legacy.py \
+    --sc smoothed_sc_avg_0.005_ico4.mat \
+    --fc fc_avg_ico4.mat \
+    --mapping mapping_avg_ico4.npz \
+    --subject 100307 --out derivatives/
+sbci validate derivatives/sub-100307_sc.h5
+```
+
+Verified end to end on the SBCI_Toolkit example subject: both files pass every
+validator check, `to_atlas(Schaefer200)` returns a 200x200 matrix retaining
+99.98% of the connectome mass, and SC and FC correlate at r = 0.26 across the
+19,900 region pairs.
+
 ## What raises, and what it tells you
+
+Everything public is reachable straight off `sbci`, and so is every submodule,
+so `import sbci` is all the import line anyone needs:
+
+```python
+import sbci
+
+sbci.load, sbci.smooth, sbci.align, sbci.reduce, sbci.local_test
+sbci.stats.local_test          # submodules resolve too
+```
+
+The heavier submodules load on first use, so `import sbci` costs about 300 ms
+and pulls in neither matplotlib nor scipy unless you touch something that
+needs them. `tests/test_api_surface.py` pins the import set.
+
+Anything wrong with a *file, its contents, or a name the package looks up*
+(an atlas, a region) raises a subclass of `sbci.SbciError`, so one `except`
+covers a pipeline's input problems, while a mistake in a call's own arguments
+raises a plain `ValueError`:
+
+```python
+try:
+    cc = sbci.load(path)
+except sbci.SbciError as exc:
+    print(f"{path} is unusable: {exc}")
+```
+
+`SbciError` subclasses also derive from the built-in exception you would reach
+for first -- `FormatError` is a `KeyError`, `MetadataError` is a `ValueError`
+-- so existing code keeps working.
+
+Names that do not exist suggest ones that do, rather than printing the whole
+catalogue:
+
+```python
+>>> sbci.load_atlas("Shaefer200")
+UnknownAtlasError: unknown atlas 'Shaefer200'. Did you mean 'Schaefer200' or 'Schaefer900' or 'Schaefer800'?
+>>> sbci.load_atlas("Desikan").region_mask("LH_banksts")
+ValueError: aparc has no region named 'LH_banksts'. Did you mean 'LH_bankssts' or 'RH_bankssts' or 'LH_parsorbitalis'?
+```
+
+The common cases:
+
 
 | Call | Raises | Because |
 | --- | --- | --- |

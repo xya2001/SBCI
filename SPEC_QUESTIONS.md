@@ -138,7 +138,7 @@ where `src/sbci/spec.py` currently carries a **provisional** value, marked
    blank environment on every push.
 
    **The other 935 are not distributed.** All 946 were built the same way for
-   the README's analysis of fluid intelligence, at the lab's decision that
+   the analysis of fluid intelligence in docs/RESULTS.md, at the lab's decision that
    they be analysed and not released.
 
    **HCP-Aging is not published (30 September).** From 28 to 30 September the

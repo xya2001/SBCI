@@ -101,7 +101,7 @@ export SBCI_TOOLKIT=$PWD/SBCI_Toolkit SBCI_HCP_DIR=$PWD/hcp-ya
 python scripts/audit_api.py
 ```
 
-`scripts/audit_api.py` exercises the API table in README.md on the released
+`scripts/audit_api.py` exercises the methods of the README's capabilities table on the released
 young adults, in the order a user would: load, save, parcellate, seed,
 couple structure with function, plot, export, validate, download, smooth,
 reduce, test, align with ENCORE and
@@ -266,7 +266,7 @@ statistics. **Ask whoever specified the API to confirm the intent.** For
 related subjects, `groups=` swaps in cluster-robust standard errors with the
 families as clusters, which agree with statsmodels to 1e-9 and hold the
 nominal false-positive rate in simulation with hundreds of families, not with
-dozens (PORTING.md item 5, *Related subjects*). The README's analysis shows
+dozens (PORTING.md item 5, *Related subjects*). The analysis in docs/RESULTS.md shows
 why it matters: counted as 943 independent subjects, one component tracked
 fluid intelligence (adjusted p 0.023); with their 422 families as clusters,
 none does (0.064).

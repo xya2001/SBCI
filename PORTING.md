@@ -586,7 +586,7 @@ How it is verified:
 ### Measured on the HCP Young Adult cohort
 
 The 946 young adults with complete pipeline output (item 6, *The HCP Young
-Adult cohort, rebuilt on ico4*) are the README's association example: fluid
+Adult cohort, rebuilt on ico4*) are the association example of docs/RESULTS.md: fluid
 intelligence, the number of Penn Matrix Test items answered correctly
 (`PMAT24_A_CR` in the HCP's open-access table, 4 to 24), which 943 of them
 have. They come from 423 families, and 850 of them have a relative among the
@@ -1485,7 +1485,7 @@ truth at cosine 0.96. A degree-15 basis reaches the same 86% in 43 steps; the
 analytic derivative changes nothing; a warp of 2.8 degrees on average is
 undone 87% and a degree-2 warp 94%; against the stored reference the same
 smooth warp is undone 65%. ConSEAL on the smooth warp reaches 0.10 degrees, 94% undone, in 60 iterations. The
-README's figure uses the smooth warp and the matching reference
+figure in docs/RESULTS.md uses the smooth warp and the matching reference
 (`scripts/hcp_figures.py`: `WARP_ORDER`, `WARP_AMPLITUDE`, `ENCORE_ORDER`),
 on sub-100307: ENCORE brings the endpoints from 1.63 to 0.20 degrees, 88%,
 with the cost at 0.16 of its start; ConSEAL to 0.11 degrees, 93%.

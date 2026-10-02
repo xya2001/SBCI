@@ -1,6 +1,6 @@
 # Example figures
 
-The figures here are drawn from the eleven HCP Young Adult subjects of the
+The figures here are discussed in [RESULTS.md](../RESULTS.md); they are drawn from the eleven HCP Young Adult subjects of the
 example cohort (`sbci download hcp-ya`), 22 to 35 years old by the HCP's
 open-access age bands. They were rebuilt on the ico4 grid from the lab's SBCI
 pipeline output by `tools/build_hcp_cohort.py`: each subject's SC is smoothed

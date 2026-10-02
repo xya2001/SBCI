@@ -260,7 +260,7 @@ def test_cohort_arguments_are_checked():
     reason="three minutes of FPCA on ico4; set SBCI_SLOW_TESTS=1",
 )
 def test_reduce_and_local_test_recover_the_planted_bundle():
-    """The README's end-to-end analysis, at its defaults, with its known answer."""
+    """The end-to-end analysis of docs/RESULTS.md, at its defaults, with its known answer."""
     cohort = sbci.example_cohort(n_subjects=10, seed=0)
     reduction = sbci.reduce(cohort.connectomes, rank=4)
     result = sbci.local_test(reduction.scores, cohort.age)
