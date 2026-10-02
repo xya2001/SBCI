@@ -90,10 +90,10 @@ import numpy as np
 from . import spec
 
 DEFAULT_ALPHA = 1e-10
+"""Roughness penalty. The reference's default, effectively off."""
 
 #: Lanczos tolerance for the candidate starts; they are refined afterwards.
 CANDIDATE_TOLERANCE = 1e-6
-"""Roughness penalty. The reference's default, effectively off."""
 
 
 def _as_operator(matrix):
@@ -152,7 +152,7 @@ def sparse_power_iteration(
             mask = np.zeros(nxt.size, dtype=bool)
             mask[keep] = True
             nxt = np.where(mask, nxt, 0.0)
-        scale = np.sqrt(nxt @ gram @ nxt)
+        scale = np.sqrt(nxt @ (gram * nxt) if gram.ndim == 1 else nxt @ gram @ nxt)
         if scale == 0:
             break
         nxt = nxt / scale
@@ -450,6 +450,10 @@ def fit_basis(
     # here and contract explicitly, which is clearer and avoids a transpose.
     residual = matrices.copy() if copy else matrices
     total_norm = np.linalg.norm(residual)
+    if total_norm == 0:
+        raise ValueError(
+            "every connectome equals the cohort mean, so there is no variation to reduce"
+        )
 
     components = np.zeros((n, rank))
     score_matrix = np.zeros((n_subjects, rank))
@@ -475,13 +479,16 @@ def fit_basis(
         change = np.inf
         step = 0
         while step < max_outer - 1 and change > tol_outer:
-            weights = (residual @ vector) @ vector  # v' R_s v for every subject, by BLAS
-            norm = np.linalg.norm(weights)
-            score = weights / norm if norm else weights
+            if step:
+                # The first pass reuses what was just computed from this very vector;
+                # recomputing it would read the whole cohort twice more for nothing.
+                weights = (residual @ vector) @ vector  # v' R_s v for every subject, by BLAS
+                norm = np.linalg.norm(weights)
+                score = weights / norm if norm else weights
 
-            contracted = np.tensordot(score, residual, axes=(0, 0))
-            regularized = contracted if penalty is None else contracted - alpha * penalty
-            regularized = (regularized + regularized.T) / 2
+                contracted = np.tensordot(score, residual, axes=(0, 0))
+                regularized = contracted if penalty is None else contracted - alpha * penalty
+                regularized = (regularized + regularized.T) / 2
             operator = deflation.sandwich(regularized)
             if support is None:
                 vector = _leading_eigenvector(operator, start=vector)
@@ -625,7 +632,10 @@ def _grid_gram_and_roughness(area, coordinates=None):
         np.add.at(roughness, (b, a), -0.5 * cot)
         np.add.at(roughness, (a, a), 0.5 * cot)
         np.add.at(roughness, (b, b), 0.5 * cot)
-    return gram, 0.5 * (roughness + roughness.T)
+    # Exactly symmetric already: each pair gets the same value in the same order on
+    # both sides, so the symmetrization this once did was a bit-identical no-op
+    # costing two 210 MB temporaries and seconds per call (tests pin the symmetry).
+    return gram, roughness
 
 
 def reduce(cc_list, rank: int = 10, **kwargs) -> Reduction:

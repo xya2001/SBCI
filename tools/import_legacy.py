@@ -3,11 +3,13 @@ r"""Convert legacy SBCI pipeline output into the package's HDF5 format.
     python tools/import_legacy.py \\
         --sc  <...>/smoothed_sc_avg_0.005_ico4.mat \\
         --mapping <...>/fsaverage_label/mapping_avg_ico4.npz \\
-        --subject 100307 --out derivatives/
+        --subject 100307 --out derivatives/ \\
+        [--fc <...>/fc_avg_ico4.mat] [--kernel shk] [--bandwidth 0.005] [--streamline-count N]
 
-Every existing SBCI cohort is in the legacy layout, so this is how the released
-data gets produced without rerunning the pipeline, and how anyone with old
-output can try the package today.
+The SBCI pipeline writes this layout, so anyone with its output can try the
+package without rerunning anything. The released young adults were not
+converted this way: they were rebuilt from the pipeline's streamline endpoints
+by ``tools/build_hcp_cohort.py`` (PORTING.md item 6).
 
 What the legacy files hold
 --------------------------

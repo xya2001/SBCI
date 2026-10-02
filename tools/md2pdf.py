@@ -6,7 +6,8 @@ Handles the subset these documents use: headings, paragraphs with inline
 bold/italic/code/links, pipe tables, fenced code blocks, bullet and numbered
 lists, block quotes, horizontal rules, and an explicit ``[[pagebreak]]``.
 
-Font note: the dependency graphs use box-drawing characters, which reportlab's
+Needs ``reportlab`` (``pip install reportlab``), which no extra of the package
+installs. Font note: the dependency graphs use box-drawing characters, which reportlab's
 built-in Type 1 fonts do not contain and would render as solid black boxes. A
 system monospace face covering them is registered where one exists -- DejaVu on
 Linux, Menlo on macOS -- and failing that the characters are transliterated to

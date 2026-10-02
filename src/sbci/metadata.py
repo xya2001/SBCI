@@ -130,6 +130,8 @@ class Metadata:
                 "stored vector would be read into the wrong matrix entries"
             )
 
+        if self.fields.get("spec_version") is None:
+            raise MetadataError("metadata carries no spec_version")
         version = str(self.fields["spec_version"])
         if version.split(".")[:2] != spec.SPEC_VERSION.split(".")[:2]:
             raise MetadataError(

@@ -82,11 +82,13 @@ def _design_matrix(design, add_intercept):
     design = np.asarray(design, dtype=np.float64)
     if design.ndim == 1:
         design = design[:, None]
-    # Any constant column already serves as the intercept; prepending another
-    # would make the design rank deficient and count one degree of freedom too
-    # many in the F test.
+    # A constant, nonzero column already serves as the intercept; prepending
+    # another would make the design rank deficient and count one degree of
+    # freedom too many in the F test. Constancy is exact equality: a tolerance
+    # would take a covariate of tiny scale for a constant, and a column of
+    # zeros is no intercept at all.
     has_constant = design.shape[0] > 0 and bool(
-        np.any(np.all(np.isclose(design, design[:1]), axis=0))
+        np.any(np.all(design == design[:1], axis=0) & (design[0] != 0))
     )
     if add_intercept and not has_constant:
         design = np.column_stack([np.ones(design.shape[0]), design])
@@ -221,10 +223,16 @@ def local_test(
         raise ValueError(f"{scores.shape[0]} subjects in scores but {n_subjects} in the design")
 
     if terms is None:
-        intercept = [i for i in range(n_terms) if np.allclose(matrix[:, i], matrix[0, i])]
+        intercept = [i for i in range(n_terms) if np.all(matrix[:, i] == matrix[0, i])]
         tested = [i for i in range(n_terms) if i not in intercept]
     else:
-        tested = list(np.atleast_1d(terms))
+        tested = [int(t) for t in np.atleast_1d(terms)]
+        outside = [t for t in tested if not 0 <= t < n_terms]
+        if outside:
+            raise ValueError(
+                f"terms {outside} are outside the design's {n_terms} columns (column 0 is "
+                "the intercept when one is added)"
+            )
     if not tested:
         raise ValueError("no terms to test; the design is an intercept alone")
 
@@ -328,7 +336,8 @@ def local_test(
     if method == "fdr":
         adjusted = benjamini_hochberg(pvalue)
     elif method == "bonferroni":
-        adjusted = np.minimum(pvalue * n_components, 1.0)
+        # Over the components that could be tested, as benjamini_hochberg counts them.
+        adjusted = np.minimum(pvalue * int(np.isfinite(pvalue).sum()), 1.0)
     else:
         adjusted = pvalue.copy()
 

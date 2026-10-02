@@ -126,12 +126,14 @@ class ContinuousConnectome:
         """``'sc'`` or ``'fc'``."""
         return self.metadata.modality
 
-    def dense(self) -> np.ndarray:
+    def dense(self, dtype=np.float32) -> np.ndarray:
         """Expand to a symmetric ``n x n`` matrix with a zero diagonal.
 
-        Allocates ``n**2`` float32, about 105 MB on the ico4 grid.
+        Allocates ``n**2`` of ``dtype``: 105 MB on the ico4 grid as the stored
+        float32, 210 MB as float64. Asking for float64 here costs less than
+        expanding and then converting, which allocates both.
         """
-        return grid.to_dense(self.data, self.n_vertices)
+        return grid.to_dense(self.data.astype(dtype, copy=False), self.n_vertices)
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
         return f"<ContinuousConnectome {self.modality} on {self.n_vertices} vertices>"
@@ -175,7 +177,7 @@ class ContinuousConnectome:
                 "use how='mean' (the default for FC)"
             )
         return parcellation.parcellate(
-            self.dense(),
+            self.dense(np.float64),
             atlas,
             np.where(self.mask, self.area, 0.0),
             how=how,

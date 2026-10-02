@@ -28,7 +28,6 @@ from . import spec
 from .atlas import cortex_mask
 from .surface import GEOMETRIES, load_surface, sulcal_depth
 
-SURFACES = GEOMETRIES
 #: Surfaces a map can be drawn on: the grid itself, or FreeSurfer's finer
 #: fsaverage meshes with the map interpolated onto them for display.
 DISPLAY_MESHES = ("ico4", "fsaverage5", "fsaverage")
@@ -223,7 +222,7 @@ def plot_surface(
         One value per vertex on the computational grid, length 5124. NaN marks
         a vertex with no value, such as the medial wall.
     surface
-        Geometry to draw on, one of :data:`SURFACES`.
+        Geometry to draw on, one of :data:`sbci.surface.GEOMETRIES`.
     connectome
         Optional :class:`~sbci.ContinuousConnectome`; its mask is applied so
         that masked vertices are not coloured.
@@ -276,8 +275,8 @@ def plot_surface(
 
     nilearn_plotting = _import_nilearn()
 
-    if surface not in SURFACES:
-        raise ValueError(f"surface must be one of {SURFACES}, got {surface!r}")
+    if surface not in GEOMETRIES:
+        raise ValueError(f"surface must be one of {GEOMETRIES}, got {surface!r}")
     for view in views:
         if view not in VIEWS:
             raise ValueError(f"view must be one of {VIEWS}, got {view!r}")

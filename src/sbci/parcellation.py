@@ -16,21 +16,27 @@ HOW = ("mass", "mean")
 
 
 def region_weights(atlas: Atlas, area: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Build the ``n_vertices x n_regions`` area-weight matrix.
+    """One-hot area weights per region, as a sparse ``(n_vertices, K)`` matrix, and the ids.
 
-    Returns the weight matrix ``W`` with ``W[v, r] = area[v]`` when vertex ``v``
-    belongs to region ``r`` and ``0`` otherwise, together with the region ids.
+    Column ``k`` holds each member vertex's area weight for region ``ids[k]``; a
+    vertex belongs to one region at most, and label 0 (no region) to none.
     """
     area = np.asarray(area, dtype=np.float64)
     labels = np.asarray(atlas.labels)
     if labels.shape != area.shape:
         raise ValueError(f"atlas has {labels.size} vertices but area weights have {area.size}")
 
+    from scipy import sparse
+
     ids = atlas.region_ids
-    weights = np.zeros((labels.size, ids.size), dtype=np.float64)
-    for column, region in enumerate(ids):
-        member = labels == region
-        weights[member, column] = area[member]
+    # One-hot columns, built in sparse form directly: the dense ``(n, K)`` array
+    # is 41 MB for a thousand-region atlas and a hundred times slower to fill.
+    # Labels run 1..K with no gaps (:attr:`Atlas.region_ids`), so label ``r``
+    # is column ``r - 1``; label 0 is no region and gets no column.
+    rows = np.flatnonzero(labels > 0)
+    weights = sparse.csr_matrix(
+        (area[rows], (rows, labels[rows] - 1)), shape=(labels.size, ids.size)
+    )
     return weights, ids
 
 
@@ -81,16 +87,13 @@ def parcellate(
         dense = np.arctanh(np.clip(dense, -0.999999, 0.999999))
 
     weights, _ = region_weights(atlas, area)
-    # The weight matrix is one-hot: a sparse product is O(n^2) where the dense
+    # The weight matrix is one-hot: the sparse product is O(n^2) where a dense
     # one is O(n^2 K), which for a 1000-region atlas is the difference between
     # tens of milliseconds and a second.
-    from scipy import sparse
-
-    sparse_weights = sparse.csr_matrix(weights)
-    mass = np.asarray((sparse_weights.T @ dense) @ sparse_weights)
+    mass = np.asarray((weights.T @ dense) @ weights)
 
     if how == "mean":
-        totals = weights.sum(axis=0)
+        totals = np.asarray(weights.sum(axis=0)).ravel()
         denominator = np.outer(totals, totals)
         with np.errstate(invalid="ignore", divide="ignore"):
             out = np.where(denominator > 0, mass / denominator, 0.0)

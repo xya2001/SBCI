@@ -8,6 +8,7 @@ energy. So the basis is the identity on the grid, and the two dependencies the
 reference needs for its basis are not needed at all.
 """
 
+import os
 import sys
 
 import numpy as np
@@ -16,7 +17,7 @@ from scipy.io import savemat
 
 
 def main():
-    sys.path.insert(0, "/nas/longleaf/home/xya/sbci/tests")
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
     from sbci.alignment import SphericalGrid, rotate_off_poles
     from test_alignment import icosphere
 

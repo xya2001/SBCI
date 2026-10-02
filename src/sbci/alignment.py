@@ -264,48 +264,6 @@ def tangent_basis(order, theta, phi, areas):
 # --- closest-point queries and product interpolation -----------------------
 
 
-def _closest_point_on_triangles(points, a, b, c):
-    """Closest point on each triangle to each point; result ``(n, m, 3)``."""
-    p = points[:, None, :]
-    ab = (b - a)[None, :, :]
-    ac = (c - a)[None, :, :]
-    ap = p - a[None, :, :]
-
-    d1 = (ab * ap).sum(-1)
-    d2 = (ac * ap).sum(-1)
-    bp = p - b[None, :, :]
-    d3 = (ab * bp).sum(-1)
-    d4 = (ac * bp).sum(-1)
-    cp = p - c[None, :, :]
-    d5 = (ab * cp).sum(-1)
-    d6 = (ac * cp).sum(-1)
-
-    vc = d1 * d4 - d3 * d2
-    vb = d5 * d2 - d1 * d6
-    va = d3 * d6 - d5 * d4
-    total = va + vb + vc
-    scale = 1.0 / np.where(total == 0, 1.0, total)
-    closest = a[None, :, :] + (vb * scale)[..., None] * ab + (vc * scale)[..., None] * ac
-
-    def put(mask, value):
-        np.copyto(closest, value, where=mask[..., None])
-
-    denom_ab = np.where(d1 - d3 == 0, 1.0, d1 - d3)
-    denom_ac = np.where(d2 - d6 == 0, 1.0, d2 - d6)
-    denom_bc = np.where((d4 - d3) + (d5 - d6) == 0, 1.0, (d4 - d3) + (d5 - d6))
-
-    put(
-        (va <= 0) & ((d4 - d3) >= 0) & ((d5 - d6) >= 0),
-        b[None, :, :] + ((d4 - d3) / denom_bc)[..., None] * (c - b)[None, :, :],
-    )
-    put((vb <= 0) & (d2 >= 0) & (d6 <= 0), a[None, :, :] + (d2 / denom_ac)[..., None] * ac)
-    put((vc <= 0) & (d1 >= 0) & (d3 <= 0), a[None, :, :] + (d1 / denom_ab)[..., None] * ab)
-    put((d6 >= 0) & (d5 <= d6), np.broadcast_to(c[None, :, :], closest.shape))
-    put((d3 >= 0) & (d4 <= d3), np.broadcast_to(b[None, :, :], closest.shape))
-    put((d1 <= 0) & (d2 <= 0), np.broadcast_to(a[None, :, :], closest.shape))
-    return closest
-
-
 def barycentric_coordinates(point, a, b, c):
     """Libigl's ``barycentric_coordinates``, for points already in the plane."""
     v0, v1, v2 = b - a, c - a, point - a
@@ -324,8 +282,8 @@ def barycentric_coordinates(point, a, b, c):
 def _closest_on_triangles(p, a, b, c):
     """Closest point on triangle ``(a, b, c)`` to ``p``; the arrays broadcast to ``(..., 3)``.
 
-    Ericson's algorithm in the same case order as
-    :func:`_closest_point_on_triangles`, for per-point candidate sets.
+    Ericson's algorithm. The broadcasting serves both uses: each point against
+    its own candidate triangles, and a chunk of points against every face.
     """
     ab, ac, ap = b - a, c - a, p - a
     d1 = (ab * ap).sum(-1)
@@ -446,7 +404,9 @@ class MeshQuery:
         out = np.empty(points.shape[0], dtype=np.int64)
         for start in range(0, points.shape[0], 256):
             chunk = points[start : start + 256]
-            closest = _closest_point_on_triangles(chunk, self._a, self._b, self._c)
+            closest = _closest_on_triangles(
+                chunk[:, None, :], self._a[None], self._b[None], self._c[None]
+            )
             out[start : start + 256] = np.argmin(
                 ((closest - chunk[:, None, :]) ** 2).sum(-1), axis=1
             )
@@ -627,7 +587,13 @@ class SphericalGrid:
 
 
 def parallel_transport(tangent, origin, destination):
-    """Move tangent vectors along the geodesic from ``origin`` to ``destination``."""
+    """Move tangent vectors along the geodesic from ``origin`` to ``destination``.
+
+    ENCORE's closed form; :func:`sbci.conseal._transport` is ConSEAL's, the same
+    transport written differently and with its own degenerate threshold. The two
+    agree to 1e-13 and are kept apart so that each port stays bit-for-bit its
+    reference's.
+    """
     tangent = np.asarray(tangent, dtype=np.float64)
     origin = np.asarray(origin, dtype=np.float64)
     destination = np.asarray(destination, dtype=np.float64)
@@ -1142,7 +1108,7 @@ def align(
     """
     if method not in METHODS:
         raise ValueError(f"method must be one of {METHODS}, got {method!r}")
-    if not cc_list:
+    if len(cc_list) == 0:
         raise ValueError("alignment needs at least one connectome")
     if template is None and len(cc_list) < 2:
         raise ValueError(

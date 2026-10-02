@@ -45,8 +45,7 @@ slurm-*.out
 *.nii
 *.nii.gz
 
-# gprof output: c3_main is built with profiling and drops this
-# wherever it is run from.
+# gprof output, dropped wherever concon's profiled c3_main binary is run
 gmon.out
 # the example figures are committed; everything else drawn while working is not
 !docs/figures/*.png

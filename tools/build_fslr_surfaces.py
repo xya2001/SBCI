@@ -79,7 +79,7 @@ print(f"  wrote 6 .surf.gii files to {OUT}")
 print("\n=== the seed, on both grids ===")
 import sys
 
-sys.path.insert(0, "/nas/longleaf/home/xya/sbci/src")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 from sbci import ContinuousConnectome
 from sbci.io.cifti import transfer
 

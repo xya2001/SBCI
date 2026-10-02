@@ -78,3 +78,11 @@ def test_compose_lays_out_rows_and_a_colorbar():
     figure = render.compose(images, ("lateral", "medial"), "Blues", 0.0, 1.0)
     assert len(figure.axes) == 3  # two panels and one colorbar
     matplotlib.pyplot.close(figure)
+
+
+def test_colour_thresholds_a_negative_map_by_magnitude_as_nilearn_does():
+    values = -np.linspace(0.05, 1.0, 10)
+    grey = np.full(10, 0.7)
+    rgb = render.colour(values, grey, "coolwarm", -1.0, 0.0, threshold=0.1, symmetric=False)
+    shown = ~np.all(rgb == grey[:, None], axis=1)
+    assert shown.tolist() == [False] + [True] * 9

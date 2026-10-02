@@ -19,10 +19,11 @@ bash scripts/verify_all.sh            # tiers 1 and 2
 bash scripts/verify_all.sh --matlab   # also regenerate the MATLAB references
 ```
 
-It runs every tier available in your environment and prints PASS, FAIL or SKIP
-per stage. **A SKIP is not a pass** -- the summary lists what each skipped stage
-needs. On a machine with the toolkit, the example subject and MATLAB output
-present, expect `8 passed, 0 failed, 0 skipped`.
+It runs the automated tiers, 1, 2 and 4 (tier 3's checks against lab data are
+run by hand), and prints PASS, FAIL or SKIP per stage. **A SKIP is not a pass**
+-- the summary lists what each skipped stage needs. On a compute node with the
+young adult download, the toolkit and the MATLAB output present, expect
+`8 passed, 0 failed, 0 skipped`.
 
 The tiers below explain what each stage proves, and are worth reading before
 trusting the summary.
@@ -34,8 +35,8 @@ git clone <this repository> && cd sbci
 python -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
 
-python -m pytest -q                 # expect: everything passes; ~24 skip without the lab data
-ruff check . && ruff format --check src tests
+python -m pytest -q                 # expect: everything passes; 33 skip with every extra installed, more without (below)
+ruff check . && ruff format --check src tests scripts tools
 python -m build --wheel
 ```
 
@@ -48,10 +49,17 @@ and the statistics in `stats.py`.
 **What it does not prove.** Nothing here compares against the original MATLAB.
 A port can be self-consistent and still wrong; that is what Tier 4 is for.
 
-The skips are `tests/test_five_minute_start.py`, which downloads the released
-tutorial subject only when asked, and the MATLAB comparisons in
-`tests/test_matlab_reference.py`, which need the Tier 4 reference dumps. With a
-network connection, two more checks run on the released young adults:
+The skips, and what turns each on: `tests/test_five_minute_start.py` (three
+tests) downloads the released tutorial subject only with `SBCI_DOWNLOAD=1`, or
+reads it from `SBCI_HCP_DIR`; the MATLAB comparisons in
+`tests/test_matlab_reference.py` (22) need the Tier 4 reference dumps, named
+by the `SBCI_*` paths at the top of that file; the planted-answer analysis on
+the ico4 grid in `tests/test_example.py` (three minutes of FPCA) runs with
+`SBCI_SLOW_TESTS=1`, which CI's `render` job sets; seven doctest items are
+whole examples marked `+SKIP`; and without the plotting and render extras the
+figure tests in `tests/test_surface.py`, `test_plot_mesh.py` and
+`test_render.py` skip as well. With a network connection, two more checks run
+on the released young adults:
 
 ```bash
 SBCI_DOWNLOAD=1 python -m pytest tests/test_five_minute_start.py   # the brief's acceptance lines on sub-100307, 90 MB
@@ -88,7 +96,8 @@ git clone https://github.com/sbci-brain/SBCI_Pipeline
 git clone https://github.com/sbci-brain/ConCon_Alignment
 git clone https://github.com/sbci-brain/SBCI_Modeling_FPCA
 
-export SBCI_TOOLKIT=$PWD/SBCI_Toolkit
+sbci download hcp-ya --out hcp-ya          # the eleven released subjects, about 1 GB
+export SBCI_TOOLKIT=$PWD/SBCI_Toolkit SBCI_HCP_DIR=$PWD/hcp-ya
 python scripts/audit_api.py
 ```
 
@@ -96,10 +105,12 @@ python scripts/audit_api.py
 young adults, in the order a user would: load, save, parcellate, seed,
 couple structure with function, plot, export, validate, download, smooth,
 reduce, test, align with ENCORE and
-ConSEAL, and carry a warp to fs_LR (its data paths are set at the top of the
-script, for Longleaf). It prints a value for each and exits non-zero if any
-fails. Expect `17 passed, 0 failed, 0 skipped`. It smooths, reduces and
-aligns on the full grid, so run it inside a batch job.
+ConSEAL, and carry a warp to fs_LR: 17 checks (the synthetic example,
+`sbci info` and `sbci atlases` are covered by the unit tests instead). Its
+paths default to the lab's on Longleaf and follow `SBCI_HCP_DIR` and
+`SBCI_TOOLKIT`. It prints a value for each and exits non-zero if any fails.
+Expect `17 passed, 0 failed, 0 skipped`. It smooths, reduces and aligns on
+the full grid, so run it inside a batch job.
 
 **What this proves.** The documented API works end to end on a real subject,
 not only on fixtures.
@@ -112,20 +123,11 @@ Two checks need more than one subject.
 
 **Alignment must make subjects more alike.** A registration can run, reduce its
 own cost, and leave the cohort no more similar than before — which would make it
-useless. `scripts/align_hcp_cohort.py` measures mean pairwise correlation
-between subjects before and after. **Note the grid:** the lab's HCP
-test-retest tensors exist only on the retired 4121-vertex `0.94` grid, so that
-script is not an ico4 result and should not be read as one. The ico4 check is
-`tests/reference/align_adni_ico4.py`, on the five ADNI subjects the pipeline
-produced on ico4; its result is recorded below the HCP one. On eight HCP
-subjects from `sbci_sc_tensor_1.mat` (4121-vertex grid):
-
-```
-before 0.831207   after 0.854531   change +0.023323
-warps: every Jacobian strictly positive, vertices moved 0.67-2.23 deg on average
-```
-
-On the five ADNI subjects on **ico4** (`tests/reference/align_adni_ico4.py`):
+useless. `tests/reference/align_adni_ico4.py` measures mean pairwise
+correlation between subjects before and after, on the five ADNI subjects the
+pipeline produced on ico4 (an earlier check on the lab's HCP test-retest
+tensors, which exist only on the retired 4121-vertex grid, gave +0.023; that
+script was retired with the grid). On the five:
 
 ```
 before 0.737617   after 0.781972   change +0.044354   (min pair 0.682 -> 0.720)
@@ -141,6 +143,27 @@ Re-run it on a different cohort. **The correlation must go up and every
 Jacobian must stay positive**; a negative Jacobian means the warp has folded and
 the result is not a diffeomorphism.
 
+**What reproduces bit for bit, and across which machines.** The heavy
+methods' outputs on the released subjects (parcellation, coupling, seeding,
+smoothing, `reduce` on four subjects, ENCORE and ConSEAL on two) were recorded
+four times on the cluster, before and after the October review's changes. On
+nodes whose BLAS runs the same instruction set, every array is identical run
+to run and across the change: the AVX2 nodes (EPYC 7702 and 7763) agree with
+each other on all of them, and the AVX-512 nodes (Intel Gold 6140 and EPYC
+9654) agree with each other to one ULP on one explained-variance value.
+Between the two groups the rounding differs and the methods differ as their
+arithmetic allows: parcellation, coupling, seeding and smoothing still bit for
+bit (FC parcellation to 5.6e-17); `reduce` to 1.4e-16 on the basis; ENCORE to
+5e-16 on the aligned densities and 5e-8 on the warp's vertices after ten
+iterations. ConSEAL on two subjects without `template=` landed its Karcher
+median on subject 0 in one group and on subject 1 in the other, since the
+median of two points is any point between them and rounding decides; its cost
+traces and warps are therefore comparable across machines only with
+`template=` given or a third subject in the cohort. A verifier comparing
+against the numbers in these documents should expect rounding-level
+differences on other hardware, and exact agreement only on the same
+instruction set.
+
 **The exchange file must survive a round trip.**
 `scripts/write_exchange_file.py` writes the 16.9 GB `.dconn.nii`, reads it back
 with plain `nibabel`, and checks that the area-weighted unit mass survives and
@@ -148,8 +171,8 @@ that parcellating the fsLR file with the pipeline's *own* fsLR annotation
 reproduces the ico4 region matrix. Needs about 25 GB of memory.
 
 ```
-unit mass 1.00000000002 -> 0.999999999908   (1.1e-10)
-Desikan on fsLR against ico4: r = 0.999729
+unit mass 0.999999999985 -> 0.999999999876   (1.1e-10)
+Desikan on fsLR against ico4: r = 0.999642
 ```
 
 Open the result in Connectome Workbench as the final word:
@@ -163,9 +186,11 @@ wb_command -file-information <the .dconn.nii>
 
 ## Tier 4 — with MATLAB, the real verification
 
-This is the tier that decides whether the ports are right. Everything in
-`tests/reference/` regenerates a MATLAB reference; the tests then diff against
-it and skip if it is absent.
+This is the tier that decides whether the ports are right. The `*_reference.m`
+scripts in `tests/reference/` regenerate the MATLAB references and the tests
+diff against them, skipping if they are absent; the other files there are
+hand-run probes against lab data, and PORTING.md says which measurement each
+made.
 
 ```bash
 module load matlab/2023b
@@ -178,10 +203,12 @@ matlab -batch "run('seed_reference.m')"        # seed rows and a region marginal
 matlab -batch "run('encore_reference.m')"      # ENCORE, every intermediate
 python fpca_make_inputs.py                      # shared inputs for FPCA
 matlab -batch "run('fpca_reference.m')"        # ConConBasis.Fit
+matlab -batch "run('conseal_reference.m')"     # ConSEAL, six iterations on the author's example
+python conseal_compare.py                       # diffs the port against it (the ConSEAL row below)
 
 export SBCI_MATLAB_REFERENCE=... SBCI_ENCORE_REFERENCE=... SBCI_FPCA_REFERENCE=...
 export SBCI_EXAMPLE_SC=... SBCI_DERIVATIVES=...
-python -m pytest tests/test_matlab_reference.py -v    # expect 23 passed
+python -m pytest tests/test_matlab_reference.py -v    # expect 22 passed
 ```
 
 Expected agreement, and what to reject:
@@ -246,10 +273,11 @@ none does (0.064).
 
 **The spherical kernel ships, and is verified against the binary itself.**
 `kernel="shk"` is the default by the WP1 decision and it works. It reproduces
-`c3_main` at **r = 1.000000** across all five ADNI subjects under
-`/overflow/zzhanglab/ADNI/ADNI-bids/` that carry both the input `c3_main` was
-fed and the matrix it wrote, with the scale factor at 1.000000 and nothing
-fitted (0.99858 for the closed-form series, `quantized=False`). The kernel was read from `concon`'s source -- public MIT code, named by
+`c3_main` at **r = 1.000000** over all 13,125,126 pairs at full scale on
+`sub-168S6561`, the ADNI subject under `/overflow/zzhanglab/ADNI/ADNI-bids/`
+whose input to `c3_main` and output from it were both kept, with the scale
+factor at 1.000000 and nothing fitted (0.99858 for the closed-form series,
+`quantized=False`). The kernel was read from `concon`'s source -- public MIT code, named by
 the binary's debug info -- and confirmed by running `c3_main` on a single
 streamline so that its output is the kernel: `tests/reference/concon_probe.py`
 regenerates that measurement, and `tests/test_smoothing.py` pins the kernel to
@@ -258,14 +286,17 @@ the binary's own numbers at rms 0.0005.
 One residual remains: 0.071% more non-zero pairs, where one ULP in a dot
 product moves a vertex across the kernel cutoff (PORTING.md item 6). The 0.14%
 amplitude offset an earlier version carried was the binary's lookup-table quantization
-and is reproduced. A reviewer can re-run the five-subject comparison from
-PORTING.md item 6; it needs the lab data and about a minute per subject.
+and is reproduced. A reviewer can re-run the comparison from PORTING.md item 6
+(*Full scale*); it needs the lab data and about a minute. The other four ADNI
+subjects with pipeline output on ico4 were checked for unit mass and used for
+the alignment check, not for a second full-scale kernel comparison.
 
 
 **The format is a draft.** `SPEC_VERSION` is `0.1.0-draft` and
-`SPEC_QUESTIONS.md` lists what is unratified. Two of those questions — the
-triangle and diagonal conventions in `parcellate_sc.m` — change every published
-region matrix. Files written before they are settled may need rewriting.
+`SPEC_QUESTIONS.md` lists what is unratified; PORTING.md item 3 records the
+one divergence that changes every published region matrix, the triangle and
+diagonal conventions of `parcellate_sc.m`. Files written before these are
+settled may need rewriting.
 
 **The young adults' FC is built here, not by the pipeline.** The lab's copy
 of the cohort holds no pipeline FC, so the FC files of the eleven, and of the

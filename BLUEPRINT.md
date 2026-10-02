@@ -6,8 +6,9 @@ order the rest should be built in, and which decisions are holding it up.
 
 ## What this document asks of you
 
-Most of the remaining work needs no input. **Five decisions do**, and they are
-listed in section 9 with an owner and an estimated lead time against each.
+Most of the remaining work needs no input. **Seven decisions do** (one of them
+answered since), and they are listed in section 9 with an owner and an
+estimated lead time against each.
 Annex A gives each one in full, with the evidence and a recommendation.
 
 One of the five had to come from outside this work, and the project's
@@ -88,7 +89,7 @@ checks it end to end.
 | Line | Status | Waiting on |
 | --- | --- | --- |
 | install the package | wheel builds, installs clean, imports elsewhere | publishing to PyPI; the name is free |
-| download a subject | implemented: `sbci download hcp-ya` (eleven HCP Young Adult subjects, SC with endpoints) from the lab's public Google Drive; verified by manifest, with the HCP's terms written beside the files | — (Q6 decided: ten young adults, hosted by the lab) |
+| download a subject | implemented: `sbci download hcp-ya` (eleven HCP Young Adult subjects, SC with endpoints and FC) from the lab's public Google Drive; verified by manifest, with the HCP's terms written beside the files | — (Q6 decided: the young adults, hosted by the lab) |
 | load a connectome | works, validated on real data | — |
 | aggregate to an atlas | works, exactly 200×200 on real data | — |
 | take a seed profile | works | — |
@@ -133,7 +134,7 @@ src/sbci/
   surface.py       bundled meshes
   plotting.py      surface figures
   validate.py      the checks behind `sbci validate`
-  cli.py           `sbci download` / `sbci validate`
+  cli.py           `sbci download` / `validate` / `info` / `example` / `atlases`
 ```
 
 **Design rules that have earned their place.** The specification lives in one
@@ -164,9 +165,9 @@ under `/work/users/x/y/xya/`.
 - Riemannian kernel smoothing — 4.4 s per subject, against a WP3 target of
   60 s and the current pipeline's 2–8 hours
 - Structure–function coupling, all three forms
-- Coupling reproduces the known biology: highest in lateral occipital and
-  cuneus, lowest in posterior cingulate and insula, with left and right
-  agreeing to 0.002 although nothing in the code enforces it
+- Coupling reproduces the known biology on the eleven young adults: highest
+  in the pericalcarine, cuneus and lateral occipital cortex, lowest in the
+  cingulate and entorhinal cortex (PORTING.md item 2)
 
 **Built since this section was first written:** the spherical heat kernel
 (PORTING.md item 6, r = 1.000000 at full scale), FPCA (item 5), ENCORE (item 4),
@@ -270,8 +271,8 @@ and the format version keeps its `-draft` suffix.
 **Then, in dependency order:**
 
 1. **The spherical kernel**, which the Q10 decision makes the default -- now
-   **done**. It reproduces `c3_main` at r = 1.000000 across five ADNI
-   subjects. The residual recorded here for months as "a normalization or
+   **done**. It reproduces `c3_main` at r = 1.000000 at full scale on a
+   pipeline subject. The residual recorded here for months as "a normalization or
    sampling convention" was neither: `concon`'s kernel is not the heat kernel,
    its weight is `(2l+1)^(3/2)/sqrt(4 pi)` and it has compact support, both
    read from its source once the binary was found to run. The naming the
@@ -289,7 +290,7 @@ nothing and prevents an awkward rename later.
 | Risk | Consequence | Mitigation |
 | --- | --- | --- |
 | ~~Q6 answers "credentials required"~~ | resolved | the young adult open-access terms allow derived data to be redistributed under the same terms; eleven subjects are public |
-| ~~the spherical kernel port does not reproduce the released files~~ | resolved | r = 1.000000 and scale 1.000000 against `smoothed_sc_avg_0.005_ico4.mat` on five subjects (PORTING.md item 6) |
+| ~~the spherical kernel port does not reproduce the released files~~ | resolved | r = 1.000000 and scale 1.000000 against `smoothed_sc_avg_0.005_ico4.mat` at full scale (PORTING.md item 6) |
 | Q2 flips to "include the diagonal" | every released file must be rewritten | freeze before the first release, not after |
 | Q3/Q9 picks the plain sum | the legacy importer normalizes wrongly | decide before importing a cohort |
 | a cohort mixes the two kernels | the files are silently incomparable | metadata records which was used; a cohort-level check that refuses a mix is still to be written |
@@ -305,10 +306,15 @@ nothing and prevents an awkward rename later.
 | 2 | Diagonal in the stored triangle | WP1 owner | minutes |
 | 3/9 | Which normalization | WP1 owner | minutes |
 | 7 | Copyright holder for the licence | PI | minutes |
+| 13 | Which face list the stored triangle indices refer to (SPEC_QUESTIONS.md item 13: answered, to be written into the spec) | WP1 owner | minutes |
+| 14 | Whether a re-smoothed file must carry nothing on the medial wall (SPEC_QUESTIONS.md item 14) | WP1 owner | minutes |
 
-Four of these are minutes of discussion; the fifth, Q6, is answered.
-Everything not listed here needs no decision — it is engineering work, already
-scoped.
+Six of these are minutes of discussion; Q6 is answered. PORTING.md records
+three divergences from the references that want WP1's sign-off as well:
+ENCORE's step tolerance `delta=1e-5` (item 4), where each FPCA component
+starts (item 5) and the triangle and diagonal conventions of parcellation
+(item 3). Everything not listed here needs no decision — it is engineering
+work, already scoped.
 
 [[pagebreak]]
 
@@ -373,16 +379,19 @@ institutional holder before the first tagged release.
 
 ### Tier 3 — no decision needed; engineering work, already scoped
 
-**Q4. The ico4 to fsLR-32k resampling.** — **Done.**
-Built, bundled and verified; see the note below and SPEC_QUESTIONS.md item 4.
+**Q4. The ico4 to fsLR-32k resampling.** — **Done**, with one ratification
+left: the exchange file's grayordinate convention and size (SPEC_QUESTIONS.md
+item 4). Built, bundled and verified; see the note below.
 
 **Q8. The format carries no endpoints.** -- **Decided and built.** Endpoints
 now live in the computational file itself, as an optional `/endpoints` group,
 rather than in a sibling: a connectome and the streamlines it was built from
 then cannot be separated or versioned apart. On sub-100307 they add 22.2 MB
 to a 28.0 MB file, and the group is optional so most users carry none.
-`.smooth()` works from them for `rdk` and `matern`; the Laplace-Beltrami basis
-is 50 MB per hemisphere and is passed in rather than bundled.
+`.smooth()` works from them for all three kernels; `shk` needs nothing else,
+and the Laplace-Beltrami basis the other two need is 50 MB per hemisphere and
+is passed in rather than bundled, where it is distributed from being the open
+part of SPEC_QUESTIONS.md item 8.
 
 **Q11. No anatomical surface could be drawn.** — **Resolved.** The surfaces
 are rebuilt from fsaverage directly, as the mean position over each grid

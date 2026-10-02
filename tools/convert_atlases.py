@@ -3,7 +3,8 @@
 Run once, commit the output. The release must not depend on a MATLAB step or on
 a checkout of SBCI_Toolkit being present.
 
-    python tools/convert_atlases.py --source <SBCI_Toolkit>/example_data/fsaverage_label
+    python tools/convert_atlases.py --source <SBCI_Toolkit>/example_data/fsaverage_label \
+        --dest src/sbci/data/atlases
 
 Input
 -----

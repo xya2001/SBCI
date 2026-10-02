@@ -1,7 +1,8 @@
 # Using the package
 
-Everything below is live: `scripts/tour.py` runs all of it and prints the
-output quoted here.
+Everything below is live. `scripts/tour.py` runs the single-subject sections,
+*Loading* through *The kernel maths*, and prints the output quoted there; the
+cohort sections quote batch jobs whose output PORTING.md records.
 
 ## Setup anywhere
 
@@ -15,8 +16,9 @@ below runs on the released HCP Young Adult subjects: `sbci download hcp-ya
 --out hcp-ya` fetches all eleven, their SC and FC (about 1 GB), and
 `--subject` one of them. The paths quoted are the lab's copies on the
 Longleaf cluster, so substitute yours. The `rdk` and `matern` kernels need the
-Laplace-Beltrami basis, two files from `SBCI_Toolkit/concon_estimate`; *Storing
-endpoints, and re-smoothing from them* says where to put them.
+Laplace-Beltrami basis, two files (`EV_LBO_ds_ico4_{L,R}.mat`) from
+[SBCI_Toolkit](https://github.com/sbci-brain/SBCI_Toolkit)'s `concon_estimate`;
+*Storing endpoints, and re-smoothing from them* says where to put them.
 
 ## Setup on Longleaf
 
@@ -63,9 +65,9 @@ On Longleaf the lab's copy of the download is already there:
 Every file passes every validator check. To convert other pipeline output,
 use `tools/import_legacy.py`.
 
-> Every path below is literal and copy-pasteable. If you see a
-> `FileNotFoundError` mentioning `...`, an ellipsis placeholder was pasted as a
-> real path.
+> Paths under `/work/users/x/y/xya/`, `/overflow/zzhanglab/` and `/proj/STOR/`
+> are the lab's copies on Longleaf, to be substituted; everything else is
+> literal and copy-pasteable.
 
 ## Getting the example cohort
 
@@ -74,8 +76,8 @@ streamline endpoints and an FC file from the HCP's resting state: sub-100307,
 the subject the package brief's acceptance
 test names, and ten drawn at random, five women and five men, from the 946
 with complete pipeline output in the lab's copy. They were rebuilt on the ico4 grid from
-the SBCI pipeline's output by `tools/build_hcp_cohort.py --layout
-young-adult` and are hosted on a public Google Drive ([the
+the SBCI pipeline's output by `tools/build_hcp_cohort.py` and are hosted
+on a public Google Drive ([the
 folder](https://drive.google.com/drive/folders/1gG2ZmxxVm4w5dvlCQvMaEEOBypU7nDpx)).
 The FC comes from the HCP's cleaned resting-state runs, through
 `tools/build_hcp_fc.py` (*Functional connectivity from the HCP's resting
@@ -113,64 +115,6 @@ requested subjects need and resuming an interrupted one
 (`tools/bundle_hcp_cohort.py` writes them). No cohort is released that way at
 present.
 
-
-## Functional connectivity from the HCP's resting state
-
-`tools/build_hcp_fc.py` builds each FC file from the HCP's own processing: the
-four ICA-FIX-cleaned resting-state runs,
-`rfMRI_REST{1,2}_{LR,RL}_Atlas_hp2000_clean.dtseries.nii`, each 1,200 frames
-of 0.72 s on the 32k fs_LR surface.
-
-```bash
-python tools/build_hcp_fc.py --manifest manifest.csv \
-    --fmri /proj/STOR/zz10c/HCP_fMRI --fmri more_runs/ \
-    --spheres /overflow/zzhanglab/encore_project/encore_paper_code/prediction_subs \
-    --fslr fslr/ --mapping mapping_avg_ico4.npz --out hcp-ya-fc
-```
-
-**Where each vertex goes.** The SC files place streamline endpoints through
-the subject's FreeSurfer registration (`?h.sphere.reg`); the HCP's time series
-reach the fs_LR mesh through another one, MSMSulc. So each 32k vertex is
-carried back to the subject's own surface through its MSMSulc sphere, forward
-through its FreeSurfer sphere, and into the grid cell of the nearest fsaverage
-vertex. SC and FC are then compared at the same place, which coupling needs.
-For sub-100307 the cells are compact: in the median cell every member lies
-within 2.4 degrees of its grid vertex (3.3 at the 95th percentile), against a
-grid spacing of about 4, and two 32k vertices of one cell correlate in time at
-a median 0.65, against 0.009 for two at random. One of the 972 subjects in the
-lab's copy, sub-103010, has FreeSurfer surfaces on a different mesh from the
-HCP's native one (147,746 vertices on the left against 147,449); it goes
-through the two white surfaces instead (`--crossmesh`). Run on sub-100307,
-where both routes apply, that one puts 91% of the 32k vertices in the same
-cell as the exact route, 0.24 degrees from it at the median.
-
-**What the FC is.** What the SBCI pipeline computes
-(`calculate_residual_timeseries.py`, `calculate_fc.py`), as far as these data
-allow. ICA-FIX has already removed the motion, white-matter and CSF artefacts
-the pipeline regresses out; each run then has a constant, a linear trend and
-the global signal (the mean over all grayordinates) regressed out. A grid
-vertex's series is the mean of its cell's 32k vertices; a few cortical grid
-vertices at the medial wall's edge, where the HCP's mask and the grid's
-differ, have none and take the nearest. Each run's series are z-scored, the
-runs concatenated, and the FC is the Pearson correlation between grid
-vertices, with the diagonal one and the medial wall zero. Each file records
-its runs, frames and nuisance model.
-
-At the grid's resolution these full-band data are noisy: single grid vertices
-correlate weakly, and the default network stands out once they are pooled
-into regions. Band-passing to 0.01 to 0.1 Hz, which the pipeline does not do,
-strengthens every measure:
-
-| sub-100307 | full band, as released | `--bandpass 0.01 0.1` |
-| --- | --- | --- |
-| grid: spread of the correlations (sd) | 0.052 | 0.131 |
-| grid: neighbouring vertices | 0.27 | 0.43 |
-| grid: a vertex and its mirror image (homotopic) | 0.10 | 0.25 |
-| Desikan regions: homotopic pairs | 0.38 | 0.54 |
-| left isthmus cingulate seed: precuneus, inferior parietal, medial orbitofrontal | 0.46, 0.36, 0.31 | 0.67, 0.49, 0.49 |
-
-The released files follow the pipeline and are not band-passed. `--no-gsr`
-keeps the global signal.
 
 ## Loading
 
@@ -345,8 +289,8 @@ sbci validate sub-copy_sc.h5
 ```
 
 ```
-[PASS] readable    [PASS] metadata     [PASS] grid    [PASS] symmetry
-[PASS] nonnegativity    [PASS] unit mass    [PASS] mask
+[PASS] readable    [PASS] metadata    [PASS] grid    [PASS] symmetry    [PASS] finite
+[PASS] nonnegativity    [PASS] area    [PASS] unit mass    [PASS] mask
 ```
 
 Exit status 0 means every check passed. `save()` validates before writing, so a
@@ -462,8 +406,8 @@ reproduces the reference kernel only to r = 0.94.
 reference run used to within 5e-08. Both are asserted in
 `tests/test_matlab_reference.py`.
 
-`kernel="shk"`, the default, reproduces `c3_main` at **r = 1.000000** across
-five ADNI subjects, with the scale factor at 1.000000 and nothing fitted
+`kernel="shk"`, the default, reproduces `c3_main` at **r = 1.000000** at full
+scale on a pipeline subject, with the scale factor at 1.000000 and nothing fitted
 (0.99858 with the closed-form series, `quantized=False`). The kernel is not
 the heat kernel its name suggests: `concon` compounds a `(2l+1)` weight with a
 normalized spherical harmonic, giving `(2l+1)^(3/2)`, and it has compact
@@ -494,84 +438,6 @@ streamlines and in the whole set, and the smoothed density of the same vertex
 from each. Only 32 and 26 streamlines touch the vertex in the two halves, so
 their raw counts agree across the cortex at r = 0.41; smoothed they agree at
 r = 0.99, and half A matches the map from all streamlines at r = 1.00.*
-
-## The cohort, end to end
-
-The example subjects show the alignments. The question of an association
-goes to all 946 HCP Young Adult subjects with complete pipeline output, which
-are not distributed; `tools/build_hcp_cohort.py --layout young-adult` builds
-them from the pipeline's output for anyone with HCP access. Sex, the age band
-and fluid intelligence come from the HCP's open-access table, and the age
-band enters as its midpoint. The 946 are not independent: they come from 423
-families of twins and siblings, and family membership comes from the HCP's
-restricted table, which has its own data use agreement.
-
-```python
-import csv
-from pathlib import Path
-import numpy as np
-import sbci
-from sbci.download import fetch_cohort
-
-paths = fetch_cohort(out="hcp-ya", modalities=["sc"])      # the eleven's SC, 560 MB
-subjects = [sbci.load(p) for p in paths]
-
-# ENCORE on the densities: ten minutes on eight cores for the eleven
-alignment = sbci.align(subjects, max_iterations=10)
-alignment.aligned[0]                                       # subject 1's warped density, dense
-# ConSEAL on the endpoints (two hours; see the ConSEAL notes on its template)
-registration = sbci.endpoints_align(subjects, max_iterations=30)
-for i, cc in enumerate(subjects):
-    cc.endpoints = registration.aligned_endpoints(i)
-aligned = [cc.smooth(kernel="shk", mask_medial_wall=True) for cc in subjects]
-
-# the association, on the 946: a batch job with 230 GB of memory
-table = {f"sub-{r['Subject']}": r for r in csv.DictReader(open("unrestricted.csv"))}  # the HCP's open-access table
-family = {f"sub-{r['Subject']}": r["Family_ID"] for r in csv.DictReader(open("RESTRICTED.csv"))}  # restricted
-cohort = [p.name.split("_")[0] for p in sorted(Path("hcp-ya-full").glob("sub-*_sc.h5"))]
-cohort = [s for s in cohort if table[s]["PMAT24_A_CR"]]    # those with a score
-files = [f"hcp-ya-full/{s}_sc.h5" for s in cohort]
-reduction = sbci.reduce(files, rank=20)                    # FPCA, one file at a time
-rows = [table[s] for s in cohort]
-score = np.array([float(r["PMAT24_A_CR"]) for r in rows])  # fluid intelligence
-female = np.array([r["Gender"] == "F" for r in rows], dtype=float)
-band = np.array([{"22-25": 23.5, "26-30": 28, "31-35": 33, "36+": 37}[r["Age"]] for r in rows])
-count = np.array([sbci.load(f).metadata["streamline_count"] for f in files]) / 1e6
-design = np.column_stack([score, female, band, count])
-groups = [family[s] for s in cohort]
-result = sbci.local_test(reduction.scores, design, terms=[1], groups=groups)
-result.significant()                                       # components tracking the score, given the rest
-sex = sbci.local_test(reduction.scores, design, terms=[2], groups=groups)
-effect = sex.effect_map(reduction, alpha=0.05)             # one value per vertex, significant components only
-sbci.load(files[0]).plot(effect, mesh="fsaverage", engine="pyvista")
-```
-
-`terms=[1]` tests the score column only: column 0 is the intercept the test
-adds, and columns 2 to 4, sex, the age band and the streamline count, stay in
-the model as nuisance; `terms=[2]` tests sex the same way. `groups=` makes the
-families the units of the test (*Testing scores against a covariate*, below).
-On the 943 with a score, no component of the twenty tracks fluid intelligence once the families
-are clusters: the closest, component 13, has r = 0.11 and adjusted p 0.064.
-Counted as 943 independent subjects, the same component passes at 0.023,
-which is the error `groups=` is there to prevent. Sex shows in 11 of the
-twenty, the strongest at adjusted p 2e-8; the README shows where. The rank
-matters as well: a rank-4 fit comes nowhere near for fluid intelligence
-(smallest adjusted p 0.32), because the largest differences between these
-subjects lie elsewhere (PORTING.md item 5).
-
-**Running it on Longleaf.** `reduce` holds the cohort once, as one dense
-float64 array, 199 GB for 946 subjects. Given paths, or a sequence whose items
-are loaded when indexed, it reads one subject at a time, so the files need not
-be held as well. The fit of the 943 peaked at 196 GiB; ask for 230 GB. Ask for
-the cores as one task, `--ntasks=1 --cpus-per-task=8`: with eight one-CPU
-tasks the cluster sets `OMP_NUM_THREADS=1`, and the linear algebra then runs
-on one core. With eight threads the rank-20 fit of the 943 took five and a
-half hours, loading included.
-
-The pipeline is checked against a planted answer on a synthetic cohort
-(`sbci.example_cohort()`, one bundle scaled by a synthetic age) in PORTING.md
-items 5 and 7: what more anatomical variation does, what aligning first does
-to the analysis, and which solver start reaches the planted component.
 
 ## Reducing a cohort to a handful of numbers
 
@@ -659,7 +525,8 @@ families, not dozens. In simulated cohorts with no association, families of
 one to four sharing both the covariate and the scores, a test at 0.05 that
 ignores the families rejects 16% of the time; with them as clusters it
 rejects 9.7% of the time with 20 families, 6.7% with 50, 6.0% with 100 and
-5.1% with 422, the number in the HCP analysis (`tools/clustered_null.py`).
+5.1% with 422, the number of families among the 943 young adults with a
+fluid-intelligence score (`tools/clustered_null.py`).
 `permutations=` with `groups=` is refused: shuffling subjects between
 families of different make-up, twins against siblings, is not exchangeable.
 
@@ -730,7 +597,8 @@ Three things to know before trusting the numbers:
   subjects is the first step: it returns the identity having done nothing. The
   port halves the step up to `backtracks=4` times first, and on a known
   one-degree deformation undoes 59% of it where the reference undoes none
-  (PORTING.md item 4); `backtracks=0` reproduces the reference.
+  (PORTING.md item 7, *Measured on a known deformation*); `backtracks=0`
+  reproduces the reference.
 
 ## Aligning by endpoints (ConSEAL)
 ENCORE moves a smoothed density. ConSEAL moves the streamline endpoints
@@ -762,8 +630,9 @@ Two of the released subjects will do to see it run:
 `sbci.endpoints_align([sbci.load(a), sbci.load(b)], max_iterations=5)` with
 two of the released SC files takes a few minutes on four cores, and both costs
 fall at every step.
-**This is a batch job too**, though a lighter one: the heat kernel at the
-published bandwidth has 89 nonzeros per row on ico4, so an iteration costs
+**This is a batch job too**, though a lighter one: ConSEAL's heat kernel at
+the paper's bandwidth has 89 nonzeros per row on ico4 (the `shk` smoother
+visits about 31), so an iteration costs
 seconds per 100,000 streamlines rather than minutes. Six things to know:
 - **The defaults are the public code's, not the paper's.** Step 0.05, up to
   100 iterations, threshold 1e-4, a 0.2 clamp on the largest displacement and
@@ -793,7 +662,9 @@ seconds per 100,000 streamlines rather than minutes. Six things to know:
   this happens at three degrees of anatomical spread (every subject 10 to 11 Fisher-Rao degrees
   from the mean) and not at two, and it happens on the eleven released young
   adults: the median lands 0.001 degrees from sub-212116 and 24 to 27 from the
-  others, while every subject is 17 to 20 degrees from the mean. Pass `template=` a subject index or a
+  others, while every subject is 17 to 20 degrees from the mean. With two
+  subjects the median is any point between them, so rounding decides which
+  one it lands on, and two machines can decide differently. Pass `template=` a subject index or a
   precomputed square-root density -- the normalized mean of the subjects'
   `q_transform(kernel)` arrays, for one -- to choose.
 - **The paper's unregularized update onto one subject can align away a real
@@ -816,8 +687,86 @@ degree-6 basis, brings the endpoints back from 1.63 to 0.20 degrees in ten
 steps; ConSEAL with the paper's update (`delta=0.1, step_clamp=inf,
 viscosity=0`) and a stopping threshold of 1e-7 to 0.11 degrees in sixty. The
 reference has to go through the same smoother as the deformed copy, and the
-warp has to be one a smoothed density can see; PORTING.md item 4 shows what
+warp has to be one a smoothed density can see; PORTING.md item 7 shows what
 happens otherwise.*
+
+## The cohort, end to end
+
+The example subjects show the alignments. The question of an association
+goes to all 946 HCP Young Adult subjects with complete pipeline output, which
+are not distributed; `tools/build_hcp_cohort.py` builds
+them from the pipeline's output for anyone with HCP access. Sex, the age band
+and fluid intelligence come from the HCP's open-access table, and the age
+band enters as its midpoint. The 946 are not independent: they come from 423
+families of twins and siblings, and family membership comes from the HCP's
+restricted table, which has its own data use agreement.
+
+```python
+import csv
+from pathlib import Path
+import numpy as np
+import sbci
+from sbci.download import fetch_cohort
+
+paths = fetch_cohort(out="hcp-ya", modalities=["sc"])      # the eleven's SC, 560 MB
+subjects = [sbci.load(p) for p in paths]
+
+# ENCORE on the densities: ten minutes on eight cores for the eleven
+alignment = sbci.align(subjects, max_iterations=10)
+alignment.aligned[0]                                       # subject 1's warped density, dense
+# ConSEAL on the endpoints (two hours; see the ConSEAL notes on its template)
+registration = sbci.endpoints_align(subjects, max_iterations=30)
+for i, cc in enumerate(subjects):
+    cc.endpoints = registration.aligned_endpoints(i)
+aligned = [cc.smooth(kernel="shk", mask_medial_wall=True) for cc in subjects]
+
+# the association, on the 946: a batch job with 230 GB of memory
+table = {f"sub-{r['Subject']}": r for r in csv.DictReader(open("unrestricted.csv"))}  # the HCP's open-access table
+family = {f"sub-{r['Subject']}": r["Family_ID"] for r in csv.DictReader(open("RESTRICTED.csv"))}  # restricted
+cohort = [p.name.split("_")[0] for p in sorted(Path("hcp-ya-full").glob("sub-*_sc.h5"))]
+cohort = [s for s in cohort if table[s]["PMAT24_A_CR"]]    # those with a score
+files = [f"hcp-ya-full/{s}_sc.h5" for s in cohort]
+reduction = sbci.reduce(files, rank=20)                    # FPCA, one file at a time
+rows = [table[s] for s in cohort]
+score = np.array([float(r["PMAT24_A_CR"]) for r in rows])  # fluid intelligence
+female = np.array([r["Gender"] == "F" for r in rows], dtype=float)
+band = np.array([{"22-25": 23.5, "26-30": 28, "31-35": 33, "36+": 37}[r["Age"]] for r in rows])
+count = np.array([sbci.load(f).metadata["streamline_count"] for f in files]) / 1e6
+design = np.column_stack([score, female, band, count])
+groups = [family[s] for s in cohort]
+result = sbci.local_test(reduction.scores, design, terms=[1], groups=groups)
+result.significant()                                       # components tracking the score, given the rest
+sex = sbci.local_test(reduction.scores, design, terms=[2], groups=groups)
+effect = sex.effect_map(reduction, alpha=0.05)             # one value per vertex, significant components only
+sbci.load(files[0]).plot(effect, mesh="fsaverage", engine="pyvista")
+```
+
+`terms=[1]` tests the score column only: column 0 is the intercept the test
+adds, and columns 2 to 4, sex, the age band and the streamline count, stay in
+the model as nuisance; `terms=[2]` tests sex the same way. `groups=` makes the
+families the units of the test (*Testing scores against a covariate*, below).
+On the 943 with a score, no component of the twenty tracks fluid intelligence once the families
+are clusters: the closest, component 13, has r = 0.11 and adjusted p 0.064.
+Counted as 943 independent subjects, the same component passes at 0.023,
+which is the error `groups=` is there to prevent. Sex shows in 11 of the
+twenty, the strongest at adjusted p 2e-8; the README shows where. The rank
+matters as well: a rank-4 fit comes nowhere near for fluid intelligence
+(smallest adjusted p 0.32), because the largest differences between these
+subjects lie elsewhere (PORTING.md item 5).
+
+**Running it on Longleaf.** `reduce` holds the cohort once, as one dense
+float64 array, 199 GB for 946 subjects. Given paths, or a sequence whose items
+are loaded when indexed, it reads one subject at a time, so the files need not
+be held as well. The fit of the 943 peaked at 196 GiB; ask for 230 GB. Ask for
+the cores as one task, `--ntasks=1 --cpus-per-task=8`: with eight one-CPU
+tasks the cluster sets `OMP_NUM_THREADS=1`, and the linear algebra then runs
+on one core. With eight threads the rank-20 fit of the 943 took five and a
+half hours, loading included.
+
+The pipeline is checked against a planted answer on a synthetic cohort
+(`sbci.example_cohort()`, one bundle scaled by a synthetic age) in PORTING.md
+items 5 and 7: what more anatomical variation does, what aligning first does
+to the analysis, and which solver start reaches the planted component.
 
 ## Carrying a warp to another template
 
@@ -903,7 +852,7 @@ Three things to know:
 from sbci import ContinuousConnectome
 
 sc = ContinuousConnectome.load("/work/users/x/y/xya/hcp-ya/data/sub-100307_sc.h5")
-sc.to_cifti("/work/users/x/y/xya/hcp-ya/exchange/sub-100307_sc.dconn.nii")
+sc.to_cifti("/work/users/x/y/xya/hcp-ya/exchange/sub-100307_space-fsLR_den-32k_desc-concon_sc.dconn.nii")
 ```
 
 Three files are written: the dense connectome, a `.json` sidecar with the
@@ -957,12 +906,73 @@ still open for ratification in SPEC_QUESTIONS.md item 4.
 `wb_view` is the graphical browser, but it needs a display; from Longleaf that
 means an OnDemand desktop session rather than a plain `ssh`.
 
+## Functional connectivity from the HCP's resting state
+
+`tools/build_hcp_fc.py` builds each FC file from the HCP's own processing: the
+four ICA-FIX-cleaned resting-state runs,
+`rfMRI_REST{1,2}_{LR,RL}_Atlas_hp2000_clean.dtseries.nii`, each 1,200 frames
+of 0.72 s on the 32k fs_LR surface.
+
+```bash
+python tools/build_hcp_fc.py --manifest manifest.csv \
+    --fmri /proj/STOR/zz10c/HCP_fMRI --fmri more_runs/ \
+    --spheres /overflow/zzhanglab/encore_project/encore_paper_code/prediction_subs \
+    --fslr fslr/ --mapping mapping_avg_ico4.npz --out hcp-ya-fc
+```
+
+**Where each vertex goes.** The SC files place streamline endpoints through
+the subject's FreeSurfer registration (`?h.sphere.reg`); the HCP's time series
+reach the fs_LR mesh through another one, MSMSulc. So each 32k vertex is
+carried back to the subject's own surface through its MSMSulc sphere, forward
+through its FreeSurfer sphere, and into the grid cell of the nearest fsaverage
+vertex. SC and FC are then compared at the same place, which coupling needs.
+For sub-100307 the cells are compact: in the median cell every member lies
+within 2.4 degrees of its grid vertex (3.3 at the 95th percentile), against a
+grid spacing of about 4, and two 32k vertices of one cell correlate in time at
+a median 0.65, against 0.009 for two at random. One of the 972 subjects in the
+lab's copy, sub-103010, has FreeSurfer surfaces on a different mesh from the
+HCP's native one (147,746 vertices on the left against 147,449); it goes
+through the two white surfaces instead (`--crossmesh`). Run on sub-100307,
+where both routes apply, that one puts 91% of the 32k vertices in the same
+cell as the exact route, 0.24 degrees from it at the median.
+
+**What the FC is.** What the SBCI pipeline computes
+(`calculate_residual_timeseries.py`, `calculate_fc.py`), as far as these data
+allow. ICA-FIX has already removed the motion, white-matter and CSF artefacts
+the pipeline regresses out; each run then has a constant, a linear trend and
+the global signal (the mean over all grayordinates) regressed out. A grid
+vertex's series is the mean of its cell's 32k vertices; a few cortical grid
+vertices at the medial wall's edge, where the HCP's mask and the grid's
+differ, have none and take the nearest. Each run's series are z-scored, the
+runs concatenated, and the FC is the Pearson correlation between grid
+vertices, with the diagonal one and the medial wall zero. Each file records
+its runs, frames and nuisance model.
+
+At the grid's resolution these full-band data are noisy: single grid vertices
+correlate weakly, and the default network stands out once they are pooled
+into regions. Band-passing to 0.01 to 0.1 Hz, which the pipeline does not do,
+strengthens every measure:
+
+| sub-100307 | full band, as released | `--bandpass 0.01 0.1` |
+| --- | --- | --- |
+| grid: spread of the correlations (sd) | 0.052 | 0.131 |
+| grid: neighbouring vertices | 0.27 | 0.43 |
+| grid: a vertex and its mirror image (homotopic) | 0.10 | 0.25 |
+| Desikan regions: homotopic pairs | 0.38 | 0.54 |
+| left isthmus cingulate seed: precuneus, inferior parietal, medial orbitofrontal | 0.46, 0.36, 0.31 | 0.67, 0.49, 0.49 |
+
+The released files follow the pipeline and are not band-passed. `--no-gsr`
+keeps the global signal.
+
 ## What raises, and what it tells you
 
 | Call | Raises | Because |
 | --- | --- | --- |
 | `sc.smooth()` on a file with no `/endpoints` | `MissingDataError` | nothing to re-smooth from; the group is optional |
 | `sc.smooth()` on endpoints stored as vertices only | `MissingDataError` | `shk` needs where each streamline crossed, not the nearest vertex |
-| `sbci download hcp-aging` | exit status 1: `cohort must be one of ('hcp-ya',)` | only the young adult cohort is released; HCP-Aging data are not distributed |
+| `sbci download nonesuch` | exit status 1: `error: cohort must be one of ('hcp-ya',), got 'nonesuch'` | only the young adult cohort is released |
+| `sbci.load("x.dconn.nii")` | `InvalidFileError`: an exchange file, which the package writes but does not read | the resampling to fsLR-32k is many-to-one; load the `.h5` |
+| `sbci.load_atlas("Shaefer200")` | `UnknownAtlasError`, naming the three closest atlas names | atlas names are looked up, and a typo should not read as "no such atlas" |
+| `sc.coupling(fc, labels=...)` without `scope="region"` | `ValueError`: labels= goes with scope='region' | the other scopes have no regions |
 
 Every message names what has to happen and where it is tracked.

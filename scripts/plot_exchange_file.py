@@ -1,4 +1,7 @@
-"""Draw the exchange file itself: everything below is read from the .dconn.
+"""Draw the exchange file itself: the connectivity below is read back from the .dconn.
+
+The fsLR surfaces it is drawn on are the ones ``tools/build_fslr_surfaces.py``
+wrote (``OUT``); ``scripts/write_exchange_file.py`` writes the .dconn first.
 
 Layout note: nilearn draws its colourbar inside the axes it is given, which
 puts it on top of the cortex. Every panel is therefore drawn with

@@ -196,3 +196,43 @@ def test_the_hemisphere_comes_from_the_index(tmp_path, connectome, endpoints):
         stored = np.asarray(handle["endpoints"]["vertex_in"][()])
     np.testing.assert_array_equal(stored, endpoints.global_vertex_in)
     assert stored.max() >= endpoints.n_per_hemi  # the right hemisphere is offset
+
+
+def test_a_failed_write_leaves_the_previous_file_intact_and_no_partial(tmp_path, connectome):
+    """The file is written beside the destination and moved into place only when complete."""
+    path = tmp_path / "sub-x_sc.h5"
+    connectome.save(path)
+    before = path.read_bytes()
+    with pytest.raises((AttributeError, TypeError, ValueError)):
+        write_hdf5(
+            path,
+            connectome.data,
+            connectome.area,
+            connectome.mask,
+            connectome.metadata,
+            endpoints="not endpoints",
+        )
+    assert path.read_bytes() == before
+    assert not list(tmp_path.glob("*.partial"))
+
+
+def test_a_file_that_is_not_hdf5_is_named_as_such(tmp_path):
+    from sbci.errors import InvalidFileError
+
+    junk = tmp_path / "junk.h5"
+    junk.write_bytes(b"not an hdf5 file")
+    with pytest.raises(InvalidFileError, match="cannot be opened as an HDF5 file"):
+        read_hdf5(junk)
+
+
+def test_an_incomplete_endpoint_group_names_what_is_missing(tmp_path, connectome):
+    import h5py
+
+    from sbci.errors import FormatError
+
+    path = connectome.save(tmp_path / "sub-y_sc.h5")
+    with h5py.File(path, "a") as handle:
+        group = handle.create_group("endpoints")
+        group.create_dataset("vertex_in", data=np.zeros(3, dtype=np.int32))
+    with pytest.raises(FormatError, match="has no vertex_out"):
+        read_hdf5(path)

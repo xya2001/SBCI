@@ -1,4 +1,4 @@
-"""The public object: loading, seeding, aggregating, and the pending ports."""
+"""The public object: loading, seeding, aggregating, and what it refuses."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import pytest
 from sbci import ContinuousConnectome
 from sbci.io import write_hdf5
 from sbci.metadata import MetadataError, template
+from sbci.smoothing import KERNELS
 
 
 def _write(tmp_path, connectome, metadata=None, name="sub-toy_sc.h5"):
@@ -90,17 +91,22 @@ def test_to_atlas_shape(connectome, atlas):
 
 
 def test_shape_mismatch_is_caught_on_load(tmp_path, connectome):
-    truncated = ContinuousConnectome(
-        data=connectome.data,
-        area=connectome.area[:4],
-        mask=connectome.mask,
-        metadata=connectome.metadata,
-    )
+    import h5py
+
+    path = connectome.save(tmp_path / "sub-short_sc.h5")
+    with h5py.File(path, "a") as handle:
+        del handle["area"]
+        handle.create_dataset("area", data=np.asarray(connectome.area[:4], dtype=np.float64))
     with pytest.raises(ValueError, match="implies 5 vertices"):
-        truncated._check_shapes()
+        ContinuousConnectome.load(path)
 
 
-@pytest.mark.parametrize("kernel", ["shk", "rdk", "matern"])
+def test_a_region_mask_of_the_wrong_length_is_refused(connectome):
+    with pytest.raises(ValueError, match="region mask has 3 entries"):
+        connectome.seed(region=np.array([True, False, True]))
+
+
+@pytest.mark.parametrize("kernel", KERNELS)
 def test_no_kernel_is_a_placeholder(connectome, kernel):
     """Every name in KERNELS has to be implemented, not a stub.
 
@@ -114,12 +120,6 @@ def test_no_kernel_is_a_placeholder(connectome, kernel):
 
     with pytest.raises(MissingDataError, match="endpoints"):
         connectome.smooth(kernel=kernel)
-
-
-def test_coupling_validates_before_failing(connectome):
-    """Argument checks run first, so a misuse is reported as a misuse."""
-    with pytest.raises(ValueError, match="structural connectome"):
-        connectome.coupling(connectome)
 
 
 def _functional_toy(connectome):

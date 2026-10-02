@@ -9,8 +9,14 @@ from sbci import load_surface
 from sbci.spec import N_VERTICES, N_VERTICES_PER_HEMI
 from sbci.surface import GEOMETRIES, Surface
 
-matplotlib = pytest.importorskip("matplotlib", reason="needs the plotting extra")
-matplotlib.use("Agg")
+try:  # the geometry tests below need no extra; only the plotting ones skip without it
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import nilearn  # noqa: F401
+except ImportError:
+    matplotlib = None
+needs_plotting = pytest.mark.skipif(matplotlib is None, reason="needs the plotting extra")
 
 
 @pytest.mark.parametrize("name", GEOMETRIES)
@@ -36,6 +42,10 @@ def test_faces_stay_within_one_hemisphere(name):
         surface.faces.max(axis=1) >= N_VERTICES_PER_HEMI
     )
     assert not crosses.any(), f"{int(crosses.sum())} faces bridge the hemispheres"
+    # and the two hemispheres have the same number of faces: a per-hemisphere triangle
+    # index relies on that half-way offset
+    left = (surface.faces < N_VERTICES_PER_HEMI).all(axis=1)
+    assert int(left.sum()) == surface.faces.shape[0] // 2
 
 
 @pytest.mark.parametrize("name", GEOMETRIES)
@@ -89,8 +99,6 @@ def test_surfaces_are_cached():
 
 # --- rendering -------------------------------------------------------------
 
-pytest.importorskip("nilearn", reason="needs the plotting extra")
-
 
 @pytest.fixture
 def surface_map():
@@ -101,6 +109,7 @@ def surface_map():
     return values
 
 
+@needs_plotting
 def test_plot_returns_a_figure(surface_map):
     from sbci.plotting import plot_surface
 
@@ -110,6 +119,7 @@ def test_plot_returns_a_figure(surface_map):
     matplotlib.pyplot.close(figure)
 
 
+@needs_plotting
 def test_plot_rejects_a_wrong_length_map():
     from sbci.plotting import plot_surface
 
@@ -117,6 +127,7 @@ def test_plot_rejects_a_wrong_length_map():
         plot_surface(np.zeros(10))
 
 
+@needs_plotting
 def test_plot_rejects_an_all_nan_map():
     from sbci.plotting import plot_surface
 
@@ -124,6 +135,7 @@ def test_plot_rejects_an_all_nan_map():
         plot_surface(np.full(N_VERTICES, np.nan))
 
 
+@needs_plotting
 def test_plot_rejects_an_unknown_view(surface_map):
     from sbci.plotting import plot_surface
 
@@ -131,6 +143,7 @@ def test_plot_rejects_an_unknown_view(surface_map):
         plot_surface(surface_map, views=("sideways",))
 
 
+@needs_plotting
 def test_plot_rejects_an_unknown_surface(surface_map):
     from sbci.plotting import plot_surface
 
@@ -138,8 +151,11 @@ def test_plot_rejects_an_unknown_surface(surface_map):
         plot_surface(surface_map, surface="midthickness")
 
 
-def test_connectome_plot_applies_the_mask():
+@needs_plotting
+def test_connectome_plot_applies_the_mask(monkeypatch):
     """A masked vertex must not be coloured, whatever the map says there."""
+    from nilearn import plotting as nilearn_plotting
+
     from sbci.plotting import plot_surface
 
     surface = load_surface("sphere")
@@ -149,11 +165,15 @@ def test_connectome_plot_applies_the_mask():
         mask = np.ones(surface.n_vertices, dtype=bool)
 
     _Masked.mask[:100] = False
+    recorded = []
+    monkeypatch.setattr(nilearn_plotting, "plot_surf", lambda *a, **k: recorded.append(k))
     figure = plot_surface(values, connectome=_Masked, views=("lateral",))
-    assert figure is not None
     matplotlib.pyplot.close(figure)
+    left = recorded[0]["surf_map"]  # the left hemisphere is drawn first
+    assert np.isnan(left[:100]).all() and np.isfinite(left[100:]).all()
 
 
+@needs_plotting
 def test_plot_handles_a_constant_map():
     """A map with one value everywhere still renders, without a colorbar.
 
@@ -205,17 +225,6 @@ def test_every_geometry_shares_that_face_list(name):
     )
 
 
-def test_each_face_stays_within_one_hemisphere():
-    """No triangle may bridge the hemispheres.
-
-    A per-hemisphere triangle index would otherwise be ambiguous.
-    """
-    faces = np.asarray(load_surface("sphere").faces)
-    left = faces < N_VERTICES_PER_HEMI
-    assert np.all(left.all(axis=1) | (~left).all(axis=1))
-    assert int(left.all(axis=1).sum()) == faces.shape[0] // 2
-
-
 def test_sulcal_depth_shades_both_ways_and_the_normals_point_outward():
     """The shading map has sulci and gyri in comparable measure; the shared faces are outward."""
     from sbci.surface import load_surface, sulcal_depth, vertex_normals
@@ -234,6 +243,7 @@ def test_sulcal_depth_shades_both_ways_and_the_normals_point_outward():
         depth[0] = 1.0  # shared and frozen
 
 
+@needs_plotting
 def test_plot_can_run_without_shading(surface_map):
     from sbci.plotting import plot_surface
 
@@ -241,6 +251,7 @@ def test_plot_can_run_without_shading(surface_map):
     assert figure is not None
 
 
+@needs_plotting
 def test_shading_is_flat_on_the_medial_wall(monkeypatch):
     """The wall is a cut surface, not cortex: its shading must carry no folds."""
     from nilearn import plotting as nilearn_plotting

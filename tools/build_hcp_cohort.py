@@ -1,6 +1,6 @@
 r"""Build HCP Young Adult subjects in the package's format, from the lab's SBCI pipeline output.
 
-    python tools/build_hcp_cohort.py --layout young-adult \
+    python tools/build_hcp_cohort.py \
         --manifest manifest.csv \
         --pipeline /overflow/zzhanglab/encore_project/encore_paper_code/prediction_subs \
         --mapping <...>/fsaverage_label/mapping_avg_ico4.npz \
@@ -42,7 +42,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from convert_surfaces import read_vtk_polydata  # noqa: E402
 from import_legacy import N_VERTICES, area_weights  # noqa: E402
 
-LAYOUTS = ("young-adult",)
 SNAPPED = "snapped_fibers.npz"
 BANDWIDTH = 0.005
 RAS_TO_LPS = np.array([-1.0, -1.0, 1.0])
@@ -157,9 +156,6 @@ def convert(subject, source, areas, mask, out, check=False) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument(
-        "--layout", choices=LAYOUTS, default="young-adult", help="the pipeline's layout"
-    )
     parser.add_argument("--manifest", required=True, help="a csv with a subject column")
     parser.add_argument("--pipeline", required=True, help="directory of the subjects' output")
     parser.add_argument("--mapping", required=True, help="mapping_avg_ico4.npz")

@@ -113,6 +113,7 @@ from .alignment import (
     voronoi_areas,
 )
 from .errors import MissingDataError
+from .smoothing import _legendre_with_derivative
 
 DEFAULT_SIGMA = 0.005
 """Kernel bandwidth the published pipeline uses for every subject."""
@@ -141,22 +142,6 @@ SQUARINGS = 6
 
 KERNEL_EPSILON = 1e-3
 """Where the heat kernel is cut off, on the product ``K(x) K(1)``."""
-
-
-# --- closest-triangle queries ---------------------------------------------------
-
-
-class FastMeshQuery(MeshQuery):
-    """:class:`sbci.alignment.MeshQuery` whose ``query`` also returns the face index.
-
-    The k-d-tree search itself now lives in :class:`~sbci.alignment.MeshQuery`,
-    shared with ENCORE; this subclass only keeps the three-value ``query`` that
-    the endpoint code and the tests were written against.
-    """
-
-    def query(self, points):
-        """``(weights, vertex_indices, face_indices)`` for each point."""
-        return self.query_faces(points)
 
 
 # --- the endpoint connectome (SConcon) --------------------------------------
@@ -198,8 +183,8 @@ class EndpointConnectome:
         self.e1 = np.vstack([lh_grid.e1, rh_grid.e1])
         self.e2 = np.vstack([lh_grid.e2, rh_grid.e2])
         self._query = {
-            0: FastMeshQuery(lh_grid.vertices, lh_grid.faces),
-            1: FastMeshQuery(rh_grid.vertices, rh_grid.faces),
+            0: MeshQuery(lh_grid.vertices, lh_grid.faces),
+            1: MeshQuery(rh_grid.vertices, rh_grid.faces),
         }
         n = self.n_streamlines
         self.weights_in = np.zeros((n, 3))
@@ -318,7 +303,7 @@ class EndpointConnectome:
             for flags, points, weights, index, face in sides:
                 mask = flags == side
                 if mask.any():
-                    w, idx, f = self._query[side].query(points[mask])
+                    w, idx, f = self._query[side].query_faces(points[mask])
                     weights[mask] = w
                     index[mask] = idx + offset
                     face[mask] = f
@@ -515,21 +500,6 @@ class KernelDerivative:
     z: object
 
 
-def _legendre_with_derivative(x, degree: int):
-    """Yield ``(l, P_l(x), dP_l/dx)`` for ``l = 0..degree`` by the reference's recurrences."""
-    x = np.asarray(x, dtype=np.float64)
-    p_prev, p_cur = np.ones_like(x), x.copy()
-    d_prev, d_cur = np.zeros_like(x), np.ones_like(x)
-    yield 0, p_prev, d_prev
-    if degree >= 1:
-        yield 1, p_cur, d_cur
-    for h in range(1, degree):
-        p_next = ((2 * h + 1) * x * p_cur - h * p_prev) / (h + 1)
-        d_next = ((2 * h + 1) * (p_cur + x * d_cur) - h * d_prev) / (h + 1)
-        yield h + 1, p_next, d_next
-        p_prev, p_cur, d_prev, d_cur = p_cur, p_next, d_cur, d_next
-
-
 class HeatKernelBuilder:
     """Row-normalized spherical heat kernel on two grids, with its derivative.
 
@@ -717,7 +687,11 @@ def cotangent_laplacian(vertices, faces, reference_layout: bool = False):
 
 
 def _transport(tangent, origin, destination):
-    """Parallel transport on the sphere, the reference's closed form."""
+    """Parallel transport on the sphere, the reference's closed form.
+
+    :func:`sbci.alignment.parallel_transport` is ENCORE's form of the same
+    transport; they agree to 1e-13 and each port keeps its reference's.
+    """
     pq = (origin * destination).sum(axis=1, keepdims=True)
     vq = (tangent * destination).sum(axis=1, keepdims=True)
     denominator = 1.0 + pq
@@ -770,8 +744,8 @@ class StationaryWarp:
         self.viscosity = float(viscosity)
         self.squarings = int(squarings)
         self.rejected = 0
-        self._base_areas = voronoi_areas(self.base, self.faces)
-        self._query = FastMeshQuery(self.base, self.faces)
+        self._base_areas = grid.areas  # the same Voronoi areas the grid already holds
+        self._query = MeshQuery(self.base, self.faces)
         self._laplacian = cotangent_laplacian(
             self.base, self.faces, reference_layout=strict_upstream
         )
@@ -802,7 +776,7 @@ class StationaryWarp:
         current = normalize_rows(sphere_exp_map(self.base, tangent))
         n = self.n_vertices
         for _ in range(self.squarings):
-            weights, indices, _ = self._query.query(current)
+            weights, indices, _ = self._query.query_faces(current)
             displacement = sphere_log_map(self.base, current)
             moved = _transport(
                 displacement[indices].reshape(-1, 3),
@@ -859,7 +833,7 @@ class StationaryWarp:
     def apply(self, points) -> np.ndarray:
         """Where the warp sends arbitrary points of this hemisphere's sphere."""
         points = normalize_rows(np.asarray(points, dtype=np.float64))
-        weights, indices, _ = self._query.query(points)
+        weights, indices, _ = self._query.query_faces(points)
         return normalize_rows(np.einsum("nk,nkj->nj", weights, self.vertices[indices]))
 
 
@@ -1238,11 +1212,11 @@ class ConSEAL:
     # -- rigid initialization ---------------------------------------------------------
 
     @staticmethod
-    def _pull_back(values, grid: SphericalGrid, query: FastMeshQuery, rotation):
+    def _pull_back(values, grid: SphericalGrid, query: MeshQuery, rotation):
         """``rotate_matrix_barycentric`` on one hemisphere: ``g(x) = values(R x)``."""
         from scipy import sparse
 
-        weights, indices, _ = query.query(grid.vertices @ rotation.T)
+        weights, indices, _ = query.query_faces(grid.vertices @ rotation.T)
         n = grid.n_vertices
         operator = sparse.csr_matrix(
             (weights.ravel(), (np.repeat(np.arange(n), 3), indices.ravel())), shape=(n, n)

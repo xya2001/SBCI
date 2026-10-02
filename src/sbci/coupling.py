@@ -158,7 +158,10 @@ def local_coupling(
 
     Port of ``calculate_sfc_loc.m``. For every region, the SC and FC submatrices
     over that region's vertices are compared row by row, so the result describes
-    how structure and function agree *inside* a region.
+    how structure and function agree *inside* a region. Every distinct label is
+    a region, label ``0`` included, as in the reference: with a partial atlas
+    the unassigned cortex is compared as one region, and only the medial wall,
+    whose profiles are constant, comes out NaN.
 
     Parameters
     ----------
@@ -218,14 +221,17 @@ def structure_function_coupling(sc, fc, scope: str = "global", **kwargs) -> np.n
         raise ValueError("coupling() takes a structural connectome and a functional one")
     if sc.n_vertices != fc.n_vertices:
         raise ValueError("the two connectomes are on different grids")
+    labels = kwargs.pop("labels", None)
+    if labels is not None and scope != "region":
+        raise ValueError(f"labels= goes with scope='region', not scope={scope!r}")
+    if scope == "region" and labels is None:
+        raise ValueError("scope='region' needs labels=, e.g. load_atlas('Desikan').labels")
 
-    sc_dense, fc_dense = sc.dense(), fc.dense()
+    # Expanded in float64 once: the reference arithmetic is double, and
+    # expanding in float32 first would only add a copy.
+    sc_dense, fc_dense = sc.dense(np.float64), fc.dense(np.float64)
     if scope == "global":
         return global_coupling(sc_dense, fc_dense, **kwargs)
     if scope == "discrete":
         return discrete_coupling(sc_dense, fc_dense, **kwargs)
-
-    labels = kwargs.pop("labels", None)
-    if labels is None:
-        raise ValueError("scope='region' needs labels=, e.g. load_atlas('Desikan').labels")
     return local_coupling(sc_dense, fc_dense, labels, **kwargs)

@@ -8,6 +8,8 @@ the floor a reference through a different smoother puts under it, undoes the
 warp exactly at the endpoint level, and evaluates ConSEAL's answer in ENCORE's
 cost. ``variants`` repeats the recovery over the warp's smoothness and
 amplitude, ENCORE's basis order, the reference and the derivative estimator.
+Both register one subject's streamlines many times over, ENCORE and ConSEAL
+alike, and print their measurements: a batch job of hours on eight cores.
 
 The subject file must carry endpoints with positions (``tools/build_hcp_cohort.py``
 writes them; ``sbci download hcp-ya`` fetches some). PORTING.md item 4,

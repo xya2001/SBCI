@@ -11,7 +11,7 @@ Sources are the canonical repositories under
 shallow clone of each is kept at `/work/users/x/y/xya/sbci-reference` for
 reading; re-clone rather than edit, since `/work` is purged.
 
-## 1. Riemannian diffusion and Matern kernel smoothing -- DONE, VERIFIED
+## 1. Riemannian diffusion and Matern kernel smoothing -- DONE; `rdk` VERIFIED AGAINST MATLAB, `matern` AGAINST ITS CLOSED FORM
 
 - **From:** [`SBCI_Toolkit`](https://github.com/sbci-brain/SBCI_Toolkit) --
   `concon_estimate/compute_diffusion_kernel_matrix.m`,
@@ -44,28 +44,6 @@ itself carries.
 throughout, so it is **more accurate than the reference, not different from
 it**. If bit-compatibility with legacy output is ever needed, cast `Lambda` to
 float32 before calling `diffusion_kernel`.
-
-### The public API path, end to end
-
-Steps 3 and 4 validated the kernel through a hand-written density loop. Driving
-`ContinuousConnectome.smooth(kernel="shk")` instead -- building a connectome
-from `mesh_intersections_ico4.mat`, calling the method, saving, validating --
-is what found all three bugs above, and the face-order one could not have been
-found any other way.
-
-It scores r = 0.972 rather than 1.000000, and that is the input file, not the
-port. Both endpoint sources on the **same 200,000 rows**, so sampling noise is
-identical and only the endpoints differ:
-
-| endpoint source | correlation |
-| --- | --- |
-| `subject_xing_sphere_avg_coords.tsv`, what `c3_main` was fed | **0.998193** |
-| `mesh_intersections_ico4.mat` | 0.969720 |
-
-The two disagree by a median 1.25 degrees, but with a tail: 3.14 at the 90th
-percentile and 42 at the maximum. Displacing the correct endpoints uniformly by
-1.25 degrees costs almost nothing (0.99263 to 0.99235), so it is that tail of
-relocated endpoints that accounts for the gap, not the typical difference.
 
 ### Speed
 
@@ -409,9 +387,11 @@ the poles, which is why this has not bitten anyone.
 - The registration loop descends a gradient built from the unstable
   derivative, so two implementations take different steps. Agreement is
   therefore reported as a correlation, not a tolerance.
-- **Grid:** no constraint. `SphericalGrid(mesh, l)` takes the mesh as an
-  argument; only the reference's demo scripts hardcode its retired 0.94 grid,
-  and this package uses the ico4 sphere throughout.
+
+The grid is no constraint: `SphericalGrid(mesh, l)` takes the mesh as an
+argument, only the reference's demo scripts hardcode its retired 0.94 grid,
+and this package uses the ico4 sphere throughout (SPEC_QUESTIONS.md item 12,
+withdrawn).
 
 ## 5. FPCA reduction -- DONE, VERIFIED. Local inference still open.
 
@@ -476,7 +456,7 @@ With the same initialization, the port reproduces the reference exactly:
 | explained fraction | identical to 6 decimals |
 
 `tests/test_matlab_reference.py` asserts the basis, scales, explained fraction
-and scores. Fifteen further tests in `tests/test_reduction.py` check what holds
+and scores. The tests in `tests/test_reduction.py` check what holds
 without MATLAB: exact recovery of genuinely low-rank data, ordering by weight,
 monotone explained variance, and scores that reproduce their own subjects.
 
@@ -915,8 +895,9 @@ at r = 0.99974, with either order of medial-wall masking and normalization;
 the kernel verification above reached 1.000000 on ADNI, so the remaining
 difference is in how that HCP-Aging run smoothed, and is not yet explained.
 
-`tools/build_hcp_cohort.py` now takes its endpoints this way for both layouts
-it builds, HCP-Aging and the HCP Young Adult subjects of the ENCORE project,
+`tools/build_hcp_cohort.py` took its endpoints this way for both layouts it
+then built, HCP-Aging (retired with that data on 30 September; the `--layout`
+option went with it) and the HCP Young Adult subjects of the ENCORE project,
 whose FreeSurfer-registered spheres are stored in RAS and negated in x and y to
 reach the grid's frame (as stored they sit 121 degrees from the subject's
 native LPS sphere on median, flipped 12 to 14, against 120 and 8 for the
@@ -927,7 +908,7 @@ each file's endpoints and compares them with its stored connectome.
 
 The lab's HCP Young Adult connectomes are on the retired 0.94 grid (4,121
 vertices), so the young adults the package distributes were not converted
-from them. `tools/build_hcp_cohort.py --layout young-adult` rebuilds each
+from them. `tools/build_hcp_cohort.py` rebuilds each
 subject on ico4 from the ENCORE project's copy: the snapped streamlines,
 placed on the subject's FreeSurfer-registered sphere and negated in x and y as
 above, smoothed by the package's `shk` kernel at bandwidth 0.005 with the
@@ -959,6 +940,28 @@ sphere, as in every other subject checked. The mask drops those endpoints, and
 the subjects stay in the analysis. Their connectomes correlate with the
 example mean at 0.77 to 0.83, against 0.79 to 0.84 for twelve others drawn at
 random.
+
+### The public API path, end to end
+
+The checks above validated the kernel through a hand-written density loop. Driving
+`ContinuousConnectome.smooth(kernel="shk")` instead -- building a connectome
+from `mesh_intersections_ico4.mat`, calling the method, saving, validating --
+is what found the three bugs *Shipping it* records, and the face-order one could
+not have been found any other way.
+
+It scores r = 0.972 rather than 1.000000, and that is the input file, not the
+port. Both endpoint sources on the **same 200,000 rows**, so sampling noise is
+identical and only the endpoints differ:
+
+| endpoint source | correlation |
+| --- | --- |
+| `subject_xing_sphere_avg_coords.tsv`, what `c3_main` was fed | **0.998193** |
+| `mesh_intersections_ico4.mat` | 0.969720 |
+
+The two disagree by a median 1.25 degrees, but with a tail: 3.14 at the 90th
+percentile and 42 at the maximum. Displacing the correct endpoints uniformly by
+1.25 degrees costs almost nothing (0.99263 to 0.99235), so it is that tail of
+relocated endpoints that accounts for the gap, not the typical difference.
 
 ### Shipping it
 
@@ -1042,6 +1045,10 @@ is a million kernels summed together and is a weak instrument for inspecting
 one. What found it was running `c3_main` on a *single* streamline, where the
 output is the kernel itself; the weight was then confirmed from the source.
 `tests/reference/concon_probe.py` keeps that measurement reproducible.
+
+> The subsections from here to *What to ask -- answered* are the earlier
+> analysis, kept as the record of how the answer was reached; *The kernel,
+> resolved* and *Full scale* above supersede them where they disagree.
 
 ### What the port gets right
 
@@ -1436,9 +1443,10 @@ made the deformation wherever there are no endpoints to constrain it (the
 vertex residual grows even as the endpoint residual falls), which is a
 property of the problem, not a fault of the port. ENCORE on the same pair,
 with its inverse applied to the endpoints, reaches 0.40 degrees, 59% undone
-(item 4).
+(the figure the ENCORE notes in USAGE.md cite).
 
-The same test on a real subject (HCP-Aging, 903,797 streamlines) at first
+The same test on a real subject (an HCP-Aging subject, 903,797 streamlines; a
+run from before that data were retired, kept as the record) at first
 seemed to separate the methods. With the same degree-15 warp (0.95 degrees on
 average, 4 at most), ConSEAL with the paper's update and threshold 1e-7
 reached 0.13 degrees, 86% undone, while ENCORE halved its cost with a warp of
@@ -1478,7 +1486,9 @@ analytic derivative changes nothing; a warp of 2.8 degrees on average is
 undone 87% and a degree-2 warp 94%; against the stored reference the same
 smooth warp is undone 65%. ConSEAL on the smooth warp reaches 0.10 degrees, 94% undone, in 60 iterations. The
 README's figure uses the smooth warp and the matching reference
-(`scripts/hcp_figures.py`: `WARP_ORDER`, `WARP_AMPLITUDE`, `ENCORE_ORDER`).
+(`scripts/hcp_figures.py`: `WARP_ORDER`, `WARP_AMPLITUDE`, `ENCORE_ORDER`),
+on sub-100307: ENCORE brings the endpoints from 1.63 to 0.20 degrees, 88%,
+with the cost at 0.16 of its start; ConSEAL to 0.11 degrees, 93%.
 Two rules follow for any comparison: build every density from the same
 endpoints through the same smoother, and judge a registration by a warp it can
 represent.

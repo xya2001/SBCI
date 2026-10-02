@@ -2,7 +2,12 @@
 
 Continuous brain connectivity: read, parcellate, smooth, couple, align and
 reduce surface-based continuous connectomes on the ico4 grid (5124 vertices),
-with every method a verified port of the SBCI group's MATLAB.
+with every method a verified port of the SBCI group's MATLAB. SBCI,
+Surface-Based Connectivity Integration (Cole et al., *Human Brain Mapping*,
+2021), represents structural and functional connectivity as continuous
+functions on the cortical surface instead of between atlas regions; the ico4
+grid is FreeSurfer's fsaverage sphere subdivided four times, 2,562 vertices per
+hemisphere, left then right.
 
 > **Status: pre-alpha.** Every method in the API table below is implemented
 > and verified against its reference, and the example cohort, eleven HCP Young
@@ -15,6 +20,7 @@ Python 3.10 or newer. The package is not on PyPI yet, so install from GitHub:
 ```bash
 pip install "sbci @ git+https://github.com/xya2001/SBCI.git"             # core: numpy, scipy, h5py, nibabel
 pip install "sbci[plotting] @ git+https://github.com/xya2001/SBCI.git"   # adds matplotlib and nilearn for figures
+pip install "sbci[render] @ git+https://github.com/xya2001/SBCI.git"     # adds PyVista, for the smoothly lit figures below
 ```
 
 On UNC's Longleaf cluster use `scripts/setup_longleaf.sh` instead; see
@@ -24,7 +30,7 @@ On UNC's Longleaf cluster use `scripts/setup_longleaf.sh` instead; see
 
 One real subject is 90 MB away: the example cohort (eleven HCP Young Adult
 subjects) is fetched by the package, and everything below runs on the first
-of them, sub-100307, the subject the package brief's acceptance test names.
+of them, sub-100307, the tutorial subject.
 
 ```python
 import sbci
@@ -71,7 +77,7 @@ pipeline output.
 
 ![The connectivity of one vertex over the cortex](docs/figures/seed_profile.png)
 
-*`cc.plot(cc.seed(vertex=1234), mesh="fsaverage")`: where one vertex of one
+*`sc.plot(sc.seed(vertex=1234), mesh="fsaverage", engine="pyvista")`: where one vertex of one
 subject connects to. The value at each vertex is the density of streamlines
 between the seed (the orange dot, left temporal cortex) and that vertex,
 relative to the strongest, on the inflated surface shaded by sulcal depth.*
@@ -113,11 +119,11 @@ map's 2nd to 98th percentile. The medial wall, which has no cortex, is gray.*
 ```python
 import sbci
 
-cc = sbci.load("sub-100307_sc.h5")     # a computational file from the pipeline, or from tools/import_legacy.py
+cc = sbci.load("sub-100307_sc.h5")     # the .h5 "computational file": what the package reads and writes
 M  = cc.to_atlas("Schaefer200")        # 200 x 200 matrix
 p  = cc.seed(vertex=1234)              # profile on the surface
 cc.plot(p)                             # inflated-surface figure
-cc.to_cifti("sub-100307_sc.dconn.nii") # opens in Workbench; 16.9 GB
+cc.to_cifti("sub-100307_sc.dconn.nii") # the "exchange file" for Workbench: 16.9 GB, 25 GB of memory (USAGE.md)
 ```
 
 The example cohort, the eleven young adults the figures are drawn from, is
@@ -134,10 +140,10 @@ Each file is verified against the SHA-256 in the package's manifest
 (`src/sbci/data/hcp_ya.json`, which also gives each subject's sex and HCP age
 band), and a re-run skips what is already present. Ten of them, five women
 and five men, were drawn at random from the 946 young adults with complete
-pipeline output in the lab's copy; sub-100307 joined them because the package
-brief's acceptance test names it. Each was rebuilt on the ico4 grid from the
+pipeline output in the lab's copy, and sub-100307, the tutorial subject,
+joined them. Each was rebuilt on the ico4 grid from the
 pipeline's snapped streamline endpoints on the subject's FreeSurfer-registered
-sphere (`tools/build_hcp_cohort.py --layout young-adult`), and the SC files
+sphere (`tools/build_hcp_cohort.py`), and the SC files
 carry those endpoints, so `smooth()` and `endpoints_align()` run on them. The
 FC files hold the HCP's ICA-FIX-cleaned resting-state runs, REST1 and REST2 in
 both phase-encoding directions, placed on the grid through each subject's
@@ -154,18 +160,16 @@ carry. The other 935 young adults are not distributed.
 from a downloaded copy, and `scripts/check_hcp_ya.py` downloads the cohort
 and runs every method on it, stopping at the first check that fails. Existing
 pipeline output converts with `tools/import_legacy.py` (see *Using legacy
-pipeline output*). The package brief's acceptance criterion is its own
-version of the lines above, on sub-100307, run on a machine none of us
-configured, from a blank environment, in under five minutes (BLUEPRINT.md
-section 2). `tests/test_five_minute_start.py` runs it when `SBCI_DOWNLOAD=1`
-or `SBCI_HCP_DIR` is set and skips otherwise, and CI's `five-minute-start` job
-runs it from a blank environment on every push.
+pipeline output*). `tests/test_five_minute_start.py` runs the lines above on
+sub-100307 from a blank environment when `SBCI_DOWNLOAD=1` or `SBCI_HCP_DIR`
+is set, and CI's `five-minute-start` job runs it on every push
+(VERIFICATION.md).
 
 ## The documents
 
 | Read | For |
 | --- | --- |
-| [USAGE.md](USAGE.md) | every working function with a worked example, and what each error tells you |
+| [USAGE.md](USAGE.md) | every function with a worked example on the released subjects, and what the common errors tell you |
 | [BLUEPRINT.md](BLUEPRINT.md) | what the package is, what "finished" means, where it stands, and the decisions it waits on |
 | [PORTING.md](PORTING.md) | how each of the seven MATLAB methods was ported and verified, and the errors found in the references |
 | [SPEC_QUESTIONS.md](SPEC_QUESTIONS.md) | the file-format decisions, answered and open |
@@ -185,7 +189,7 @@ runs it from a blank environment on every push.
 | `.plot(values, surface=...)` | implemented; inflated, white, pial and sphere bundled |
 | `.to_cifti(path)` | implemented; fsLR-32k dense connectome, 16.9 GB |
 | `sbci validate <file>` | implemented |
-| `.smooth(kernel=..., bandwidth=..., eigenpairs=...)` | implemented for all three kernels. `shk` is the default and reproduces `concon` at r = 1.000000 across five subjects; `rdk` matches MATLAB to 3.25 float32-eps, `matern` is checked against its closed form (no MATLAB reference exists), and both find the Laplace-Beltrami basis via `$SBCI_LBO_DIR` (PORTING.md items 1 and 6) |
+| `.smooth(kernel=..., bandwidth=..., eigenpairs=...)` | implemented for all three kernels. `shk` is the default and reproduces `concon` at r = 1.000000 at full scale on a pipeline subject; `rdk` matches MATLAB to 3.25 float32-eps, `matern` is checked against its closed form (no MATLAB reference exists), and both find the Laplace-Beltrami basis (`EV_LBO_ds_ico4_{L,R}.mat` from [SBCI_Toolkit](https://github.com/sbci-brain/SBCI_Toolkit)'s `concon_estimate`) via `$SBCI_LBO_DIR` (PORTING.md items 1 and 6) |
 | `sbci download hcp-ya` / `sbci.download.fetch_cohort` | implemented; fetches the eleven-subject HCP Young Adult example cohort from its public Google Drive, verifies every file against the manifest, and writes the HCP's data use terms beside the files |
 | `sbci.migrate_warp(warp, to="fs_LR_32k")` | implemented; restates an ENCORE or ConSEAL warp on fs_LR (MSMAll's sphere) or full-resolution fsaverage and writes it as a deformed sphere, so that Workbench can resample a subject's MSMAll fMRI or myelin map through the warp found from its connectivity (USAGE.md has the example) |
 | `.reduce(rank=K)` / `sbci.reduce(cc_list, rank=K)` | implemented; takes connectomes or the paths of their files, which it reads one at a time; matches the MATLAB reference to float64 rounding (PORTING.md item 5) |
@@ -206,7 +210,7 @@ question of: an association among eleven people is out of reach. The analysis
 here uses all 946 HCP Young Adult subjects with complete pipeline output in
 the lab's copy, rebuilt on the ico4 grid as the example subjects were. Only
 the eleven are distributed; with HCP access and the pipeline's output,
-`tools/build_hcp_cohort.py --layout young-adult` builds the rest. The
+`tools/build_hcp_cohort.py` builds the rest. The
 question is whether fluid intelligence, the number of Penn Matrix Test items
 a subject answered correctly (`PMAT24_A_CR` in the HCP's open-access table),
 shows in the structural connectome, with sex, age band and the streamline
@@ -281,11 +285,11 @@ women and men (positive: higher in women), summed over the other endpoint.*
 (`tools/build_hcp_fc.py`), each of the 903 with four complete resting-state
 runs gives a coupling map, and `local_test` takes the 4,685 cortical vertices
 as its columns: one test per vertex, families as clusters, with head motion
-and intracranial volume added to the model because both shape these measures
-(`motion` and `volume` below, from the HCP's own files; docs/figures/README.md
-says which).
+and intracranial volume added to the model because both shape these measures.
 
 ```python
+motion = ...   # per subject: Movement_RelativeRMS_mean.txt averaged over the four runs (mm)
+volume = ...   # per subject: EstimatedTotalIntraCranialVol from T1w/<id>/stats/aseg.stats (litres)
 maps, kept = [], []
 for i, s in enumerate(subjects):
     fc = sbci.load(f"hcp-ya-full/{s}_fc.h5")                # tools/build_hcp_fc.py
@@ -327,23 +331,22 @@ Alignment fits in front of `reduce`: `sbci.align(subjects)` (ENCORE) returns
 the warped densities as `aligned`, and `sbci.endpoints_align(subjects)`
 (ConSEAL) warps every subject's endpoints onto a common template,
 `aligned_endpoints(i)` hands them back, and `smooth()` turns them into aligned
-connectomes (USAGE.md shows the three lines). Timings are for eight cores.
+connectomes (USAGE.md shows the three lines).
 
 **Alignment, with a known answer.** The endpoints of sub-100307's 803,741
 streamlines were moved by a known smooth warp, a random field of
-spherical harmonic degree up to four, 1.7 degrees on average and 4 at most,
+spherical harmonic degree up to four that moves the grid's vertices 1.7
+degrees on average and 4 at most,
 and the deformed copy was registered back onto the undeformed subject, both
 through the package's smoother. ENCORE, searching its default degree-6 basis,
 undoes 88% of the displacement in ten steps: the endpoints come back from
 1.63 to 0.20 degrees, and the cost falls to 0.16 of its start. ConSEAL, with
 the paper's update rule and a stopping threshold of 1e-7, brings them to
 within 0.11 degrees, 93%, in sixty iterations. The figure shows, vertex by
-vertex, how far the endpoints still are from where they started. An earlier
-version of this test had ENCORE undoing almost nothing, for two reasons
-PORTING.md item 4 measures: the reference was the pipeline's stored density,
-which the endpoints then stored beside it did not re-smooth to (they came from
-the pipeline's other branch, item 6), and the warp had structure at the grid
-scale, which a smoothed density cannot see.
+vertex, how far the endpoints still are from where they started. Two rules
+this test taught, measured in PORTING.md item 7: build every density from the
+same endpoints through the same smoother, and judge a registration by a warp
+it can represent.
 
 ![Alignment with a known answer](docs/figures/alignment_recovery.png)
 
@@ -355,9 +358,9 @@ vertices per hemisphere): a measure of anatomy the tractography never sees.
 The known warp of the recovery figure moved it to a correlation of 0.95 with
 the original. ENCORE's warp, estimated from connectivity on 5,124 vertices and
 restated on fsaverage by `sbci.migrate_warp`, put it back to 0.996, and on
-fsaverage it sits 0.33 degrees from the true warp, which moved vertices 1.58
-degrees on average. The figure shows the map, and what each warp changes in
-it.
+fsaverage it sits 0.33 degrees from the true warp, which moved fsaverage's
+vertices 1.58 degrees on average. The figure shows the map, and what each warp
+changes in it.
 
 ![Carrying a warp between templates](docs/figures/migration_power.png)
 
@@ -404,9 +407,10 @@ The heavier submodules load on first use, so `import sbci` costs about 300 ms
 and pulls in neither matplotlib nor scipy unless you touch something that
 needs them. `tests/test_api_surface.py` pins the import set; the time is not asserted.
 
-Anything wrong with a *file or its contents* raises a subclass of
-`sbci.SbciError`, so one `except` covers a pipeline's input problems while a
-mistake in your own arguments still raises a plain `ValueError`:
+Anything wrong with a *file, its contents, or a name the package looks up*
+(an atlas, a region) raises a subclass of `sbci.SbciError`, so one `except`
+covers a pipeline's input problems, while a mistake in a call's own arguments
+raises a plain `ValueError`:
 
 ```python
 try:
@@ -424,9 +428,9 @@ catalogue:
 
 ```python
 >>> sbci.load_atlas("Shaefer200")
-UnknownAtlasError: unknown atlas 'Shaefer200'. Did you mean 'Schaefer200'?
+UnknownAtlasError: unknown atlas 'Shaefer200'. Did you mean 'Schaefer200' or 'Schaefer900' or 'Schaefer800'?
 >>> sbci.load_atlas("Desikan").region_mask("LH_banksts")
-ValueError: aparc has no region named 'LH_banksts'. Did you mean 'LH_bankssts'?
+ValueError: aparc has no region named 'LH_banksts'. Did you mean 'LH_bankssts' or 'RH_bankssts' or 'LH_parsorbitalis'?
 ```
 
 ## Atlases

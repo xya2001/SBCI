@@ -212,3 +212,70 @@ def test_region_scope_needs_labels(connectome, sc_metadata):
     )
     with pytest.raises(ValueError, match="needs labels="):
         structure_function_coupling(connectome, fc, scope="region")
+
+
+def _toy_pair(connectome):
+    """The toy SC with a toy FC of signed correlations on the same five vertices."""
+    from sbci.connectome import ContinuousConnectome
+    from sbci.grid import to_condensed
+    from sbci.metadata import template
+
+    correlations = np.array(
+        [
+            [0.0, 0.8, 0.3, -0.2, 0.0],
+            [0.8, 0.0, 0.5, 0.1, 0.0],
+            [0.3, 0.5, 0.0, 0.6, 0.0],
+            [-0.2, 0.1, 0.6, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0, 0.0],
+        ]
+    )
+    fc = ContinuousConnectome(
+        data=to_condensed(correlations).astype(np.float32),
+        area=connectome.area,
+        mask=connectome.mask,
+        metadata=template(
+            "fc",
+            normalization="none",
+            registration_reference="fsaverage",
+            pipeline_version="test",
+            container_version="test",
+            fc_nuisance_model="none",
+        ),
+    )
+    return fc, correlations
+
+
+def test_the_connectome_entry_point_matches_the_array_functions(connectome):
+    """The method is the array functions on the stored (float32) values, expanded in float64."""
+    fc, _ = _toy_pair(connectome)
+    sc_dense, fc_dense = connectome.dense(np.float64), fc.dense(np.float64)
+    labels = np.array([1, 1, 2, 2, 0])
+    np.testing.assert_array_equal(connectome.coupling(fc), global_coupling(sc_dense, fc_dense))
+    np.testing.assert_array_equal(
+        connectome.coupling(fc, scope="discrete"), discrete_coupling(sc_dense, fc_dense)
+    )
+    np.testing.assert_array_equal(
+        connectome.coupling(fc, scope="region", labels=labels, min_area=1),
+        local_coupling(sc_dense, fc_dense, labels, min_area=1),
+    )
+
+
+def test_labels_without_the_region_scope_are_refused_plainly(connectome):
+    fc, _ = _toy_pair(connectome)
+    with pytest.raises(ValueError, match="labels= goes with scope='region'"):
+        connectome.coupling(fc, labels=np.ones(5, dtype=int))
+
+
+def test_connectomes_on_different_grids_are_refused(connectome):
+    from sbci.connectome import ContinuousConnectome
+    from sbci.grid import to_condensed
+
+    fc, _ = _toy_pair(connectome)
+    smaller = ContinuousConnectome(
+        data=to_condensed(np.zeros((4, 4))).astype(np.float32),
+        area=fc.area[:4],
+        mask=fc.mask[:4],
+        metadata=fc.metadata,
+    )
+    with pytest.raises(ValueError, match="different grids"):
+        connectome.coupling(smaller)

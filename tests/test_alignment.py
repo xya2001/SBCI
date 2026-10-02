@@ -508,8 +508,8 @@ def test_align_refuses_a_misshapen_template_and_a_negative_density(pair):
         align([densities[0], -densities[1]], grids=(grid, grid), max_iterations=1)
 
 
-def test_the_default_grids_record_a_rotation_that_maps_back(pair):
-    """Warps live in the rotated frame; the recorded rotation undoes it."""
+def test_a_custom_grid_records_the_identity_rotation(pair):
+    """Warps live in the grid's frame; a grid built off the poles records no rotation."""
     grid, densities = pair
     result = align(densities[:2], grids=(grid, grid), max_iterations=1)
     lh, rh = result.grid_rotations
@@ -542,3 +542,10 @@ def test_the_threaded_sparse_product_is_bit_for_bit_the_single_call():
     np.testing.assert_array_equal(
         sparse_times_dense(matrix, fortran, threads=2), np.asarray(matrix @ big)
     )
+
+
+def test_an_empty_cohort_is_refused_however_it_is_passed():
+    with pytest.raises(ValueError, match="at least one connectome"):
+        align([])
+    with pytest.raises(ValueError, match="at least one connectome"):
+        align(np.zeros((0, 4, 4)))

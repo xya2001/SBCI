@@ -6,7 +6,10 @@ import argparse
 import sys
 from collections.abc import Sequence
 
+import numpy as np
+
 from . import __version__
+from .errors import SbciError
 from .validate import validate_file
 
 
@@ -20,7 +23,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     download = subparsers.add_parser(
         "download",
-        help="fetch the example cohort: hcp-ya, eleven HCP Young Adult subjects, about 560 MB",
+        help="fetch the example cohort: hcp-ya, eleven HCP Young Adult subjects, SC and FC, "
+        "about 1 GB",
     )
     download.add_argument("cohort", help="cohort name: hcp-ya")
     download.add_argument(
@@ -29,13 +33,15 @@ def build_parser() -> argparse.ArgumentParser:
     download.add_argument(
         "--out", default=".", help="destination directory (default: the current directory)"
     )
-    download.add_argument("--sc-only", action="store_true", help="structural files only")
-    download.add_argument("--fc-only", action="store_true", help="functional files only")
+    modality = download.add_mutually_exclusive_group()
+    modality.add_argument("--sc-only", action="store_true", help="structural files only")
+    modality.add_argument("--fc-only", action="store_true", help="functional files only")
     download.add_argument("--force", action="store_true", help="re-download files already present")
     download.add_argument(
         "--keep-bundles",
         action="store_true",
-        help="keep the full cohort's zip bundles after extracting their files",
+        help="for a cohort released as zip bundles (none at present): keep the bundles after "
+        "extracting their files",
     )
 
     validate = subparsers.add_parser("validate", help="check a file against the spec")
@@ -51,7 +57,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--modality", default="sc", choices=("sc", "fc"), help="which kind to build"
     )
     example.add_argument("--seed", type=int, default=0, help="generator seed")
-    example.add_argument("--out", default="sub-example_sc.h5", help="destination file")
+    example.add_argument(
+        "--out", default=None, help="destination file (default: sub-example_<modality>.h5)"
+    )
 
     atlases = subparsers.add_parser("atlases", help="list the bundled atlases")
     atlases.add_argument("--match", help="only names containing this text")
@@ -70,7 +78,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0 if all(c.passed for c in checks) else 1
 
     if args.command == "info":
-        return _info(args.path)
+        try:
+            return _info(args.path)
+        except (SbciError, OSError) as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
 
     if args.command == "example":
         from .examples import example as _example
@@ -142,7 +154,7 @@ def _info(path: str) -> int:
     print(f"  pipeline        {fields.get('pipeline_version')}")
     if connectome.modality == "sc":
         # A density's mass is area-weighted; the bare sum of entries is not it.
-        dense = connectome.dense().astype("float64")
+        dense = connectome.dense(np.float64)
         print(f"  total mass      {float(connectome.area @ dense @ connectome.area):.6g}")
     print(f"  value range     [{connectome.data.min():.6g}, {connectome.data.max():.6g}]")
     return 0

@@ -1,13 +1,17 @@
-"""Draw the example figures in docs/figures/ from the synthetic data.
+"""Draw synthetic counterparts of the documentation figures: a smoke test of the figure code.
 
 Nothing here needs lab data: every figure comes from ``sbci.example()`` and
-``sbci.example_cohort()``, so the set regenerates anywhere the package and its
+``sbci.example_cohort()``, so the set runs anywhere the package and its
 plotting extra are installed::
 
-    python scripts/make_figures.py docs/figures
+    python scripts/make_figures.py figures-synthetic
 
-The cohort figures fit a rank-4 FPCA on ten subjects and register two of them
-with ConSEAL, which takes a few minutes; run it in a batch job on a cluster.
+Name a directory of your own: five of the files share their names with the
+real-data figures in ``docs/figures/`` (``scripts/hcp_figures.py`` draws
+those), and no document uses what is drawn here. The cohort figures fit a
+rank-4 FPCA on ten subjects and register two of them with ConSEAL, which takes
+a few minutes; run it in a batch job on a cluster. ``hcp_figures.py`` imports
+its colours, its rendering and the figures that need no data from here.
 """
 
 from __future__ import annotations
@@ -152,11 +156,7 @@ def _partners(cc, vertex: int) -> np.ndarray:
 
 def smoothing_power(out: Path) -> None:
     """The endpoints touching one vertex against its smoothed density, in three draws."""
-    from matplotlib.cm import ScalarMappable
-    from matplotlib.colors import Normalize
-
     from sbci.atlas import cortex_mask
-    from sbci.surface import vertex_normals
 
     # The same bundles every time, only the streamlines redrawn: a test-retest pair
     # at the example's default count, and one draw with ten times as many.
@@ -190,6 +190,34 @@ def smoothing_power(out: Path) -> None:
         f"{r_reference:.2f}",
         flush=True,
     )
+    smoothing_panels(
+        out,
+        cortex,
+        partners,
+        touching,
+        smooth,
+        columns,
+        "Smoothing: from a handful of endpoints to a map you can compare\n"
+        f"vertex {SEED} (orange dot) in three draws of one synthetic subject, left hemisphere",
+        f"Draws A and B agree across the cortex at r = {r_raw:.2f} as raw counts and "
+        f"r = {r_smooth:.2f} once smoothed;\nsmoothed draw A matches the "
+        f"{N_STREAMLINES:,}-streamline map at r = {r_reference:.2f}.",
+    )
+
+
+def smoothing_panels(out: Path, cortex, partners, touching, smooth, labels, title, footnote):
+    """Three columns, left hemisphere: the streamlines touching the seed, and its smoothed density.
+
+    The top row marks the far ends of the streamlines touching the seed (blue dots), the
+    bottom row the seed's smoothed profile, for the subjects given.
+    ``partners[k]`` holds the global vertex index of the far end of every streamline touching
+    the seed in subject ``k``, ``touching[k]`` how many there are, and ``smooth[k]`` the seed's
+    smoothed profile relative to its strongest vertex.
+    """
+    from matplotlib.cm import ScalarMappable
+    from matplotlib.colors import Normalize
+
+    from sbci.surface import vertex_normals
 
     display = display_mesh(DISPLAY_MESH)
     half = sbci.load_surface("inflated").n_vertices // 2
@@ -220,7 +248,7 @@ def smoothing_power(out: Path) -> None:
             image = render.render_view(vertices, faces, rgb, "lateral", "L", points=markers)
             axis.imshow(render.trim(image), interpolation="lanczos")
             axis.set_axis_off()
-            axis.set_title(f"{columns[column]}\n{kind}", fontsize=13)
+            axis.set_title(f"{labels[column]}\n{kind}", fontsize=13)
     bar = figure.colorbar(
         ScalarMappable(norm=Normalize(vmin=0.02, vmax=1.0), cmap=SURFACE_RAMP),
         ax=axes.ravel().tolist(),
@@ -230,21 +258,16 @@ def smoothing_power(out: Path) -> None:
     )
     bar.set_label("smoothed density, relative to the strongest vertex", color=MUTED)
     bar.outline.set_visible(False)
-    figure.suptitle(
-        "Smoothing: from a handful of endpoints to a map you can compare\n"
-        f"vertex {SEED} (orange dot) in three draws of one synthetic subject, left hemisphere",
-        fontsize=TITLE_SIZE,
-    )
-    figure.supxlabel(
-        f"Draws A and B agree across the cortex at r = {r_raw:.2f} as raw counts and "
-        f"r = {r_smooth:.2f} once smoothed;\nsmoothed draw A matches the "
-        f"{N_STREAMLINES:,}-streamline map at r = {r_reference:.2f}.",
-        fontsize=13,
-    )
+    figure.suptitle(title, fontsize=TITLE_SIZE)
+    figure.supxlabel(footnote, fontsize=13)
     save(figure, out, "smoothing_power.png")
 
 
-def region_matrix(out: Path, cc) -> None:
+SYNTHETIC_MATRIX_TITLE = "The synthetic subject parcellated with the Desikan atlas (68 regions)"
+
+
+def region_matrix(out: Path, cc, title: str = SYNTHETIC_MATRIX_TITLE) -> None:
+    """The subject collapsed to the Desikan atlas's 68 regions, on a log scale."""
     atlas = sbci.load_atlas("Desikan")
     matrix = cc.to_atlas(atlas, how="mass")
     # A log scale over the full range spans nine decades and turns the matrix
@@ -259,9 +282,8 @@ def region_matrix(out: Path, cc) -> None:
         interpolation="nearest",
     )
     half = atlas.n_regions // 2
-    for position in (half - 0.5,):
-        axis.axhline(position, color="white", linewidth=2)
-        axis.axvline(position, color="white", linewidth=2)
+    axis.axhline(half - 0.5, color="white", linewidth=2)
+    axis.axvline(half - 0.5, color="white", linewidth=2)
     axis.set_xticks([half / 2 - 0.5, half + half / 2 - 0.5])
     axis.set_xticklabels(["left hemisphere", "right hemisphere"])
     axis.set_yticks([half / 2 - 0.5, half + half / 2 - 0.5])
@@ -272,7 +294,7 @@ def region_matrix(out: Path, cc) -> None:
     bar = figure.colorbar(image, ax=axis, fraction=0.046, pad=0.03)
     bar.set_label("mass between the two regions (log scale, top four decades)", color=MUTED)
     bar.outline.set_visible(False)
-    axis.set_title("The synthetic subject parcellated with the Desikan atlas (68 regions)")
+    axis.set_title(title)
     save(figure, out, "region_matrix.png")
 
 
@@ -370,25 +392,44 @@ def angles(p, q):
     return np.degrees(np.arccos(np.clip((p * q).sum(axis=1), -1.0, 1.0)))
 
 
+def resmoothed(cc, endpoints):
+    """The density these endpoints give under the default kernel, on ``cc``'s grid and mask."""
+    from sbci.connectome import ContinuousConnectome
+
+    carrier = ContinuousConnectome(
+        data=np.zeros_like(cc.data),
+        area=cc.area,
+        mask=cc.mask,
+        metadata=cc.metadata,
+        coords=cc.coords,
+        endpoints=endpoints,
+    )
+    return carrier.smooth(kernel="shk", mask_medial_wall=True)
+
+
+def known_warp(grid, rng, amplitude: float):
+    """A random smooth warp in ``grid``'s basis, its largest displacement ``amplitude`` radians."""
+    from sbci.conseal import StationaryWarp
+
+    warp = StationaryWarp(grid)
+    coefficients = rng.standard_normal(grid.basis.shape[1])
+    displacement = (coefficients[None, :, None] * grid.basis).sum(axis=1)
+    displacement *= amplitude / np.linalg.norm(displacement, axis=1).max()
+    assert warp.compose(displacement)
+    return warp
+
+
 def alignment_recovery(out: Path) -> None:
     """Deform a subject by a known smooth warp and measure how much of it each method undoes."""
     from sbci.alignment import Encore, MeshQuery, _hemisphere_grids, align
-    from sbci.conseal import DEFAULT_WARP_ORDER, EndpointConnectome, StationaryWarp, default_grids
+    from sbci.conseal import DEFAULT_WARP_ORDER, EndpointConnectome, default_grids
     from sbci.smoothing import endpoint_positions
 
     subject = sbci.example(seed=0)
     lh, rh = default_grids()
     rng = np.random.default_rng(7)
 
-    def known_warp(grid):
-        warp = StationaryWarp(grid)
-        coefficients = rng.standard_normal(grid.basis.shape[1])
-        displacement = (coefficients[None, :, None] * grid.basis).sum(axis=1)
-        displacement *= 0.07 / np.linalg.norm(displacement, axis=1).max()  # four degrees at most
-        assert warp.compose(displacement)
-        return warp
-
-    lh_true, rh_true = known_warp(lh), known_warp(rh)
+    lh_true, rh_true = (known_warp(grid, rng, 0.07) for grid in (lh, rh))  # four degrees at most
     carrier = EndpointConnectome.from_endpoints(subject.endpoints, lh, rh)
     original = carrier.positions()
     carrier.warp(lh_true, rh_true)
@@ -522,7 +563,10 @@ def spherical_kernel(out: Path) -> None:
 
 
 def main(argv: list[str]) -> int:
-    out = Path(argv[1]) if len(argv) > 1 else Path("docs/figures")
+    if len(argv) < 2:
+        print("usage: python scripts/make_figures.py OUT_DIR (not docs/figures)", file=sys.stderr)
+        return 2
+    out = Path(argv[1])
     out.mkdir(parents=True, exist_ok=True)
     print("single subject", flush=True)
     sc, fc = sbci.example("sc", n_streamlines=N_STREAMLINES), sbci.example("fc")

@@ -2,16 +2,16 @@
 
     python tools/bundle_hcp_cohort.py bundle --data DIR --manifest manifest.csv --out BUNDLES
     python tools/bundle_hcp_cohort.py manifest --bundles BUNDLES --record 1234567 \
-        [--doi 10.5281/...] [--release YYYY-MM-DD]
+        --target src/sbci/data/<cohort>.json [--doi 10.5281/...] [--release YYYY-MM-DD]
 
 ``bundle`` takes the per-subject files ``tools/build_hcp_cohort.py`` wrote
-(``sub-*_sc.h5``, ``sub-*_fc.h5``) and the manifest they were built from
-(``subject, age_years, sex``), and writes zip archives of ``--per-bundle``
-subjects (24 by default) per modality, stored without compression since the
-HDF5 files are compressed already, plus ``bundles.json`` recording every
-bundle's and every member's size and SHA-256 and each subject's sex and
-five-year age bin. Zenodo accepts at most a hundred files per record; 528
-subjects give 44 bundles.
+(``sub-*_sc.h5``, ``sub-*_fc.h5``) and a manifest with ``subject``, ``sex``
+and ``age_bin`` columns, as ``sbci download`` and the builder write it, and
+writes zip archives of ``--per-bundle`` subjects (24 by default) per modality,
+stored without compression since the HDF5 files are compressed already, plus
+``bundles.json`` recording every bundle's and every member's size and SHA-256
+and each subject's sex and age band. Zenodo accepts at most a hundred files
+per record; the 946 young adults give 40 bundles per modality, 80 files.
 
 ``manifest`` turns ``bundles.json`` and the Zenodo record id into
 ``src/sbci/data/<cohort>.json``, the manifest ``sbci download <cohort>``
@@ -24,29 +24,16 @@ from __future__ import annotations
 
 import argparse
 import csv
-import hashlib
 import json
 import os
 import sys
 import zipfile
 from pathlib import Path
 
+from sbci.download import sha256_of
+
 COHORT = "hcp-ya-full"  # the default cohort name; --cohort sets it
 FILE_URL = "https://zenodo.org/records/{record}/files/{name}?download=1"
-
-
-def sha256_of(path: Path) -> str:
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
-def age_bin(years: float) -> str:
-    """Five-year bins, ``36-40``, ``41-45``, ... as the example cohort's manifest uses."""
-    low = 36 + 5 * int((years - 36) // 5) if years >= 36 else 31
-    return f"{low}-{low + 4}"
 
 
 def bundle(args) -> int:
@@ -62,7 +49,7 @@ def bundle(args) -> int:
         if missing:
             print(f"{subject}: missing {missing}, skipped", file=sys.stderr)
             continue
-        subjects.append((subject, row["sex"], age_bin(float(row["age_years"])), files))
+        subjects.append((subject, row["sex"], row["age_bin"], files))
     subjects.sort()
     bundles = []
     records = {}
@@ -145,7 +132,9 @@ def main() -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     b = commands.add_parser("bundle", help="write the zip bundles and bundles.json")
     b.add_argument("--data", required=True, help="directory of sub-*_sc.h5 and sub-*_fc.h5")
-    b.add_argument("--manifest", required=True, help="subject, age_years, sex")
+    b.add_argument(
+        "--manifest", required=True, help="the cohort's manifest.csv: subject, sex, age_bin"
+    )
     b.add_argument("--out", required=True, help="where the bundles go")
     b.add_argument("--per-bundle", type=int, default=24, help="subjects per bundle (24)")
     b.add_argument("--cohort", default=COHORT, help=f"cohort name, the bundles' prefix ({COHORT})")

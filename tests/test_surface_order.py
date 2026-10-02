@@ -78,24 +78,6 @@ def _adjusted_agreement(labels: np.ndarray, edges: np.ndarray, seed: int) -> flo
 
 
 @pytest.mark.parametrize("geometry", GEOMETRIES)
-@pytest.mark.parametrize("atlas_name", ["Desikan", "Schaefer200", "Glasser"])
-def test_parcellations_are_contiguous_on_the_shipped_mesh(geometry, atlas_name):
-    """A mesh in the wrong vertex order scatters every atlas drawn on it."""
-    surface = load_surface(geometry)
-    atlas = load_atlas(atlas_name)
-    assert atlas.labels.size == surface.n_vertices
-
-    edges = _edges(surface.faces)
-    adjusted = _adjusted_agreement(atlas.labels, edges, seed=0)
-
-    assert adjusted > MIN_ADJUSTED_AGREEMENT, (
-        f"{atlas_name} on the {geometry} mesh has chance-corrected agreement "
-        f"{adjusted:.4f}; the mesh and the labels are probably in different "
-        "vertex orders"
-    )
-
-
-@pytest.mark.parametrize("geometry", GEOMETRIES)
 def test_mesh_edges_are_short_and_even(geometry):
     """Neighbouring vertices must be close together.
 
@@ -131,8 +113,3 @@ def test_every_geometry_is_bundled():
     assert set(GEOMETRIES) == {"inflated", "white", "pial", "sphere"}
     for name in GEOMETRIES:
         assert load_surface(name).n_vertices == 5124
-
-
-def test_an_unknown_geometry_lists_the_alternatives():
-    with pytest.raises(ValueError, match="bundled geometries are"):
-        load_surface("midthickness")

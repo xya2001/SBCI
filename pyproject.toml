@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "sbci"
 version = "0.0.1.dev0"
-description = "Continuous brain connectivity: surface-based connectome I/O, parcellation, smoothing, and structure-function coupling"
+description = "Continuous brain connectivity on the ico4 surface grid: connectome I/O, parcellation, smoothing, structure-function coupling, alignment, reduction and inference"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
@@ -56,7 +56,9 @@ addopts = "--doctest-modules --strict-markers --ignore=tests/reference"
 # --doctest-modules imports every .py it collects, and importing a script
 # runs it, so they are kept out of collection entirely.
 doctest_optionflags = "ELLIPSIS NORMALIZE_WHITESPACE"
-markers = ["needs_data: requires the downloaded tutorial subject"]
+markers = [
+  "needs_data: needs data outside the repository, the downloaded tutorial subject (SBCI_HCP_DIR or SBCI_DOWNLOAD=1) or the lab's MATLAB references (the SBCI_* paths in tests/test_matlab_reference.py); skips without it",
+]
 
 [tool.ruff]
 line-length = 100

@@ -127,6 +127,11 @@ def test_region_weights_on_a_real_atlas():
     # Each vertex belongs to at most one region.
     assert (weights > 0).sum(axis=1).max() == 1
     assert weights.sum() == pytest.approx((atlas.labels != 0).sum())
+    # The sparse one-hot form equals the dense one written out by hand.
+    dense = np.zeros((5124, 200))
+    for column, region in enumerate(ids):
+        dense[atlas.labels == region, column] = area[atlas.labels == region]
+    np.testing.assert_array_equal(weights.toarray(), dense)
 
 
 def test_to_atlas_on_the_full_grid(sc_metadata):
@@ -166,3 +171,12 @@ def test_bundled_labels_are_read_only():
     atlas = load_atlas("Desikan")
     with pytest.raises(ValueError):
         atlas.labels[0] = 5
+
+
+def test_an_atlas_does_not_freeze_the_callers_label_array():
+    from sbci.atlas import Atlas
+
+    labels = np.zeros(5124, dtype=np.int32)
+    Atlas(name="mine", labels=labels, names=())
+    labels[0] = 0  # still writable
+    assert labels.flags.writeable

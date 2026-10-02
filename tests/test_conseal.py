@@ -19,7 +19,6 @@ from sbci.conseal import (
     ConSEAL,
     EndpointConnectome,
     EndpointWarp,
-    FastMeshQuery,
     HeatKernelBuilder,
     StationaryWarp,
     _legendre_with_derivative,
@@ -93,12 +92,12 @@ def kernel(grid):
 # --- point location ------------------------------------------------------------
 
 
-def test_fast_query_agrees_with_the_exact_search(grid):
+def test_query_faces_agrees_with_the_exact_search(grid):
     rng = np.random.default_rng(3)
     points = rng.normal(size=(500, 3))
     points /= np.linalg.norm(points, axis=1, keepdims=True)
-    query = FastMeshQuery(grid.vertices, grid.faces)
-    fast_w, fast_i, fast_f = query.query(points)
+    query = MeshQuery(grid.vertices, grid.faces)
+    fast_w, fast_i, fast_f = query.query_faces(points)
     exact_w, exact_i = MeshQuery(grid.vertices, grid.faces).query(points)
     assert np.array_equal(fast_i, exact_i)
     assert np.allclose(fast_w, exact_w, atol=1e-12)
@@ -107,7 +106,7 @@ def test_fast_query_agrees_with_the_exact_search(grid):
 
 
 def test_a_query_at_a_vertex_puts_all_weight_on_it(grid):
-    w, i, _ = FastMeshQuery(grid.vertices, grid.faces).query(grid.vertices[:20])
+    w, i, _ = MeshQuery(grid.vertices, grid.faces).query_faces(grid.vertices[:20])
     assert np.allclose(w.max(axis=1), 1.0, atol=1e-9)
     assert np.array_equal(i[np.arange(20), np.argmax(w, axis=1)], np.arange(20))
 
@@ -662,12 +661,12 @@ def test_the_bundled_grid_is_oriented_outward_and_icosahedral_to_stored_precisio
 
 def test_the_rigid_search_transport_is_the_permutation_on_an_exact_icosphere(grid):
     """Pulling back by a symmetry through barycentric interpolation is the reference's gather."""
-    from sbci.conseal import ConSEAL, FastMeshQuery
+    from sbci.conseal import ConSEAL
 
     rotations, permutations = mesh_symmetries(grid.vertices, grid.faces)
     rng = np.random.default_rng(5)
     values = rng.random((grid.n_vertices, grid.n_vertices))
-    query = FastMeshQuery(grid.vertices, grid.faces)
+    query = MeshQuery(grid.vertices, grid.faces)
     for rotation, perm in zip(rotations[:7], permutations[:7], strict=True):
         image = np.argsort(perm)  # image[i] = where vertex i lands
         pulled = ConSEAL._pull_back(values, grid, query, rotation)

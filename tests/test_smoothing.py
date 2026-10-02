@@ -927,7 +927,7 @@ def test_endpoint_density_validates_its_inputs():
     points = np.array([[1.0, 0.0, 0.0]])
     with pytest.raises(ValueError, match="one entry per streamline"):
         endpoint_density(vertices, points, points, [0, 0], [0], [0, 0, 0], sigma=0.005)
-    with pytest.raises(ValueError, match="unit sphere"):
+    with pytest.raises(ValueError, match="finite unit vectors"):
         endpoint_density(2 * vertices, points, points, [0], [0], [0, 0, 0], sigma=0.005)
 
 
@@ -1020,3 +1020,57 @@ def test_smooth_shk_end_to_end_from_barycentric_endpoints():
     np.testing.assert_allclose(
         to_dense(smoothed.data.astype(np.float64)), check, rtol=1e-5, atol=1e-12
     )
+
+
+def test_the_density_refuses_nan_positions_and_unknown_hemisphere_flags():
+    from sbci.smoothing import endpoint_density
+
+    vertices = np.eye(3)
+    points = np.array([[1.0, 0.0, 0.0]])
+    good = dict(
+        vertices=vertices,
+        hemisphere_in=np.array([0]),
+        hemisphere_out=np.array([0]),
+        vertex_hemisphere=np.zeros(3, dtype=int),
+        sigma=0.5,
+    )
+    with pytest.raises(ValueError, match="finite unit vectors"):
+        endpoint_density(points_in=np.array([[np.nan, 0.0, 0.0]]), points_out=points, **good)
+    with pytest.raises(ValueError, match="match no vertex hemisphere"):
+        endpoint_density(
+            points_in=points,
+            points_out=points,
+            **{**good, "hemisphere_out": np.array([1])},
+        )
+
+
+def test_a_triangle_index_beyond_its_hemisphere_is_refused():
+    from sbci.smoothing import Endpoints, endpoint_positions
+
+    ends = Endpoints(
+        surf_in=np.array([0]),
+        surf_out=np.array([0]),
+        vtx_in=np.array([0]),
+        vtx_out=np.array([1]),
+        tri_in=np.array([6000]),
+        tri_out=np.array([0]),
+        bary_in=np.array([[1.0, 0.0, 0.0]]),
+        bary_out=np.array([[1.0, 0.0, 0.0]]),
+    )
+    with pytest.raises(ValueError, match="within a hemisphere"):
+        endpoint_positions(ends)
+
+
+def test_the_default_kernel_needs_the_ico4_grid(smoothable, toy_endpoints, toy_basis):
+    from dataclasses import replace
+
+    corner = np.tile([1.0, 0.0, 0.0], (6, 1))
+    smoothable.endpoints = replace(  # positioned, so the grid is the next thing checked
+        toy_endpoints,
+        tri_in=np.zeros(6, dtype=int),
+        tri_out=np.zeros(6, dtype=int),
+        bary_in=corner,
+        bary_out=corner,
+    )
+    with pytest.raises(ValueError, match="shk smoothing needs"):
+        smoothable.smooth(kernel="shk", eigenpairs=toy_basis)

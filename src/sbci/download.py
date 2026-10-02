@@ -1,8 +1,8 @@
 """Fetching the released example cohort: eleven HCP Young Adult subjects.
 
-The files are too large for the repository (47 to 56 MB each), so the
+The files are too large for the repository (40 to 56 MB each), so the
 repository carries a manifest instead: ``data/hcp_ya.json`` lists every
-subject's SC file with its Google Drive id, size and SHA-256, and each
+subject's SC and FC files with their Google Drive ids, sizes and SHA-256s, and each
 subject's sex and open-access age band. :func:`fetch_cohort` downloads what is
 asked for, verifies every file against the manifest, and skips files already
 present and correct, so it can be re-run; ``sbci download hcp-ya`` is the

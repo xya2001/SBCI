@@ -4,7 +4,9 @@ r"""Build HCP Young Adult functional connectomes on the ico4 grid from the HCP's
         --fmri /proj/STOR/zz10c/HCP_fMRI --fmri SUPPLEMENT \
         --spheres /overflow/zzhanglab/encore_project/encore_paper_code/prediction_subs \
         --fslr <...>/fslr --mapping <...>/fsaverage_label/mapping_avg_ico4.npz \
-        --out /work/users/x/y/xya/hcp-ya/fc/data
+        --out /work/users/x/y/xya/hcp-ya/fc/data \
+        [--fsaverage SURF_DIR] [--min-runs N] [--no-gsr] [--bandpass LOW HIGH] \
+        [--crossmesh DIR [--crossmesh-all]]
 
 ``manifest.csv`` has a ``subject`` column (``sub-100307``). The time series are the
 HCP's ICA-FIX-cleaned resting-state runs on the 32k fs_LR mesh,

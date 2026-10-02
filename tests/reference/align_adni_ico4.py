@@ -1,7 +1,7 @@
 """sbci.align on real multi-subject data, on ico4 -- the package's own grid.
 
-The earlier multi-subject check (scripts/align_hcp_cohort.py) used the HCP
-test-retest tensors, which exist only on the retired 4121-vertex 0.94 grid.
+An earlier multi-subject check used the lab's HCP test-retest tensors, which
+exist only on the retired 4121-vertex 0.94 grid; it was retired with the grid.
 These five ADNI subjects are the pipeline's ico4 output, so this is the check
 that counts for the package: alignment must make the subjects more alike, and
 every Jacobian must stay positive. Reads lab data; run by hand:
@@ -9,14 +9,16 @@ every Jacobian must stay positive. Reads lab data; run by hand:
     python tests/reference/align_adni_ico4.py
 """
 
+import os
 import sys
 import time
 
 import numpy as np
 import scipy.io as sio
 
-sys.path.insert(0, "/nas/longleaf/home/xya/sbci/src")
-sys.path.insert(0, "/nas/longleaf/home/xya/sbci/tools")
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "..", "..", "src"))
+sys.path.insert(0, os.path.join(HERE, "..", "..", "tools"))
 from import_legacy import area_weights
 
 import sbci

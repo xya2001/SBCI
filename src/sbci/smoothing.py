@@ -43,6 +43,7 @@ from functools import lru_cache
 
 import numpy as np
 
+from . import spec
 from .errors import FormatError, MissingDataError
 
 KERNELS = ("shk", "rdk", "matern")
@@ -53,7 +54,7 @@ item 10.
     The spherical kernel ``concon`` applies (Moyer et al., MICCAI 2016), the
     default, and the one that produced every released ``smoothed_sc_avg_*.mat``.
     Its bandwidth is ``sigma``. Reproduces ``c3_main`` at r = 1.000000 and
-    scale 1.000000 across five ADNI subjects; the 0.14% amplitude offset an
+    scale 1.000000 at full scale on a pipeline subject; the 0.14% amplitude offset an
     earlier version carried was the binary's lookup-table quantization, which
     :class:`KernelTable` reproduces -- see PORTING.md item 6. Not the heat
     kernel, despite the name: :func:`spherical_heat_kernel` explains the weight.
@@ -94,7 +95,7 @@ def diffusion_kernel(eigenvalues: np.ndarray, eigenvectors: np.ndarray, kappa: f
     >>> np.allclose(K, np.diag(np.exp(-0.5 * np.array([0.0, 1.0, 2.0]))))
     True
     """
-    if kappa <= 0:
+    if not kappa > 0:  # written so that NaN fails too
         raise ValueError(f"kappa must be positive, got {kappa}")
     rho = np.exp(-(kappa**2) / 2.0 * np.asarray(eigenvalues, dtype=np.float64).ravel())
     return _assemble(rho, eigenvectors)
@@ -110,9 +111,9 @@ def matern_kernel(
     nu
         Differentiability. The reference script uses 1, 2 or 3.
     """
-    if kappa <= 0:
+    if not kappa > 0:
         raise ValueError(f"kappa must be positive, got {kappa}")
-    if nu <= 0:
+    if not nu > 0:
         raise ValueError(f"nu must be positive, got {nu}")
     lam = np.asarray(eigenvalues, dtype=np.float64).ravel()
     rho = (2.0 * nu / kappa**2 + lam) ** (-nu - 1.0)
@@ -356,14 +357,29 @@ def concon_kernel_table(
     return KernelTable(values=values, samples=big_m, cutoff_cosine=cutoff_cosine)
 
 
+def _legendre_with_derivative(x, degree: int):
+    """Yield ``(l, P_l(x), dP_l/dx)`` for ``l = 0..degree`` by the standard recurrences.
+
+    Shared with ConSEAL's kernel builder, which needs the derivative as well.
+    """
+    x = np.asarray(x, dtype=np.float64)
+    p_prev, p_cur = np.ones_like(x), x.copy()
+    d_prev, d_cur = np.zeros_like(x), np.ones_like(x)
+    yield 0, p_prev, d_prev
+    if degree >= 1:
+        yield 1, p_cur, d_cur
+    for h in range(1, degree):
+        p_next = ((2 * h + 1) * x * p_cur - h * p_prev) / (h + 1)
+        d_next = ((2 * h + 1) * (p_cur + x * d_cur) - h * d_prev) / (h + 1)
+        yield h + 1, p_next, d_next
+        p_prev, p_cur, d_prev, d_cur = p_cur, p_next, d_cur, d_next
+
+
 def _legendre_polynomials(x: np.ndarray, terms: int) -> np.ndarray:
-    """``P_l(x)`` for ``l = 0 .. terms-1`` as rows, by the standard recurrence."""
+    """``P_l(x)`` for ``l = 0 .. terms-1`` as rows."""
     out = np.empty((terms, x.size), dtype=np.float64)
-    out[0] = 1.0
-    if terms > 1:
-        out[1] = x
-    for k in range(1, terms - 1):
-        out[k + 1] = ((2 * k + 1) * x * out[k] - k * out[k - 1]) / (k + 1)
+    for order, p, _ in _legendre_with_derivative(x, terms - 1):
+        out[order] = p
     return out
 
 
@@ -419,8 +435,8 @@ def spherical_heat_kernel(
     Verified against ``c3_main`` itself, run on a single streamline so its
     output is the kernel: the quantized form reproduces the binary's peak entry
     to six digits at five bandwidths, and its ring values at sigma 0.005 to rms
-    0.0005; against the released matrices of five ADNI subjects the density
-    correlates at 1.000000. ``tests/reference/concon_probe.py`` regenerates the
+    0.0005; against the released matrix of a pipeline subject, at full scale,
+    the density correlates at 1.000000. ``tests/reference/concon_probe.py`` regenerates the
     measurement.
 
     Examples
@@ -528,8 +544,16 @@ def endpoint_density(
         ("points_in", points_in),
         ("points_out", points_out),
     ):
-        if array.size and np.abs(np.linalg.norm(array, axis=1) - 1.0).max() > 1e-6:
-            raise ValueError(f"{name} must lie on the unit sphere")
+        # Written so that a NaN fails the check too
+        if array.size and not (np.abs(np.linalg.norm(array, axis=1) - 1.0) <= 1e-6).all():
+            raise ValueError(f"{name} must be finite unit vectors")
+    flags = np.unique(np.concatenate([hemisphere_in, hemisphere_out]))
+    unknown = np.setdiff1d(flags, np.unique(vertex_hemisphere))
+    if unknown.size:
+        raise ValueError(
+            f"endpoint hemisphere flags {unknown.tolist()} match no vertex hemisphere; an "
+            "endpoint with no vertices to land on would otherwise be dropped silently"
+        )
 
     def kernel(cosine):
         return spherical_heat_kernel(cosine, sigma, harmonics, quantized=quantized)
@@ -652,9 +676,13 @@ def endpoint_positions(endpoints, surface=None):
     faces_per_hemi = faces.shape[0] // 2
 
     def rebuild(triangle, bary, surf):
-        index = np.asarray(triangle, dtype=np.int64) + Endpoints.global_hemisphere_offset(
-            surf, faces_per_hemi
-        )
+        local = np.asarray(triangle, dtype=np.int64)
+        if local.size and (local.min() < 0 or local.max() >= faces_per_hemi):
+            raise ValueError(
+                f"triangle indices must lie in 0..{faces_per_hemi - 1} within a hemisphere; "
+                f"got {local.min()}..{local.max()}"
+            )
+        index = local + Endpoints.global_hemisphere_offset(surf, faces_per_hemi)
         corners = vertices[faces[index]]  # (s, 3, 3)
         point = np.einsum("sk,skj->sj", np.asarray(bary, dtype=np.float64), corners)
         return point / np.linalg.norm(point, axis=1, keepdims=True)
@@ -738,7 +766,7 @@ class Endpoints:
     surf_out: np.ndarray
     vtx_in: np.ndarray
     vtx_out: np.ndarray
-    n_per_hemi: int = 2562
+    n_per_hemi: int = spec.N_VERTICES_PER_HEMI
     tri_in: np.ndarray | None = None
     tri_out: np.ndarray | None = None
     bary_in: np.ndarray | None = None
@@ -783,7 +811,7 @@ class Endpoints:
         return int(np.asarray(self.vtx_in).size)
 
     @classmethod
-    def from_matlab(cls, path, n_per_hemi: int = 2562) -> Endpoints:
+    def from_matlab(cls, path, n_per_hemi: int = spec.N_VERTICES_PER_HEMI) -> Endpoints:
         """Read ``mesh_intersections_*.mat`` from the legacy pipeline.
 
         MATLAB vertex indices are one-based and are converted here.
@@ -802,7 +830,7 @@ class Endpoints:
         data = scipy.io.loadmat(path)
         missing = [k for k in ("surf_in", "surf_out", "vtx_in", "vtx_out") if k not in data]
         if missing:
-            raise FormatError(f"{path} has no {missing}")
+            raise FormatError(f"{path} has no {', '.join(missing)}")
         optional = {}
         if all(k in data for k in ("tri_in", "tri_out", "pt_in", "pt_out")):
             optional = {
@@ -861,7 +889,7 @@ class Endpoints:
                 snapped = {key: loaded[key] for key in loaded.files}
         missing = [k for k in ("surf_ids0", "surf_ids1", "v_ids0", "v_ids1") if k not in snapped]
         if missing:
-            raise FormatError(f"the snapped streamlines have no {missing}")
+            raise FormatError(f"the snapped streamlines have no {', '.join(missing)}")
         surf_in = np.asarray(snapped["surf_ids0"]).astype(np.int64).ravel()
         surf_out = np.asarray(snapped["surf_ids1"]).astype(np.int64).ravel()
         vertex_in = np.asarray(snapped["v_ids0"]).astype(np.int64).ravel()
@@ -935,8 +963,8 @@ class Endpoints:
         cls,
         vertex_in: np.ndarray,
         vertex_out: np.ndarray,
-        n_per_hemi: int = 2562,
-        n_faces_per_hemi: int = 5120,
+        n_per_hemi: int = spec.N_VERTICES_PER_HEMI,
+        n_faces_per_hemi: int = spec.N_FACES_PER_HEMI,
         triangle_in: np.ndarray | None = None,
         triangle_out: np.ndarray | None = None,
         barycentric_in: np.ndarray | None = None,
@@ -1310,7 +1338,6 @@ def _grid_vertices(connectome) -> np.ndarray:
     positions refer to the pipeline's ico4 sphere, which the bundled mesh
     reproduces to 6e-12 (PORTING.md item 6).
     """
-    from . import spec
     from .surface import load_surface
 
     if connectome.n_vertices != spec.N_VERTICES:

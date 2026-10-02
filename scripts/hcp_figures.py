@@ -5,7 +5,7 @@
         [--anatomy /path/to/the/first/subject's/pipeline/directory]
         [--full-cohort DIR --traits CSV [--groups CSV] [--rank 20] [--candidates 1]
          [--full-fc FCDIR [--covariates CSV]]]
-        [--dataset NAME]
+        [--no-conseal] [--dataset NAME]
 
 The cohort directory is what ``sbci download hcp-ya`` writes, or what
 ``tools/build_hcp_cohort.py`` builds: ``manifest.csv`` (``subject`` and, where
@@ -18,8 +18,9 @@ each is skipped. Titles say HCP Young Adult unless ``--dataset`` names
 another. Every surface is drawn on fsaverage.
 
 The single-subject figures take a few minutes. The cohort figures register
-every subject with ENCORE and ConSEAL, about an hour and a half for ten on
-eight cores; run this in a batch job.
+every subject with ENCORE and ConSEAL (``--no-conseal`` leaves ConSEAL out),
+about two and a half hours for the eleven on eight cores; run this in a batch
+job.
 """
 
 from __future__ import annotations
@@ -36,15 +37,13 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from matplotlib.cm import ScalarMappable  # noqa: E402
-from matplotlib.colors import LogNorm, Normalize  # noqa: E402
+from matplotlib.colors import Normalize  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from make_figures import (  # noqa: E402
     BLUE,
-    BLUE_RAMP,
     DISPLAY_ENGINE,
     DISPLAY_MESH,
-    DOT_SIZE,
     INK,
     MUTED,
     ORANGE,
@@ -54,13 +53,17 @@ from make_figures import (  # noqa: E402
     TITLE_SIZE,
     VIEWS,
     angles,
+    known_warp,
+    region_matrix,
     rendered_map,
+    resmoothed,
     save,
+    smoothing_panels,
+    spherical_kernel,
 )
 
 import sbci  # noqa: E402
 from sbci import render  # noqa: E402
-from sbci.connectome import ContinuousConnectome  # noqa: E402
 from sbci.plotting import display_mesh  # noqa: E402
 from sbci.smoothing import Endpoints  # noqa: E402
 
@@ -91,19 +94,6 @@ def subset(endpoints: Endpoints, index: np.ndarray) -> Endpoints:
     return Endpoints(n_per_hemi=endpoints.n_per_hemi, **fields)
 
 
-def resmoothed(cc: ContinuousConnectome, endpoints: Endpoints) -> ContinuousConnectome:
-    """The density these endpoints give under the default kernel."""
-    carrier = ContinuousConnectome(
-        data=np.zeros_like(cc.data),
-        area=cc.area,
-        mask=cc.mask,
-        metadata=cc.metadata,
-        coords=cc.coords,
-        endpoints=endpoints,
-    )
-    return carrier.smooth(kernel="shk", mask_medial_wall=True)
-
-
 # --- one subject ---------------------------------------------------------------------
 
 
@@ -121,34 +111,6 @@ def seed_profile(out: Path, cc) -> None:
         y=1.11,
     )
     save(figure, out, "seed_profile.png")
-
-
-def region_matrix(out: Path, cc) -> None:
-    atlas = sbci.load_atlas("Desikan")
-    matrix = cc.to_atlas(atlas, how="mass")
-    top = float(matrix.max())
-    figure, axis = plt.subplots(figsize=(6.2, 5.4))
-    image = axis.imshow(
-        np.where(matrix > 0, matrix, np.nan),
-        cmap=BLUE_RAMP,
-        norm=LogNorm(vmin=top * 1e-4, vmax=top),
-        interpolation="nearest",
-    )
-    half = atlas.n_regions // 2
-    axis.axhline(half - 0.5, color="white", linewidth=2)
-    axis.axvline(half - 0.5, color="white", linewidth=2)
-    axis.set_xticks([half / 2 - 0.5, half + half / 2 - 0.5])
-    axis.set_xticklabels(["left hemisphere", "right hemisphere"])
-    axis.set_yticks([half / 2 - 0.5, half + half / 2 - 0.5])
-    axis.set_yticklabels(["left", "right"], rotation=90, va="center")
-    axis.tick_params(length=0)
-    for spine in axis.spines.values():
-        spine.set_visible(False)
-    bar = figure.colorbar(image, ax=axis, fraction=0.046, pad=0.03)
-    bar.set_label("mass between the two regions (log scale, top four decades)", color=MUTED)
-    bar.outline.set_visible(False)
-    axis.set_title(f"An {DATASET} subject parcellated with the Desikan atlas (68 regions)")
-    save(figure, out, "region_matrix.png")
 
 
 def coupling(out: Path, subjects, functional) -> None:
@@ -172,11 +134,7 @@ def coupling(out: Path, subjects, functional) -> None:
 
 def smoothing_power(out: Path, cc) -> None:
     """Two random halves of one subject's streamlines against all of them."""
-    from matplotlib.cm import ScalarMappable
-    from matplotlib.colors import Normalize
-
     from sbci.atlas import cortex_mask
-    from sbci.surface import vertex_normals
 
     ends = cc.endpoints
     rng = np.random.default_rng(0)
@@ -219,58 +177,20 @@ def smoothing_power(out: Path, cc) -> None:
         flush=True,
     )
 
-    display = display_mesh(DISPLAY_MESH)
-    half = sbci.load_surface("inflated").n_vertices // 2
-    vertices, faces = display.geometries["inflated"][0], display.faces[0]
-    lift = 1.2 * vertex_normals(vertices, faces)  # markers sit just above the surface
-    on_cortex = np.nan_to_num(display.interpolate(cortex.astype(float))[0]) > 0.5
-    grey = render.shade(display.sulc[0], on_cortex)
-    smooth_hi = [display.interpolate(np.where(cortex, values, np.nan))[0] for values in smooth]
-    seed_vertex = display.nearest[0][SEED]
-
-    figure, axes = plt.subplots(2, 3, figsize=(15, 7.6), layout="constrained")
-    for row in range(2):
-        for column in range(3):
-            axis = axes[row, column]
-            if row == 0:
-                # The far ends of the streamlines that touch the vertex; the
-                # renderer hides those on the far side of the hemisphere.
-                local = partner[column][partner[column] < half]  # left hemisphere
-                local = np.unique(display.nearest[0][local])
-                rgb = np.repeat(grey[:, None], 3, axis=1)
-                markers = [(vertices[local] + lift[local], BLUE, DOT_SIZE)]
-                kind = f"raw: the {touching[column]:,} streamlines touching the vertex"
-            else:
-                rgb = render.colour(smooth_hi[column], grey, SURFACE_RAMP, 0.02, 1.0, 0.02)
-                markers = []
-                kind = "smoothed density"
-            markers.append((vertices[[seed_vertex]] + lift[[seed_vertex]], ORANGE, SEED_SIZE))
-            image = render.render_view(vertices, faces, rgb, "lateral", "L", points=markers)
-            axis.imshow(render.trim(image), interpolation="lanczos")
-            axis.set_axis_off()
-            axis.set_title(f"{labels[column]}\n{kind}", fontsize=13)
-    bar = figure.colorbar(
-        ScalarMappable(norm=Normalize(vmin=0.02, vmax=1.0), cmap=SURFACE_RAMP),
-        ax=axes.ravel().tolist(),
-        shrink=0.45,
-        pad=0.02,
-        format="%g",
-    )
-    bar.set_label("smoothed density, relative to the strongest vertex", color=MUTED)
-    bar.outline.set_visible(False)
-    figure.suptitle(
+    smoothing_panels(
+        out,
+        cortex,
+        partner,
+        touching,
+        smooth,
+        labels,
         "Smoothing: from a scatter of endpoints to a map you can compare\n"
         f"vertex {SEED} (orange dot) in two random halves of one {DATASET} subject's "
         "streamlines, left hemisphere",
-        fontsize=TITLE_SIZE,
-    )
-    figure.supxlabel(
         f"The two halves agree across the cortex at r = {r_raw:.2f} as raw counts and "
         f"r = {r_smooth:.2f} once smoothed;\nsmoothed half A matches the map from all "
         f"streamlines at r = {r_all:.2f}.",
-        fontsize=13,
     )
-    save(figure, out, "smoothing_power.png")
 
 
 #: The known warp of the recovery figures: a random tangent field of harmonic
@@ -287,20 +207,12 @@ def known_warp_experiment(subject) -> dict:
     Shared by the recovery figure and the warp-migration figure.
     """
     from sbci.alignment import Encore, MeshQuery, _hemisphere_grids, normalize_rows
-    from sbci.conseal import EndpointConnectome, StationaryWarp, default_grids
+    from sbci.conseal import EndpointConnectome, default_grids
 
     lh, rh = default_grids()
     rng = np.random.default_rng(7)
 
-    def known_warp(grid):
-        warp = StationaryWarp(grid)
-        coefficients = rng.standard_normal(grid.basis.shape[1])
-        displacement = (coefficients[None, :, None] * grid.basis).sum(axis=1)
-        displacement *= WARP_AMPLITUDE / np.linalg.norm(displacement, axis=1).max()
-        assert warp.compose(displacement)
-        return warp
-
-    lh_true, rh_true = (known_warp(grid) for grid in default_grids(WARP_ORDER))
+    lh_true, rh_true = (known_warp(grid, rng, WARP_AMPLITUDE) for grid in default_grids(WARP_ORDER))
     reference = resmoothed(subject, subject.endpoints)
     carrier = EndpointConnectome.from_endpoints(subject.endpoints, lh, rh)
     original = carrier.positions()
@@ -1412,6 +1324,9 @@ def main(argv: list[str]) -> int:
             coupling(out, subjects, functional)
         smoothing_power(out, first)
         return 0
+    if only_migration and anatomy is None:
+        print("--only-migration needs --anatomy, the subject's pipeline directory", file=sys.stderr)
+        return 2
     if only_recovery or only_migration:
         experiment = known_warp_experiment(first)
         if only_recovery:
@@ -1424,7 +1339,13 @@ def main(argv: list[str]) -> int:
     if not only_cohort:
         print("single subject", flush=True)
         seed_profile(out, first)
-        region_matrix(out, first)
+        region_matrix(
+            out,
+            first,
+            title=f"An {DATASET} subject parcellated with the Desikan atlas (68 regions)",
+        )
+        print("kernel", flush=True)
+        spherical_kernel(out)
         if any(functional):
             coupling(out, subjects, functional)
         print("smoothing", flush=True)

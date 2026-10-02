@@ -1,8 +1,7 @@
-"""The example connectome, which is what a new user runs first.
+"""The example connectome: what the tests and a machine without network access run.
 
-`sbci download` needs the data release, so until that exists `sbci.example()`
-is the only thing anyone can run. It therefore has to be exactly as valid as a
-real file, and it has to say clearly that it is not one.
+It has to be exactly as valid as a real file, and it has to say clearly that it
+is not one.
 """
 
 from __future__ import annotations
@@ -35,8 +34,8 @@ def test_it_is_reproducible():
     np.testing.assert_array_equal(sbci.example(seed=3).data, sbci.example(seed=3).data)
 
 
-def test_different_seeds_differ():
-    assert not np.array_equal(sbci.example(seed=1).data, sbci.example(seed=2).data)
+def test_different_seeds_differ(sc):
+    assert not np.array_equal(sc.data, sbci.example(seed=1).data)
 
 
 def test_sc_is_a_density_of_unit_mass(sc):
@@ -57,8 +56,8 @@ def test_fc_stays_within_correlation_bounds(fc):
 
 
 @pytest.mark.parametrize("modality", ["sc", "fc"])
-def test_the_medial_wall_carries_nothing(modality):
-    cc = sbci.example(modality)
+def test_the_medial_wall_carries_nothing(modality, request):
+    cc = request.getfixturevalue(modality)
     assert float(np.abs(cc.dense()[~cc.mask]).sum()) == 0.0
 
 
@@ -68,9 +67,9 @@ def test_the_mask_is_the_real_medial_wall(sc):
 
 
 @pytest.mark.parametrize("modality", ["sc", "fc"])
-def test_it_passes_the_validator(modality, tmp_path):
+def test_it_passes_the_validator(modality, tmp_path, request):
     path = tmp_path / f"sub-example_{modality}.h5"
-    sbci.example(modality).save(path)
+    request.getfixturevalue(modality).save(path)
     failed = [c for c in validate_file(path) if not c.passed]
     assert not failed, [str(c) for c in failed]
 
@@ -270,3 +269,23 @@ def test_reduce_and_local_test_recover_the_planted_bundle():
     assert abs(np.corrcoef(reduction.scores[:, found[0]], cohort.age)[0, 1]) > 0.8
     effect = result.effect_map(reduction, alpha=0.05)
     assert np.corrcoef(effect, cohort.truth)[0, 1] > 0.5
+
+
+def test_cli_example_names_the_file_after_the_modality(tmp_path, monkeypatch, capsys):
+    """Without --out, an FC example is sub-example_fc.h5, not a file called _sc."""
+    monkeypatch.chdir(tmp_path)
+    assert main(["example", "--modality", "fc"]) == 0
+    assert (tmp_path / "sub-example_fc.h5").exists()
+    assert not (tmp_path / "sub-example_sc.h5").exists()
+    assert main(["info", "sub-example_fc.h5"]) == 0
+    out = capsys.readouterr().out
+    assert "modality        fc" in out and "nuisance model" in out
+
+
+def test_cli_version_and_a_missing_file_for_info(capsys):
+    with pytest.raises(SystemExit) as stop:
+        main(["--version"])
+    assert stop.value.code == 0
+    assert capsys.readouterr().out.startswith("sbci ")
+    assert main(["info", "no-such-file.h5"]) == 1
+    assert "error:" in capsys.readouterr().err

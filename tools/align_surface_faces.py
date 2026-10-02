@@ -14,12 +14,13 @@ to 6e-12. Only the face list is reordered here, and all four share one.
 Run with the lab grid files reachable; the output is committed.
 """
 
+import os
 import sys
 from importlib import resources
 
 import numpy as np
 
-sys.path.insert(0, "/nas/longleaf/home/xya/sbci/tools")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from convert_surfaces import canonical_faces
 
 canonical = canonical_faces()

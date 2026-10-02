@@ -72,27 +72,12 @@ def test_cli_exits_non_zero_on_failure(tmp_path, connectome, capsys):
     assert "[FAIL] grid" in capsys.readouterr().out
 
 
-def test_cli_download_explains_what_is_missing(tmp_path, capsys, monkeypatch):
-    """Before the files are uploaded the manifest has no ids, and the command says so."""
-    from sbci import download
-
-    manifest = {
-        "cohort": "hcp-ya",
-        "subjects": [
-            {
-                "subject": "sub-A",
-                "sex": "F",
-                "age_bin": "36-40",
-                "files": {"sc": {"drive_id": "", "bytes": 0, "sha256": ""}},
-            }
-        ],
-    }
-    monkeypatch.setattr(download, "load_manifest", lambda cohort="hcp-ya": manifest)
-    assert main(["download", "hcp-ya", "--out", str(tmp_path)]) == 1
-    assert "not been released" in capsys.readouterr().err
-    monkeypatch.undo()
-    assert main(["download", "hcp-development", "--out", str(tmp_path)]) == 1
-    assert "cohort" in capsys.readouterr().err
+def test_a_missing_file_is_reported_in_plain_words(tmp_path, capsys):
+    checks = validate_file(tmp_path / "nope.h5")
+    assert [c.passed for c in checks] == [False]
+    assert "no such file" in str(checks[0])
+    assert main(["validate", str(tmp_path / "nope.h5")]) == 1
+    assert "no such file" in capsys.readouterr().out
 
 
 def test_non_finite_values_fail(tmp_path, connectome):

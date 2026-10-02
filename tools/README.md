@@ -9,8 +9,9 @@ changes (PORTING.md says which item each belongs to).
 | Tool | Produces |
 | --- | --- |
 | `convert_atlases.py` | the 44 atlas label files, `src/sbci/data/atlases/*_ico4.npz`, from the toolkit's `*_avg_roi_ico4.mat` |
-| `build_surfaces.py` | the inflated, white, pial and sphere meshes at ico4, `src/sbci/data/surfaces/`, from FreeSurfer's fsaverage |
-| `convert_surfaces.py` | the toolkit's own ico4 VTK meshes in the package's format (superseded by `build_surfaces.py` for the anatomical surfaces) |
+| `build_surfaces.py` | the inflated, white and pial meshes at ico4, `src/sbci/data/surfaces/`, from FreeSurfer's fsaverage |
+| `convert_surfaces.py` | the sphere, `src/sbci/data/surfaces/sphere_ico4.npz`, from the toolkit's ico4 VTK export, and the canonical face order the stored triangle indices use, digest-checked |
+| `build_template_spheres.py` | the fs_LR 32k registration spheres `migrate_warp` carries a warp to, `src/sbci/data/templates/fslr32k_spheres.npz` |
 | `align_surface_faces.py` | puts the bundled surfaces' faces in the order the stored triangle indices refer to (SPEC_QUESTIONS.md item 13) |
 | `build_resampling.py` | the ico4 to fsLR-32k overlap matrix behind the exchange format |
 | `build_fslr_surfaces.py` | fsLR-32k anatomical surfaces from fsaverage, for viewing the exchange file |

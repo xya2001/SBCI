@@ -182,3 +182,16 @@ def test_write_cifti_sets_the_intent_codes_and_writes_the_companions(tmp_path, m
     assert areas.nifti_header.get_intent()[0] == "ConnDenseScalar"
     sidecar = json.loads((tmp_path / "sub-toy_sc.json").read_text())
     assert sidecar["exchange_space"] == "fsLR" and sidecar["kernel"] == "shk"
+
+
+def test_the_sidecar_serializes_numpy_scalars_and_carries_the_exchange_keys():
+    """json.dumps alone refuses np.int64; the sidecar must not, after the 17 GB file is written."""
+    import json
+
+    text = cifti.sidecar(
+        {"streamline_count": np.int64(803_741), "bandwidth": np.float32(0.005)}, "sub-x"
+    )
+    fields = json.loads(text)
+    assert fields["streamline_count"] == 803_741
+    assert fields["exchange_space"] == "fsLR" and fields["exchange_density"] == "32k"
+    assert fields["exchange_vertex_areas"] == "sub-x_vertexarea.dscalar.nii"

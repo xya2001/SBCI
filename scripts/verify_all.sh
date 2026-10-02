@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Run every verification tier available in this environment and summarise.
+# Run the automated verification tiers (1, 2 and 4) and summarise; tier 3, the
+# checks against lab data, is run by hand (VERIFICATION.md).
 #
 #   bash scripts/verify_all.sh            # tiers 1 and 2
 #   bash scripts/verify_all.sh --matlab   # also regenerate the MATLAB references
@@ -68,7 +69,7 @@ else
     record FAIL "ruff check" "$OUT"
 fi
 
-if OUT=$(ruff format --check src tests 2>&1 | tail -1); then
+if OUT=$(ruff format --check src tests scripts tools 2>&1 | tail -1); then
     record PASS "ruff format" "$OUT"
 else
     record FAIL "ruff format" "$OUT"
@@ -85,19 +86,19 @@ rm -rf "$TMPW"
 # --- tier 2 ---------------------------------------------------------------
 echo
 echo "--- tier 2: the documented API on real data ---"
-DERIV=${SBCI_DERIVATIVES:-/work/users/x/y/xya/sbci-derivatives}
+HCP=${SBCI_HCP_DIR:-/work/users/x/y/xya/hcp-ya/data}
 if [ -z "${SLURM_JOB_ID:-}" ]; then
     # The audit smooths, reduces and aligns on the full grid: hours of CPU
     # and gigabytes of memory, which belong on a compute node, never the login node.
-    record SKIP "API audit (every README row)" "heavy compute: run inside sbatch/srun"
-elif [ -f "$DERIV/sub-example_sc.h5" ]; then
+    record SKIP "API audit (17 README rows)" "heavy compute: run inside sbatch/srun"
+elif [ -f "$HCP/sub-100307_sc.h5" ] && [ -f "$HCP/sub-100307_fc.h5" ]; then
     if OUT=$(python scripts/audit_api.py 2>&1 | tail -1); then
-        record PASS "API audit (every README row)" "$OUT"
+        record PASS "API audit (17 README rows)" "$OUT"
     else
-        record FAIL "API audit (every README row)" "$OUT"
+        record FAIL "API audit (17 README rows)" "$OUT"
     fi
 else
-    record SKIP "API audit (every README row)" "no subject at $DERIV"
+    record SKIP "API audit (17 README rows)" "no sub-100307 at $HCP: sbci download hcp-ya --out $HCP"
 fi
 
 # --- tier 4 ---------------------------------------------------------------
@@ -107,7 +108,7 @@ if [ "$WITH_MATLAB" = "1" ]; then
     if command -v matlab >/dev/null 2>&1; then
         pushd tests/reference >/dev/null || exit 1
         for script in reference_run sfc_reference parcellate_reference \
-                      seed_reference encore_reference; do
+                      seed_reference encore_reference conseal_reference; do
             if matlab -batch "run('${script}.m')" >/tmp/${script}.log 2>&1; then
                 record PASS "regenerate ${script}.m" "$(tail -1 /tmp/${script}.log | cut -c1-40)"
             else

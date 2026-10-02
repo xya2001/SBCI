@@ -19,7 +19,9 @@ instead of streaming the files again. PORTING.md item 5, "Measured
 on the HCP Young Adult cohort", records what it found against fluid
 intelligence on the 946 young adults.
 
-Streams the SC files once and records, per subject: the area-weighted
+Streams the SC files once, about fifteen minutes on four cores for the 946
+young adults (a batch job; ``--measures`` then repeats the tests in seconds),
+and records, per subject: the area-weighted
 strength of every vertex, the Desikan region matrix, the interhemispheric and
 long-range (over 50 mm on the white surface) fractions of the connectivity,
 and the streamline count. Then correlates each with age, corrects across
@@ -96,10 +98,19 @@ if args.measures is not None:
         strength, edges = saved["strength"], saved["edges"]
         inter, longrange, count = saved["inter"], saved["longrange"], saved["count"]
         order = [str(x) for x in saved["subjects"]] if "subjects" in saved else None
-    if order is not None and order != [r["subject"] for r in rows]:
-        parser.error(f"{args.measures} holds other subjects, or in another order")
-    if strength.shape[0] != n:
-        parser.error(f"{args.measures} holds {strength.shape[0]} subjects, not {n}")
+    if order is None:
+        if strength.shape[0] != n:
+            parser.error(f"{args.measures} holds {strength.shape[0]} subjects, not {n}")
+    else:
+        # The saved run may hold more subjects than this one (a --table drops those
+        # without a value) or hold them in another order: take the rows wanted.
+        position = {subject: k for k, subject in enumerate(order)}
+        missing = [r["subject"] for r in rows if r["subject"] not in position]
+        if missing:
+            parser.error(f"{args.measures} lacks {len(missing)} of these subjects: {missing[:3]}")
+        index = np.array([position[r["subject"]] for r in rows])
+        strength, edges = strength[index], edges[index]
+        inter, longrange, count = inter[index], longrange[index], count[index]
 else:
     white = sbci.load_surface("white")
     coords = np.asarray(white.vertices, dtype=np.float64)

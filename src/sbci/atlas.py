@@ -12,9 +12,9 @@ atlas. Regions are numbered ``1..K`` with no gaps, and ``names[i]`` names label
 
 ``PALS_B12_Lobes`` is the one exception: it is a coarse twelve-lobe
 parcellation that assigns *every* vertex, medial wall included, and so has no
-label ``0``. A connectome carries its own medial-wall mask, so this changes
-nothing downstream, but a lobe matrix built from it does include medial-wall
-vertices in its totals.
+label ``0``. A connectome carries its own medial-wall mask, and ``to_atlas``
+gives masked vertices no area, so a lobe matrix built from it still counts
+cortex only.
 """
 
 from __future__ import annotations
@@ -90,8 +90,8 @@ class Atlas:
     names: tuple[str, ...]
 
     def __post_init__(self) -> None:
-        """Check that every label has a name, and freeze the shared label array."""
-        labels = np.asarray(self.labels)
+        """Check that every label has a name, and freeze the atlas's own copy of the labels."""
+        labels = np.array(self.labels)  # a copy: the caller's array stays writable
         if labels.size and (labels.min() < 0 or labels.max() > len(self.names)):
             raise ValueError(
                 f"{self.name}: labels run {labels.min()}..{labels.max()} but "

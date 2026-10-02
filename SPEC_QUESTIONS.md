@@ -119,8 +119,7 @@ where `src/sbci/spec.py` currently carries a **provisional** value, marked
    `sbci download hcp-ya --subject 100307` now works as the brief writes it.
    All were rebuilt on the ico4
    grid from the pipeline's snapped streamline endpoints on each subject's
-   FreeSurfer-registered sphere (`tools/build_hcp_cohort.py --layout
-   young-adult`). Each is one SC file with its endpoints and, since 2
+   FreeSurfer-registered sphere (`tools/build_hcp_cohort.py`). Each is one SC file with its endpoints and, since 2
    October, one FC file; the lab's copy holds no pipeline FC of the young
    adults, so the FC is built from the HCP's own cleaned resting-state runs
    (`tools/build_hcp_fc.py`; USAGE.md, *Functional connectivity from the HCP's
@@ -203,7 +202,7 @@ where `src/sbci/spec.py` currently carries a **provisional** value, marked
    with a maximum absolute difference of 0.89 against a kernel maximum of 0.94.
 
    **Open: where the basis should be distributed from.** Bundling it would add
-   about 52 MB to a wheel whose other data is about 900 KB, so it needs the same
+   about 52 MB to a wheel whose other data is about 2.4 MB, so it needs the same
    answer item 6 needs about hosting. Until then `.smooth()` works wherever the
    toolkit is checked out, and says exactly where it looked when it is not.
 
@@ -287,8 +286,8 @@ where `src/sbci/spec.py` currently carries a **provisional** value, marked
     `("shk", "rdk", "matern")`: `shk` is the spherical heat kernel and is the
     default, and the Matern kernel is `matern`. The spherical kernel is shipped
     and is the default: it reproduces `c3_main` at r = 1.00000000 and scale
-    1.000000 on all 1,001,877 endpoints of a subject, and on five subjects --
-    PORTING.md item 6.
+    1.000000 on all 1,001,877 endpoints of a pipeline subject -- PORTING.md
+    item 6.
 
 11. ~~**No anatomical surface can be drawn.**~~ **RESOLVED.**
 

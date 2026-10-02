@@ -3,7 +3,8 @@
 The fixtures use a five-vertex toy grid rather than the real 5124-vertex ico4
 grid: every behavior tested here is grid-independent, and a real-grid file is
 50 MB, which does not belong in a unit test. The full-grid checks run against
-the downloaded tutorial subject and are marked ``needs_data``.
+data outside the repository, the downloaded tutorial subject or the lab's
+MATLAB references, and are marked ``needs_data``.
 """
 
 from __future__ import annotations

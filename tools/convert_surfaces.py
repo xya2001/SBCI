@@ -9,10 +9,10 @@ SBCI_Toolkit nor any VTK library at runtime.
 
 Input
 -----
-ASCII VTK POLYDATA, one file per hemisphere per geometry, 2562 vertices and
-5120 triangles each -- the ico4 icosphere. The ``_lps`` variants are used
-where they exist because that is the convention ``load_sbci_surface.m``
-reads; the sphere is only shipped in one orientation.
+ASCII VTK POLYDATA, one file per hemisphere, 2562 vertices and 5120 triangles
+each -- the ico4 icosphere: the toolkit's ``lh/rh_sphere_avg_ico4.vtk``. Only
+the sphere is converted here; the anatomical surfaces come from FreeSurfer's
+fsaverage through ``build_surfaces.py``.
 
 Output
 ------

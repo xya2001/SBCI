@@ -1,7 +1,6 @@
 """Fetching the example cohort: the manifest drives it, digests are checked, re-runs are cheap."""
 
 import hashlib
-import json
 from pathlib import Path
 
 import pytest
@@ -136,13 +135,22 @@ def test_the_shipped_manifest_lists_eleven_subjects_with_bands_not_ages():
             assert record["drive_id"] and record["bytes"] > 0 and len(record["sha256"]) == 64
 
 
-def test_an_unreleased_manifest_says_so(tmp_path, monkeypatch):
-    manifest = json.loads(json.dumps(download.load_manifest()))
+def test_cli_download_explains_an_unreleased_manifest(tmp_path, capsys, monkeypatch):
+    """A manifest without Drive ids is a cohort not yet released, and the command says so."""
+    manifest = {
+        "cohort": "hcp-ya",
+        "subjects": [
+            {
+                "subject": "sub-A",
+                "sex": "F",
+                "age_bin": "22-25",
+                "files": {"sc": {"drive_id": "", "bytes": 0, "sha256": ""}},
+            }
+        ],
+    }
     monkeypatch.setattr(download, "load_manifest", lambda cohort="hcp-ya": manifest)
-    if any(f["drive_id"] for s in manifest["subjects"] for f in s["files"].values()):
-        pytest.skip("the cohort is released; nothing unreleased to test")
-    with pytest.raises(RuntimeError, match="not been released"):
-        download.fetch_cohort(tmp_path, report=lambda _: None)
+    assert main(["download", "hcp-ya", "--out", str(tmp_path)]) == 1
+    assert "not been released" in capsys.readouterr().err
 
 
 def test_drive_url_carries_the_confirm_and_uuid():

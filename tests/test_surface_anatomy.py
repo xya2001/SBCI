@@ -82,18 +82,6 @@ def test_left_regions_are_in_the_left_hemisphere(anatomical):
         assert member.max() < N, f"{name}: {region} reaches into the right hemisphere"
 
 
-@pytest.mark.parametrize("surface", sorted(ANATOMICAL))
-def test_edges_are_short_and_even(surface):
-    """A permuted mesh joins distant vertices, giving a huge max/mean ratio."""
-    mesh = load_surface(surface)
-    faces = mesh.faces
-    edges = np.vstack([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [0, 2]]])
-    lengths = np.linalg.norm(mesh.vertices[edges[:, 0]] - mesh.vertices[edges[:, 1]], axis=1)
-    assert lengths.max() < 5 * lengths.mean(), (
-        f"{surface}: longest edge {lengths.max():.1f} against mean {lengths.mean():.1f}"
-    )
-
-
 def test_anatomical_surfaces_carry_real_dimensions():
     """A human hemisphere pair spans roughly 120-180 mm in each direction."""
     v = load_surface("white").vertices

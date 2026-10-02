@@ -106,7 +106,7 @@ def colour(
     """RGB in ``[0, 1]`` per vertex: the map's colours over the shading, or the shading alone.
 
     A vertex shows the map where its value is finite and, when ``threshold`` is
-    given, beyond it (in magnitude on a symmetric scale); the map's colour is
+    given, at least that far from zero in magnitude, as nilearn thresholds; the map's colour is
     darkened by the shading so the folds show through, as ``bg_on_data`` does
     in nilearn. Elsewhere the vertex is its grey.
     """
@@ -119,7 +119,7 @@ def colour(
     rgb = np.repeat(grey[:, None], 3, axis=1)
     shown = np.isfinite(values)
     if threshold is not None:
-        shown &= (np.abs(values) >= threshold) if symmetric else (values >= threshold)
+        shown &= np.abs(values) >= threshold
     if shown.any():
         mapped = cmap(Normalize(vmin=vmin, vmax=vmax, clip=True)(values[shown]))[:, :3]
         light = 0.55 + 0.45 * (grey[shown] - (0.86 - SHADING_DEPTH)) / SHADING_DEPTH

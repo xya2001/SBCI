@@ -60,6 +60,9 @@ from typing import Any
 
 import numpy as np
 
+from .. import spec
+from ..metadata import Metadata
+
 N_FSLR_PER_HEMI = 32492
 N_FSLR = 2 * N_FSLR_PER_HEMI
 
@@ -169,12 +172,10 @@ def write_cifti(path: str | Path, connectome: Any, block: int = 8192) -> Path:
     ``.dscalar.nii`` of fsLR vertex areas, without which the density cannot be
     integrated.
     """
-    import json
-
     from nibabel import cifti2
 
     path = Path(path)
-    if not os.access(path.parent if str(path.parent) else ".", os.W_OK):
+    if not os.access(path.parent, os.W_OK):
         raise OSError(f"cannot write to {path.parent}")
     resampled = resample(connectome.dense(), block=block)
 
@@ -186,12 +187,7 @@ def write_cifti(path: str | Path, connectome: Any, block: int = 8192) -> Path:
     image.to_filename(str(path))
 
     stem = path.name.split(".")[0]
-    fields = dict(connectome.metadata.fields)
-    fields["exchange_space"] = "fsLR"
-    fields["exchange_density"] = "32k"
-    fields["exchange_values"] = "density per fsaverage vertex squared"
-    fields["exchange_vertex_areas"] = f"{stem}_vertexarea.dscalar.nii"
-    (path.parent / f"{stem}.json").write_text(json.dumps(fields, indent=2, sort_keys=True))
+    (path.parent / f"{stem}.json").write_text(sidecar(connectome.metadata.fields, stem))
 
     fslr_area, _ = vertex_areas()
     from nibabel.cifti2 import ScalarAxis
@@ -217,3 +213,18 @@ def read_cifti(path: str | Path) -> dict[str, Any]:
         "many-to-one, so the inverse is lossy and needs a defined convention. "
         "Use the HDF5 computational file for round trips."
     )
+
+
+def sidecar(fields: dict, stem: str) -> str:
+    """The JSON written beside the exchange file: the connectome's metadata plus the exchange keys.
+
+    Serialized through :meth:`Metadata.to_json`, which writes NumPy scalars as the numbers
+    they are; ``json.dumps`` alone would refuse a ``streamline_count`` held as ``np.int64``
+    after the 17 GB ``.dconn.nii`` had already been written.
+    """
+    fields = dict(fields)
+    fields["exchange_space"] = spec.EXCHANGE_SPACE
+    fields["exchange_density"] = spec.EXCHANGE_DENSITY
+    fields["exchange_values"] = "density per fsaverage vertex squared"
+    fields["exchange_vertex_areas"] = f"{stem}_vertexarea.dscalar.nii"
+    return Metadata(dict(sorted(fields.items()))).to_json(indent=2)

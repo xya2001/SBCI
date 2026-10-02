@@ -99,3 +99,19 @@ def test_json_round_trip_handles_numpy_scalars_and_refuses_nan():
         Metadata({"bandwidth": float("nan")}).to_json()
     with pytest.raises(MetadataError, match="JSON"):
         Metadata.from_json("{not json")
+
+
+def test_a_file_without_a_spec_version_is_a_metadata_error_not_a_key_error():
+    fields = dict(
+        template(
+            "fc",
+            normalization="none",
+            registration_reference="fsaverage",
+            pipeline_version="test",
+            container_version="test",
+            fc_nuisance_model="none",
+        ).fields
+    )
+    del fields["spec_version"]
+    with pytest.raises(MetadataError, match="no spec_version"):
+        Metadata(fields).validate()

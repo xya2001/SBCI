@@ -42,6 +42,8 @@ def validate_file(path: str | Path, tolerance: float = 1e-5) -> list[Check]:
     """
     path = Path(path)
     checks: list[Check] = []
+    if not Path(path).exists():
+        return [Check("readable", False, f"no such file: {path}")]
 
     try:
         parts = read_hdf5(path)

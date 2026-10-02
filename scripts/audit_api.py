@@ -25,9 +25,9 @@ import numpy as np
 
 warnings.filterwarnings("ignore")
 
-D = "/work/users/x/y/xya/hcp-ya/data"
+D = os.environ.get("SBCI_HCP_DIR", "/work/users/x/y/xya/hcp-ya/data")  # sbci download hcp-ya
 EXCHANGE = "/work/users/x/y/xya/hcp-ya/exchange"
-TOOLKIT = "/work/users/x/y/xya/sbci-reference/SBCI_Toolkit"
+TOOLKIT = os.environ.get("SBCI_TOOLKIT", "/work/users/x/y/xya/sbci-reference/SBCI_Toolkit")
 os.environ["SBCI_LBO_DIR"] = f"{TOOLKIT}/concon_estimate"
 FIRST = ["sub-100307", "sub-103010", "sub-108121", "sub-116221"]
 

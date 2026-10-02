@@ -81,7 +81,15 @@ def test_region_weights_layout(atlas, area):
     weights, ids = region_weights(atlas, area)
     assert weights.shape == (5, 3)
     np.testing.assert_array_equal(ids, [1, 2, 3])
-    np.testing.assert_allclose(weights.sum(axis=0), [3.0, 4.0, 2.0])
+    np.testing.assert_allclose(np.asarray(weights.sum(axis=0)).ravel(), [3.0, 4.0, 2.0])
+    np.testing.assert_array_equal(
+        weights.toarray(), [[1, 0, 0], [2, 0, 0], [0, 3, 0], [0, 1, 0], [0, 0, 2]]
+    )
+
+
+def test_fisher_z_goes_with_mean_only(dense, atlas, area):
+    with pytest.raises(ValueError, match="use how='mean'"):
+        parcellate(dense, atlas, area, how="mass", fisher_z=True)
 
 
 def test_rejects_unknown_how(dense, atlas, area):

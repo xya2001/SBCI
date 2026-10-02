@@ -68,5 +68,5 @@ def test_from_snapped_reads_a_file_and_refuses_what_it_cannot_place(grids, tmp_p
     with pytest.raises(ValueError, match="beyond"):
         Endpoints.from_snapped(path, *spheres, grids=grids)
     np.savez(path, surf_ids0=np.array([0.0]))
-    with pytest.raises(FormatError, match="no"):
+    with pytest.raises(FormatError, match="have no surf_ids1, v_ids0"):
         Endpoints.from_snapped(path, *spheres, grids=grids)

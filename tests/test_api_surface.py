@@ -220,3 +220,16 @@ def test_load_is_the_classmethod(tmp_path, cc):
     path = tmp_path / "sub-01_sc.h5"
     cc.save(path)
     np.testing.assert_array_equal(sbci.load(path).data, sbci.ContinuousConnectome.load(path).data)
+
+
+def test_every_module_in_the_package_is_a_reachable_submodule():
+    """``import sbci`` is the one import line: every module file resolves as sbci.<name>."""
+    import pathlib
+
+    package = pathlib.Path(sbci.__file__).parent
+    modules = {p.stem for p in package.glob("*.py") if p.stem != "__init__"} | {
+        p.name for p in package.iterdir() if (p / "__init__.py").exists() and p.name != "data"
+    }
+    assert modules == set(sbci._SUBMODULES)
+    assert sbci.download.fetch_cohort.__module__ == "sbci.download"
+    assert sbci.templates.migrate_warp.__module__ == "sbci.templates"

@@ -27,6 +27,10 @@ un-normalized leaves both readings available and neither assumed.
 Area is counted in fsaverage vertices throughout, which is the unit the
 pipeline's own area vector uses, so the two definitions cannot drift apart.
 
+Writes ``ico4_to_fslr32k.npz`` into ``OUT``; copy it into
+``src/sbci/data/resampling/`` and commit. The example subject it checks
+against is the toolkit's, converted by ``import_legacy.py``.
+
 Verification is against independent references rather than self-consistency:
 the column sums must reproduce the area vector stored in the example subject's
 HDF5 file, and resampling the Desikan atlas must reproduce the pipeline's own
@@ -132,7 +136,7 @@ def main() -> int:
         print(f"  {int((fslr_area < 1).sum())} fsLR vertices receive no fsaverage vertex")
 
     print("\n=== verification 1: the column sums are the pipeline's own area vector ===")
-    sys.path.insert(0, "/nas/longleaf/home/xya/sbci/src")
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
     from sbci import ContinuousConnectome, load_atlas
 
     if os.path.exists(EXAMPLE):

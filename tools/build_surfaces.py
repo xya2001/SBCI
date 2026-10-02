@@ -2,6 +2,9 @@
 
     python tools/build_surfaces.py
 
+Writes ``white_ico4.npz``, ``inflated_ico4.npz`` and ``pial_ico4.npz`` into
+``OUT``; copy them into ``src/sbci/data/surfaces/`` and commit.
+
 The correspondence is `mapping_avg_ico4.npz`: for each of the 5124 grid
 vertices it lists the full-resolution fsaverage vertices that vertex
 represents, and those lists partition all 327,684 of them. The majority

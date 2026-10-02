@@ -41,9 +41,9 @@ __version__ = "0.0.1.dev0"
 def load(path: str | Path) -> ContinuousConnectome:
     """Read a connectome from disk.
 
-    The one entry point: give it a ``.h5`` computational file or a
-    ``.dconn.nii`` exchange file and it returns a
-    :class:`ContinuousConnectome`, validated. Equivalent to
+    The one entry point: give it a ``.h5`` computational file and it returns
+    a :class:`ContinuousConnectome`, validated. (The ``.dconn.nii`` exchange
+    file is write-only: its resampling to fsLR-32k cannot be undone.) Equivalent to
     :meth:`ContinuousConnectome.load`, and named to match :func:`load_atlas`
     and :func:`load_surface`.
 
@@ -91,9 +91,11 @@ _LAZY: dict[str, str] = {
 _SUBMODULES: tuple[str, ...] = (
     "alignment",
     "atlas",
+    "cli",
     "connectome",
     "conseal",
     "coupling",
+    "download",
     "errors",
     "examples",
     "grid",
@@ -102,10 +104,12 @@ _SUBMODULES: tuple[str, ...] = (
     "parcellation",
     "plotting",
     "reduction",
+    "render",
     "smoothing",
     "spec",
     "stats",
     "surface",
+    "templates",
     "validate",
 )
 

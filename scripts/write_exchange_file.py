@@ -1,5 +1,8 @@
 """Write the exchange file for a released subject, sub-100307, then verify it end to end.
 
+The file is 16.9 GB and the resampling needs about 25 GB of memory, four or five
+minutes on eight cores: a batch job, not the login node.
+
 Three claims are checked, each against something outside the resampling code:
 
 1. The written file is a valid CIFTI-2 dense connectome that plain nibabel can

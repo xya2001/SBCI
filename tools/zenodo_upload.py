@@ -1,14 +1,15 @@
 """Upload the cohort bundles to a Zenodo deposition, ready for the owner to review and publish.
 
     export ZENODO_TOKEN=...                       # a personal access token with deposit:write
-    python tools/zenodo_upload.py --bundles BUNDLES [--sandbox] [--deposition ID]
+    python tools/zenodo_upload.py --bundles BUNDLES --title TITLE [--sandbox] [--deposition ID]
 
 Creates a new deposition (or continues ``--deposition``), uploads every zip in
 ``BUNDLES`` plus ``bundles.json`` through the deposition's file bucket,
 skipping files already there with the right size, and sets the record's
 metadata from ``--title``, ``--creators`` and ``--description``. It stops
 short of publishing: open the deposition's page, check it, and press
-Publish; then run ``tools/bundle_hcp_cohort.py manifest --record ID``.
+Publish; then run ``tools/bundle_hcp_cohort.py manifest --bundles BUNDLES --record ID
+--target src/sbci/data/<cohort>.json``.
 
 The token is read from the environment and never written anywhere. With
 ``--sandbox`` everything goes to sandbox.zenodo.org, which takes its own
@@ -165,7 +166,8 @@ def main() -> int:
         upload(base, token, bucket, path, present, report)
     report(
         f"done: review and publish at {base}/deposit/{deposition['id']} ; then "
-        f"python tools/bundle_hcp_cohort.py manifest --bundles {folder} --record <published id>"
+        f"python tools/bundle_hcp_cohort.py manifest --bundles {folder} --record <published id> "
+        "--target src/sbci/data/<cohort>.json"
     )
     return 0
 

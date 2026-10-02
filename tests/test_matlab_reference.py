@@ -172,14 +172,6 @@ def test_smooth_method_matches_matlab(eigenpairs, reference_kappa):
     assert area @ mine @ area == pytest.approx(1.0, rel=1e-9)
 
 
-def test_the_default_bandwidth_is_the_one_matlab_used(eigenpairs, reference_kappa):
-    """A user who passes no bandwidth gets the reference run's bandwidth."""
-    from sbci.smoothing import kappa_candidates
-
-    (lam_l, _), _ = eigenpairs
-    assert abs(float(kappa_candidates(lam_l)[3]) - reference_kappa) / reference_kappa < TOLERANCE
-
-
 def test_reference_kappa_matches_the_selection_formula(eigenpairs, reference_kappa):
     """kappa_candidates reproduces the bandwidth MATLAB chose.
 

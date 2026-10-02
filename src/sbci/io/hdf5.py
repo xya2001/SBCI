@@ -29,6 +29,7 @@ the hemisphere is implied by the index rather than stored beside it.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -56,7 +57,7 @@ def _read_endpoints(handle) -> Any:
     group = handle[ENDPOINTS]
     missing = [name for name in spec.ENDPOINT_DATASETS if name not in group]
     if missing:
-        raise FormatError(f"/{ENDPOINTS} is present but has no {missing}")
+        raise FormatError(f"/{ENDPOINTS} is present but has no {', '.join(missing)}")
 
     sizes = {name: group[name].shape[0] for name in spec.ENDPOINT_DATASETS}
     if len(set(sizes.values())) != 1:
@@ -130,7 +131,11 @@ def read_hdf5(path: str | Path) -> dict[str, Any]:
     function exists so the validator can inspect a file that fails to load.
     """
     path = Path(path)
-    with h5py.File(path, "r") as handle:
+    try:
+        handle = h5py.File(path, "r")
+    except OSError as exc:  # h5py's wording names C-level details; say what matters
+        raise InvalidFileError(f"{path.name} cannot be opened as an HDF5 file") from exc
+    with handle:
         for required in (CONNECTIVITY, AREA, MASK, METADATA):
             if required not in handle:
                 raise FormatError(f"{path.name} has no /{required} dataset")
@@ -181,13 +186,24 @@ def write_hdf5(
     # The byte-shuffle filter costs nothing to read and improves gzip on floats.
     opts = {"compression": compression, "shuffle": True} if compression else {}
 
-    with h5py.File(path, "w") as handle:
-        handle.create_dataset(CONNECTIVITY, data=np.asarray(data, dtype=np.float32), **opts)
-        handle.create_dataset(AREA, data=np.asarray(area, dtype=np.float64), **opts)
-        handle.create_dataset(MASK, data=np.asarray(mask, dtype=bool), **opts)
-        if coords is not None:
-            handle.create_dataset(COORDINATES, data=np.asarray(coords, dtype=np.float32), **opts)
-        if endpoints is not None:
-            _write_endpoints(handle, endpoints, opts)
-        handle.create_dataset(METADATA, data=text)
+    # Written beside the destination and moved into place once complete, so a
+    # failure part-way (an endpoint array of the wrong kind, a full disk) leaves
+    # neither a truncated file nor a destroyed previous one.
+    partial = path.with_name(path.name + ".partial")
+    try:
+        with h5py.File(partial, "w") as handle:
+            handle.create_dataset(CONNECTIVITY, data=np.asarray(data, dtype=np.float32), **opts)
+            handle.create_dataset(AREA, data=np.asarray(area, dtype=np.float64), **opts)
+            handle.create_dataset(MASK, data=np.asarray(mask, dtype=bool), **opts)
+            if coords is not None:
+                handle.create_dataset(
+                    COORDINATES, data=np.asarray(coords, dtype=np.float32), **opts
+                )
+            if endpoints is not None:
+                _write_endpoints(handle, endpoints, opts)
+            handle.create_dataset(METADATA, data=text)
+        os.replace(partial, path)
+    finally:
+        if partial.exists():
+            partial.unlink()
     return path

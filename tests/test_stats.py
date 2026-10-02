@@ -169,8 +169,9 @@ def test_the_effect_map_lives_on_the_surface():
 
     restricted = result.effect_map(reduction, alpha=0.05)
     assert restricted.shape == (n_vertices,)
-    if result.significant(0.05).size == 0:
-        np.testing.assert_allclose(restricted, 0.0, atol=1e-12)
+    # alpha= keeps only the components that survive: none at alpha 0, all at alpha 1
+    np.testing.assert_array_equal(result.effect_map(reduction, alpha=0.0), 0.0)
+    np.testing.assert_allclose(result.effect_map(reduction, alpha=1.0), effect)
 
 
 def test_local_test_validates_its_arguments():
@@ -387,3 +388,46 @@ def test_groups_are_checked():
     with pytest.raises(ValueError, match="full column rank"):
         local_test(scores, collinear, terms=[1], groups=groups)
     assert local_test(scores, covariate).groups == 0
+
+
+def test_a_column_of_zeros_is_not_mistaken_for_an_intercept():
+    """Only a constant, nonzero column serves as the intercept; zeros carry no mean."""
+    rng = np.random.default_rng(31)
+    n = 40
+    x = rng.standard_normal(n)
+    scores = 0.5 * x[:, None] + rng.standard_normal((n, 3)) + 2.0  # a mean to absorb
+    with_zeros = local_test(scores, np.column_stack([x, np.zeros(n)]), terms=[1])
+    plain = local_test(scores, x)
+    np.testing.assert_allclose(with_zeros.statistic, plain.statistic)
+    assert with_zeros.residual_dof == plain.residual_dof
+
+
+def test_a_covariate_of_tiny_scale_is_still_a_covariate():
+    """Constancy is exact equality: 1e-9-scale values are not 'all the same'."""
+    rng = np.random.default_rng(32)
+    n = 30
+    tiny = 1e-9 * rng.standard_normal(n)
+    scores = rng.standard_normal((n, 2))
+    result = local_test(scores, tiny)
+    assert result.numerator_dof == 1 and np.isfinite(result.statistic).all()
+
+
+def test_terms_outside_the_design_are_named():
+    rng = np.random.default_rng(33)
+    scores, design = rng.standard_normal((20, 2)), rng.standard_normal((20, 2))
+    with pytest.raises(ValueError, match="outside the design"):
+        local_test(scores, design, terms=[5])
+    with pytest.raises(ValueError, match="outside the design"):
+        local_test(scores, design, terms=[-1])
+
+
+def test_bonferroni_counts_only_the_components_that_could_be_tested():
+    rng = np.random.default_rng(34)
+    n = 30
+    x = rng.standard_normal(n)
+    scores = rng.standard_normal((n, 3))
+    scores[:, 1] = 1.0  # constant: untestable, NaN
+    result = local_test(scores, x, method="bonferroni")
+    finite = np.isfinite(result.pvalue)
+    assert finite.tolist() == [True, False, True]
+    np.testing.assert_allclose(result.adjusted[finite], np.minimum(2 * result.pvalue[finite], 1.0))

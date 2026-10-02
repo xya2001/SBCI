@@ -361,9 +361,12 @@ def test_projecting_the_training_cohort_recovers_its_own_scores(cohort):
     again = project(result, np.stack(raw))
     for k in range(result.rank):
         assert abs(np.corrcoef(again[:, k], result.scores[:, k])[0, 1]) > 0.99
-    np.testing.assert_allclose(
-        result.reconstruct(0) - result.mean, result.reconstruct(0) - result.mean
+    # reconstruct() is the mean plus the components weighted by the subject's scores
+    rebuilt_by_hand = result.mean + sum(
+        result.scales[k] * result.scores[0, k] * np.outer(result.basis[:, k], result.basis[:, k])
+        for k in range(result.rank)
     )
+    np.testing.assert_allclose(result.reconstruct(0), rebuilt_by_hand, atol=1e-10)
     rebuilt = np.stack([result.reconstruct(i) for i in range(len(raw))])
     assert np.abs(rebuilt - np.stack(raw)).max() < np.abs(np.stack(raw)).max()
 
@@ -408,7 +411,7 @@ def test_a_diagonal_inner_product_gives_the_same_fit_as_its_dense_form():
     rng = np.random.default_rng(21)
     n, n_subjects = 30, 6
     matrices = rng.standard_normal((n_subjects, n, n))
-    matrices = matrices + matrices.transpose(0, 2, 1)
+    matrices = matrices @ matrices.transpose(0, 2, 1)  # positive semidefinite, like a density
     weights = rng.uniform(0.5, 2.0, size=n)
     start = rng.standard_normal((n, 3))
     dense = fit_basis(matrices, np.diag(weights), rank=3, start=start)
@@ -425,7 +428,7 @@ def test_in_place_deflation_and_the_closed_form_explained_fraction():
     rng = np.random.default_rng(22)
     n, n_subjects = 25, 5
     matrices = rng.standard_normal((n_subjects, n, n))
-    matrices = matrices + matrices.transpose(0, 2, 1)
+    matrices = matrices @ matrices.transpose(0, 2, 1)  # positive semidefinite, like a density
     start = rng.standard_normal((n, 4))
     kept = matrices.copy()
     result = fit_basis(matrices, np.eye(n), rank=4, start=start, copy=False)
@@ -437,3 +440,31 @@ def test_in_place_deflation_and_the_closed_form_explained_fraction():
     again = fit_basis(kept, np.eye(n), rank=4, start=start)  # the default copies
     np.testing.assert_array_equal(again.basis, result.basis)
     np.testing.assert_array_equal(again.explained, result.explained)
+
+
+def test_a_support_constraint_works_with_the_default_diagonal_inner_product(cohort):
+    """reduce() keeps the mesh inner product as a diagonal; support= must accept it."""
+    matrices, _ = cohort
+    sparse = reduce(matrices, rank=2, seed=0, support=5)
+    assert sparse.basis.shape[1] == 2
+    assert (np.count_nonzero(sparse.basis, axis=0) <= 5).all()
+    dense_gram = fit_basis(matrices, np.eye(matrices.shape[1]), rank=2, seed=0, support=5)
+    np.testing.assert_allclose(np.abs(sparse.basis), np.abs(dense_gram.basis), atol=1e-8)
+
+
+def test_a_cohort_with_no_variation_is_refused_rather_than_returning_nan():
+    matrix = np.eye(6)
+    with pytest.raises(ValueError, match="no variation to reduce"):
+        reduce([matrix, matrix.copy()], rank=1, seed=0)
+
+
+def test_the_grid_roughness_penalty_is_exactly_symmetric():
+    """Every pair gets the same value in the same order on both sides.
+
+    So no symmetrization step is needed, and the fit relies on that.
+    """
+    from sbci.reduction import _grid_gram_and_roughness
+
+    _, roughness = _grid_gram_and_roughness(np.ones(5124))
+    assert np.array_equal(roughness, roughness.T)
+    assert roughness.shape == (5124, 5124)
