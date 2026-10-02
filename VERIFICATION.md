@@ -54,7 +54,7 @@ tutorial subject only when asked, and the MATLAB comparisons in
 network connection, two more checks run on the released young adults:
 
 ```bash
-SBCI_DOWNLOAD=1 python -m pytest tests/test_five_minute_start.py   # the brief's acceptance lines on sub-100307, 50 MB
+SBCI_DOWNLOAD=1 python -m pytest tests/test_five_minute_start.py   # the brief's acceptance lines on sub-100307, 90 MB
 python scripts/check_hcp_ya.py --out hcp-ya                         # all eleven, every method; under ten minutes on four cores
 ```
 
@@ -93,13 +93,13 @@ python scripts/audit_api.py
 ```
 
 `scripts/audit_api.py` exercises the API table in README.md on the released
-young adults, in the order a user would: load, save, parcellate, seed, plot,
-export, validate, download, smooth, reduce, test, align with ENCORE and
+young adults, in the order a user would: load, save, parcellate, seed,
+couple structure with function, plot, export, validate, download, smooth,
+reduce, test, align with ENCORE and
 ConSEAL, and carry a warp to fs_LR (its data paths are set at the top of the
 script, for Longleaf). It prints a value for each and exits non-zero if any
-fails. Expect `16 passed, 0 failed, 1 skipped`: coupling is skipped, because
-the young adult files have no FC. It smooths, reduces and aligns on the full
-grid, so run it inside a batch job.
+fails. Expect `17 passed, 0 failed, 0 skipped`. It smooths, reduces and
+aligns on the full grid, so run it inside a batch job.
 
 **What this proves.** The documented API works end to end on a real subject,
 not only on fixtures.
@@ -267,11 +267,17 @@ PORTING.md item 6; it needs the lab data and about a minute per subject.
 triangle and diagonal conventions in `parcellate_sc.m` — change every published
 region matrix. Files written before they are settled may need rewriting.
 
-**The example cohort is structural only.** The eleven HCP Young Adult subjects
-carry no FC, because the lab's copy of the cohort has no resting-state data.
-Coupling, which needs FC, has no worked example on them, and the
-warp-migration figure carries the subject's own FreeSurfer sulcal depth
-instead of a resting-state map (SPEC_QUESTIONS.md item 6).
+**The young adults' FC is built here, not by the pipeline.** The lab's copy
+of the cohort holds no pipeline FC, so the FC files of the eleven, and of the
+young adults analysed, come from the HCP's ICA-FIX-cleaned resting-state runs
+through `tools/build_hcp_fc.py`, which follows the pipeline's nuisance model
+and FC definition as far as those data allow (USAGE.md, *Functional
+connectivity from the HCP's resting state*). With no pipeline FC of these
+subjects to compare against, the files are checked against what resting-state
+FC must show, not against a reference: grid cells coherent in time,
+homotopic and default-network correlation, and coupling that falls from
+sensory to association cortex (PORTING.md item 2). The coupling code itself
+matches the MATLAB reference (Tier 4).
 
 ---
 
@@ -279,7 +285,7 @@ instead of a resting-state map (SPEC_QUESTIONS.md item 6).
 
 - [ ] Tier 1 passes from a clean clone: tests, lint, wheel
 - [ ] `scripts/check_hcp_ya.py` passes on a machine with network access
-- [ ] `scripts/audit_api.py` reports 16 passed, 0 failed, 1 skipped (coupling, for want of FC)
+- [ ] `scripts/audit_api.py` reports 17 passed, 0 failed, 0 skipped
 - [ ] Tier 4 reproduces the agreements in the table above
 - [ ] Alignment raises inter-subject correlation on a cohort of your choosing
 - [ ] The exchange file opens in Connectome Workbench

@@ -78,8 +78,16 @@ def test_subjects_and_modalities_are_checked(tmp_path, monkeypatch):
         download.fetch_cohort(tmp_path, modalities=("dwi",), fetcher=fetcher, report=lambda _: None)
 
 
-def test_asking_only_for_what_the_cohort_lacks_says_so(tmp_path, capsys):
-    # The young adult cohort has no FC yet: say so rather than fetch nothing in silence.
+def test_asking_only_for_what_the_cohort_lacks_says_so(tmp_path, monkeypatch, capsys):
+    # A cohort that holds only SC: asking for FC alone says so rather than fetch nothing.
+    data = b"sc"
+    record = {"drive_id": "x", "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+    manifest = {
+        "cohort": "hcp-ya",
+        "host": "google-drive",
+        "subjects": [{"subject": "sub-A", "files": {"sc": record}}],
+    }
+    monkeypatch.setattr(download, "load_manifest", lambda cohort="hcp-ya": manifest)
     out = tmp_path / "hcp-ya"
     with pytest.raises(ValueError, match="hcp-ya cohort has no fc files; it holds sc"):
         download.fetch_cohort(out, cohort="hcp-ya", modalities=("fc",), report=lambda _: None)
@@ -116,16 +124,16 @@ def test_only_the_known_cohorts_have_manifests():
     assert download.load_manifest("hcp-ya")["cohort"] == "hcp-ya"
 
 
-def test_the_shipped_manifest_lists_ten_subjects_with_bands_not_ages():
+def test_the_shipped_manifest_lists_eleven_subjects_with_bands_not_ages():
     manifest = download.load_manifest()
     assert manifest["cohort"] == "hcp-ya" and len(manifest["subjects"]) == 11
     assert manifest["subjects"][0]["subject"] == "sub-100307"  # the brief's tutorial subject
     assert sorted(e["sex"] for e in manifest["subjects"]) == ["F"] * 6 + ["M"] * 5
     for entry in manifest["subjects"]:
-        assert set(entry["files"]) == {"sc"}
+        assert set(entry["files"]) == {"sc", "fc"}  # every subject has both
         assert entry["age_bin"] in ("22-25", "26-30", "31-35", "36+") and "age" not in entry
-        record = entry["files"]["sc"]
-        assert record["drive_id"] and record["bytes"] > 0 and len(record["sha256"]) == 64
+        for record in entry["files"].values():
+            assert record["drive_id"] and record["bytes"] > 0 and len(record["sha256"]) == 64
 
 
 def test_an_unreleased_manifest_says_so(tmp_path, monkeypatch):

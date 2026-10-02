@@ -135,6 +135,90 @@ profile while the other two drop it. The port preserves this because changing
 it would change published numbers, but it looks like an oversight rather than
 a decision -- one for the group.
 
+### Measured on the HCP Young Adult cohort
+
+The lab's copy of the young adults holds no pipeline FC, so
+`tools/build_hcp_fc.py` builds it from the HCP's ICA-FIX-cleaned
+resting-state runs, placing each 32k fs_LR vertex on the grid through the
+subject's MSMSulc and FreeSurfer spheres so that the FC sits where the SC's
+endpoints do (USAGE.md, *Functional connectivity from the HCP's resting
+state*). There is no pipeline FC of these subjects to compare it with, so the
+checks are what resting-state FC must show, on sub-100307:
+
+| Check | Result |
+| --- | --- |
+| the 32k vertices a grid vertex averages | in the median cell all within 2.4 degrees of the grid vertex (95th percentile 3.3), against a grid spacing of about 4 |
+| two 32k vertices of one cell, correlated in time | median 0.65; two at random, 0.009 |
+| neighbouring grid vertices | FC 0.27 (0.43 band-passed to 0.01-0.1 Hz) |
+| homotopic Desikan regions | 0.38 (0.54) |
+| seed in the left isthmus cingulate | precuneus 0.46, inferior parietal 0.36, medial orbitofrontal 0.31: the default network |
+| the white-surface route sub-103010 needs, run on sub-100307 | 91% of the 32k vertices in the same cell as the exact route, 0.24 degrees from it at the median |
+
+The released files are full band, as the pipeline computes FC. Coupling of
+each of the eleven subjects' SC with its own FC:
+
+| Form | Mean per subject |
+| --- | --- |
+| global | 0.200 to 0.268 |
+| within Desikan regions | 0.595 to 0.679 |
+| discrete, on the Desikan matrices | 0.271 to 0.370 |
+
+The NaN are the 439 medial-wall vertices and no others, and the global maps
+of two subjects correlate at r = 0.53 to 0.71 (mean 0.62). Averaged over the
+eleven, coupling is 0.299 over 18 primary and unimodal sensory and motor
+regions and 0.190 over 26 association regions, highest in the pericalcarine,
+cuneus and lateral occipital cortex (0.36 to 0.41) and lowest in the caudal
+anterior and posterior cingulate and the entorhinal cortex (0.05 to 0.09):
+the sensory-to-transmodal gradient of Vázquez-Rodríguez et al. (PNAS 2019)
+and Baum et al. (PNAS 2020). A subject's own FC fits its SC only a little
+better than another subject's: 0.233 against 0.225 on average, and better
+than each other subject's in 60% of pairs.
+
+**The cohort.** FC was built for all 946 young adults with SC: 916 have the
+four runs, 903 of them complete (1,200 frames each; 13 have a truncated
+run), 8 three, 21 two and 1 one. Every file validates; sub-103010 alone took
+the white-surface route, and 1.1 to 1.8% of each subject's cortical 32k
+vertices fall on the grid's medial wall. Three subjects' MSMSulc spheres
+have one or two 32k vertices inside a stretched triangle whose centroid is
+not among the 128 nearest, which the search over every triangle now finds. The coupling
+analysis takes the 903 with four complete runs (`scripts/hcp_figures.py
+--full-fc`). Their mean coupling is 0.223 (0.170 to 0.278 per subject), 0.285
+over unimodal against 0.178 over association regions, lowest in the caudal
+anterior and posterior cingulate and the entorhinal cortex (0.05 to 0.08) and
+highest in the pericalcarine, cuneus and lateral occipital cortex (0.34 to
+0.40). The mean map correlates with the eleven's at r = 0.972, and two halves
+of the cohort split by family reproduce it at r = 0.998.
+
+Coupling vertex by vertex against fluid intelligence and against sex, each
+given the other, the age band and the streamline count, families as clusters
+(`local_test` on the 4,685 cortical vertices, FDR across them), for the 900
+with a score:
+
+| Model | Fluid intelligence: vertices; mean coupling p | Sex: vertices; mean coupling p |
+| --- | --- | --- |
+| as above | 7 (smallest adjusted p 0.00075); 0.04 | 1,021 (2e-14); 0.002 |
+| and head motion | 6 (0.0038); 0.014 | 1,104 (1.5e-14); 0.00055 |
+| and intracranial volume | 2 (0.028); 0.036, higher with the score | 325 (0.00014); 0.045, lower in women |
+
+Head motion is the mean over the four runs of the HCP's
+`Movement_RelativeRMS_mean.txt` (median 0.078 mm; r = -0.17 with the score,
+0.09 with mean coupling); intracranial volume is FreeSurfer's eTIV from each
+subject's `aseg.stats` (r = -0.63 with being a woman, 0.24 with the score,
+0.19 with mean coupling). Head size takes most of the sex difference. In the
+full model, 253 of the 325 vertices have coupling higher in men, mostly in
+the left inferior parietal (22), right superior frontal (15), right pars
+opercularis (14), both insulae (22), right pericalcarine (11), left superior
+temporal (10) and right lingual (10) cortex, the fitted difference reaching
+-0.038. The 72 higher in women (to +0.029) lie mostly in the left insula (13)
+and along the isthmus and posterior cingulate (29), and 44% of them are within two
+grid rings of the medial wall, against 6% of cortex (24% within one ring,
+against 3%); the vertices higher in men are not (6%). Next to the wall SC
+loses the endpoints the mask drops and the FC fills cells the HCP's surface
+leaves empty, so that part of the map is the one to doubt. With ten families
+as clusters, the same test on the released subjects finds hundreds of
+vertices: the cluster-robust test needs many families (the stats module
+notes), and the eleven are for checking the code, not for inference.
+
 ## 3. Parcellation -- DONE, VERIFIED
 
 - **From:** [`SBCI_Toolkit`](https://github.com/sbci-brain/SBCI_Toolkit) --

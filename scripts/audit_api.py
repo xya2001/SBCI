@@ -5,7 +5,8 @@
 Each check either passes with the value it produced, or fails loudly; a check
 that needs data the release does not have is reported as skipped, with the
 reason. The subjects are the HCP Young Adult example cohort as
-``sbci download hcp-ya`` writes it (D below is the lab's copy). Nothing is
+``sbci download hcp-ya`` writes it (D below is the lab's copy), with the FC
+``tools/build_hcp_fc.py`` builds from the HCP's resting state. Nothing is
 mocked; the one synthetic input is the planted effect that checks
 ``local_test`` against a known answer.
 """
@@ -103,7 +104,25 @@ def seed():
 
 
 check(".seed(vertex=...) / .seed(region=...)", seed)
-skip(".coupling(fc, scope=...)", "needs FC; the released young adults have none yet")
+
+
+def coupling():
+    fc = ContinuousConnectome.load(f"{D}/sub-100307_fc.h5")
+    desikan = load_atlas("Desikan")
+    whole = sc.coupling(fc, scope="global")
+    local = sc.coupling(fc, scope="region", labels=desikan.labels)
+    wall = int((~np.asarray(sc.mask, dtype=bool)).sum())
+    assert whole.shape == (5124,), whole.shape
+    assert int(np.isnan(whole).sum()) == wall, "NaN beyond the medial wall"
+    assert np.nanmax(np.abs(whole)) <= 1 and np.nanmax(np.abs(local)) <= 1 + 1e-12
+    assert np.nanmean(local) > np.nanmean(whole), "local coupling should run higher than global"
+    return (
+        f"global mean {np.nanmean(whole):.3f}, within Desikan regions {np.nanmean(local):.3f}; "
+        f"NaN on the {wall} medial-wall vertices only"
+    )
+
+
+check(".coupling(fc, scope=...)", coupling)
 
 
 def plot():

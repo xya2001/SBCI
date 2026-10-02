@@ -8,9 +8,11 @@ Run on Longleaf with the environment active:
 
 The subject is sub-100307 of the HCP Young Adult example cohort, as
 ``sbci download hcp-ya`` writes it (D below is the lab's copy; point it at
-yours). The young adult files are structural only, so the steps that need FC
-say so and are skipped.
+yours), with its FC from ``tools/build_hcp_fc.py``; without an FC file the
+steps that need one say so and are skipped.
 """
+
+import os
 
 import matplotlib
 
@@ -62,7 +64,14 @@ print(f"  how='mass'  {mass.shape}  total {mass.sum():.6f}  (preserves connectiv
 print(f"  how='mean'  {mean.shape}  range [{mean.min():.3g}, {mean.max():.3g}]  (a density)")
 i, j = np.unravel_index(np.argmax(np.triu(mass, 1)), mass.shape)
 print(f"  strongest pair: {atlas.names[i]} <-> {atlas.names[j]}")
-print("  FC is aggregated through Fisher-z automatically (the young adult files have no FC).")
+fc_path = f"{D}/{SUBJECT}_fc.h5"
+fc = sbci.load(fc_path) if os.path.exists(fc_path) else None
+if fc is not None:
+    region_fc = fc.to_atlas(atlas)
+    pairs = region_fc[np.triu_indices(68, 1)]
+    print(f"  FC {region_fc.shape}, through Fisher-z: mean {pairs.mean():.3f}")
+else:
+    print(f"  FC is aggregated through Fisher-z automatically (no {SUBJECT}_fc.h5 here).")
 
 heading("5. seed - one vertex's or one region's connectivity profile")
 profile = sc.seed(vertex=1234)
@@ -76,8 +85,15 @@ print(
 print("  region= takes a boolean mask and returns the area-weighted marginal.")
 
 heading("6. coupling - structure against function")
-print("  sc.coupling(fc, scope='global'|'region') needs an FC file on the same grid;")
-print("  the released young adults have none yet, so this step is skipped.")
+if fc is not None:
+    whole = sc.coupling(fc, scope="global")
+    local = sc.coupling(fc, scope="region", labels=atlas.labels)
+    print(f"  sc.coupling(fc, scope='global')  -> {whole.shape}, mean {np.nanmean(whole):.3f}")
+    print(f"  sc.coupling(fc, scope='region')  -> mean {np.nanmean(local):.3f} within regions")
+    print(f"  NaN on the {int(np.isnan(whole).sum())} medial-wall vertices.")
+else:
+    print("  sc.coupling(fc, scope='global'|'region') needs an FC file on the same grid;")
+    print(f"  there is no {SUBJECT}_fc.h5 here, so this step is skipped.")
 
 heading("7. plot - a surface figure")
 from sbci import load_surface

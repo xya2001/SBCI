@@ -207,7 +207,10 @@ def structure_function_coupling(sc, fc, scope: str = "global", **kwargs) -> np.n
     scope
         ``"global"`` for one value per vertex over the whole surface,
         ``"region"`` for the within-region pattern, which needs ``labels=``,
-        ``"discrete"`` for the atlas-level summary.
+        ``"discrete"`` for the Pearson form (:func:`discrete_coupling`) on the
+        two grid matrices as they are, one value per vertex, as the MATLAB
+        reference was run. For the atlas-level summary, pass
+        :func:`discrete_coupling` the two connectomes' ``to_atlas`` matrices.
     """
     if scope not in SCOPES:
         raise ValueError(f"scope must be one of {SCOPES}, got {scope!r}")

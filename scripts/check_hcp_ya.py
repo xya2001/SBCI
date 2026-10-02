@@ -2,10 +2,11 @@
 
     python scripts/check_hcp_ya.py [--out DIR]
 
-Downloads the eleven subjects with ``sbci download hcp-ya`` into DIR (default
-``./hcp-ya``; files already there and correct are kept), then runs the methods
-the README and USAGE show on them and prints one line per check with what it
-measured. The first check that does not hold stops the script with exit code 1.
+Downloads the eleven subjects, their SC and FC, with ``sbci download hcp-ya``
+into DIR (default ``./hcp-ya``; files already there and correct are kept), then
+runs the methods the README and USAGE show on them and prints one line per check
+with what it measured. The first check that does not hold stops the script with
+exit code 1.
 
 It needs the plotting extra; with the render extra the surface figure is drawn
 through PyVista as well. Under ten minutes on four cores (three to eight measured).
@@ -44,18 +45,20 @@ def main(argv: list[str] | None = None) -> int:
     # 1. the download, as a user runs it
     t = time.time()
     manifest = load_manifest("hcp-ya")
-    paths = fetch_cohort(out=args.out, cohort="hcp-ya", report=lambda _line: None)
+    fetched = fetch_cohort(out=args.out, cohort="hcp-ya", report=lambda _line: None)
+    paths = [p for p in fetched if p.name.endswith("_sc.h5")]
+    fc_paths = [p for p in fetched if p.name.endswith("_fc.h5")]
     rows = (args.out / "manifest.csv").read_text().splitlines()
     terms = args.out / "DATA_USE.txt"
     check(
         "download",
-        len(paths) == len(manifest["subjects"]) == 11
+        len(paths) == len(fc_paths) == len(manifest["subjects"]) == 11
         and rows[0] == "subject,sex,age_bin"
         and terms.exists()
         and "1U54MH091657" in terms.read_text(encoding="utf-8"),
-        f"{len(paths)} files verified against their SHA-256 in {time.time() - t:.0f}s; "
-        f"manifest.csv has {len(rows) - 1} subjects with sex and age band; "
-        "DATA_USE.txt beside them with the HCP's terms and acknowledgment",
+        f"{len(fetched)} files, SC and FC for each subject, verified against their SHA-256 in "
+        f"{time.time() - t:.0f}s; manifest.csv has {len(rows) - 1} subjects with sex and age "
+        "band; DATA_USE.txt beside them with the HCP's terms and acknowledgment",
     )
 
     # 2. every file loads, validates, and carries positioned endpoints
@@ -160,7 +163,29 @@ def main(argv: list[str] | None = None) -> int:
             "ENCORE warp restated on fs_LR 32k, 32,492 vertices per hemisphere, written as GIFTI",
         )
 
-    # 10. FPCA of the cohort and a local test against sex
+    # 10. structure-function coupling, each subject's SC against its own FC
+    desikan_labels = sbci.load_atlas("Desikan").labels
+    wall = int((~np.asarray(first.mask, dtype=bool)).sum())
+    maps = []
+    for sc, fc_path in zip(subjects, fc_paths, strict=True):
+        fc = sbci.load(fc_path)
+        maps.append(sc.coupling(fc, scope="global"))
+    local = first.coupling(sbci.load(fc_paths[0]), scope="region", labels=desikan_labels)
+    maps = np.array(maps)
+    cortex = ~np.isnan(maps).any(axis=0)
+    alike = np.corrcoef(maps[:, cortex])[np.triu_indices(len(maps), 1)]
+    check(
+        "coupling",
+        all(int(np.isnan(m).sum()) == wall for m in maps)
+        and np.nanmean(local) > np.nanmean(maps[0])
+        and alike.min() > 0.3,
+        f"global coupling {np.nanmean(maps):.3f} on average, NaN on the {wall} medial-wall "
+        f"vertices only; {np.nanmean(local):.3f} within Desikan regions for "
+        f"{paths[0].name.split('_')[0]}; the eleven maps correlate at r = {alike.min():.2f} "
+        f"to {alike.max():.2f}",
+    )
+
+    # 11. FPCA of the cohort and a local test against sex
     t = time.time()
     reduction = sbci.reduce(subjects, rank=4)
     female = np.array([line.split(",")[1] == "F" for line in rows[1:]], dtype=float)

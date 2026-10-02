@@ -120,15 +120,17 @@ where `src/sbci/spec.py` currently carries a **provisional** value, marked
    All were rebuilt on the ico4
    grid from the pipeline's snapped streamline endpoints on each subject's
    FreeSurfer-registered sphere (`tools/build_hcp_cohort.py --layout
-   young-adult`). Each is one SC file with its endpoints; the lab's copy has
-   no resting-state data, so there is no FC yet. `sbci download hcp-ya`
-   fetches them from the ids in `src/sbci/data/hcp_ya.json`, verifies each
+   young-adult`). Each is one SC file with its endpoints and, since 2
+   October, one FC file; the lab's copy holds no pipeline FC of the young
+   adults, so the FC is built from the HCP's own cleaned resting-state runs
+   (`tools/build_hcp_fc.py`; USAGE.md, *Functional connectivity from the HCP's
+   resting state*). `sbci download hcp-ya` fetches them from the ids in `src/sbci/data/hcp_ya.json`, verifies each
    file's SHA-256 and writes `DATA_USE.txt` beside them: the terms, and the
    acknowledgment a publication must carry. The manifest carries only
    open-access fields, sex and the HCP's age band, and the files' metadata
    carry no age. The folder,
    https://drive.google.com/drive/folders/1gG2ZmxxVm4w5dvlCQvMaEEOBypU7nDpx,
-   holds the eleven files and the same `DATA_USE.txt`, shared with anyone who
+   holds the twenty-two files and the same `DATA_USE.txt`, shared with anyone who
    has the link. `sbci download hcp-ya` fetched and verified the files from a
    machine with no Google account, and Drive's own SHA-256 of sub-100307
    matched the digest of the file built on Longleaf, and `scripts/check_hcp_ya.py` runs every method on

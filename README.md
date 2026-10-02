@@ -22,7 +22,7 @@ On UNC's Longleaf cluster use `scripts/setup_longleaf.sh` instead; see
 
 ## Try it in two minutes
 
-One real subject is 50 MB away: the example cohort (eleven HCP Young Adult
+One real subject is 90 MB away: the example cohort (eleven HCP Young Adult
 subjects) is fetched by the package, and everything below runs on the first
 of them, sub-100307, the subject the package brief's acceptance test names.
 
@@ -30,25 +30,28 @@ of them, sub-100307, the subject the package brief's acceptance test names.
 import sbci
 from sbci.download import fetch_cohort
 
-sc_path = fetch_cohort(out="hcp-ya", subjects=["100307"])[0]   # once; verified
+sc_path, fc_path = fetch_cohort(out="hcp-ya", subjects=["100307"])   # once; verified
 sc = sbci.load(sc_path)                  # structural connectome, with the endpoints of its 803,741 streamlines
+fc = sbci.load(fc_path)                  # functional connectome, from the HCP's resting state
 sc.to_atlas("Schaefer200").shape        # (200, 200)
 sc.plot(sc.seed(vertex=1234))            # a figure; needs the plotting extra
+sc.coupling(fc)                          # structure against function, one value per vertex
 sc.smooth(kernel="shk", mask_medial_wall=True)     # re-smooths from the stored endpoints
 ```
 
 Or from the shell:
 
 ```bash
-sbci download hcp-ya --subject 100307   # sub-100307_sc.h5, 50 MB, into the current directory
+sbci download hcp-ya --subject 100307   # sub-100307_sc.h5 and _fc.h5, 90 MB, into the current directory
 sbci info sub-100307_sc.h5              # what it holds
 sbci validate sub-100307_sc.h5          # nine checks, all should pass
 sbci atlases --match Yeo                # the bundled atlases
 ```
 
-The young adult files are structural only for now. The lab's copy of the
-cohort has no resting-state data, so `coupling()`, which needs FC, has no
-worked example on them yet.
+Each young adult has an SC file and an FC file. The FC is the HCP's own
+cleaned resting-state data, four runs of 14 minutes for most subjects, put on
+the grid through the subject's own registration so that it lines up with the
+SC (`tools/build_hcp_fc.py`).
 
 `sbci.example()` still builds a synthetic connectome on the real grid, for the
 tests and for a machine without network access; nothing in this README is
@@ -57,9 +60,9 @@ drawn from it.
 The figures in this README are drawn from the eleven young adults of the
 example cohort, 22 to 35 years old by the HCP's open-access age bands, and the
 single-subject figures from sub-100307, the subject of the commands above. All
-were rebuilt on
-the ico4 grid from the lab's pipeline output with `tools/build_hcp_cohort.py`
-and drawn on FreeSurfer's fsaverage surface, rendered with smooth lighting
+were rebuilt on the ico4 grid from the lab's pipeline output with
+`tools/build_hcp_cohort.py`, their FC from the HCP's resting state with
+`tools/build_hcp_fc.py`, and drawn on FreeSurfer's fsaverage surface, rendered with smooth lighting
 through PyVista (`plot(mesh="fsaverage", engine="pyvista")`);
 `scripts/hcp_figures.py` draws them from a downloaded copy, and
 [docs/figures](docs/figures/README.md) describes each.
@@ -88,6 +91,23 @@ vertex by vertex.
 the two halves and in the whole set. Bottom: the smoothed density of the same
 vertex from each, relative to its strongest vertex.*
 
+**Structure against function.** `sc.coupling(fc)` asks, vertex by vertex, how
+closely the cortex a vertex is wired to matches the cortex its activity moves
+with: the cosine similarity of its SC and FC profiles. Averaged over the
+eleven, coupling is highest in visual cortex (0.36 to 0.41 in the
+pericalcarine, cuneus and lateral occipital regions) and lowest in the
+cingulate and entorhinal cortex (0.05 to 0.09). It averages 0.30 over primary
+and unimodal sensory and motor regions and 0.19 over association regions, the
+gradient from sensory to transmodal cortex that coupling is known for
+(Vázquez-Rodríguez et al., PNAS 2019; Baum et al., PNAS 2020). The
+eleven subjects' maps correlate at r = 0.53 to 0.71.
+
+![Structure-function coupling](docs/figures/coupling.png)
+
+*`sc.coupling(fc)` for each of the eleven young adults, averaged: at each
+vertex, the cosine similarity of its SC and FC profiles, coloured from the
+map's 2nd to 98th percentile. The medial wall, which has no cortex, is gray.*
+
 ## With real data
 
 ```python
@@ -106,8 +126,8 @@ folder](https://drive.google.com/drive/folders/1gG2ZmxxVm4w5dvlCQvMaEEOBypU7nDpx
 for browsing) and fetched by the package:
 
 ```bash
-sbci download hcp-ya --out hcp-ya             # all eleven subjects into ./hcp-ya, about 560 MB
-sbci download hcp-ya --subject 100307         # one 50 MB file, into the current directory
+sbci download hcp-ya --out hcp-ya             # all eleven subjects into ./hcp-ya, about 1 GB
+sbci download hcp-ya --subject 100307         # its SC and FC, 90 MB, into the current directory
 ```
 
 Each file is verified against the SHA-256 in the package's manifest
@@ -118,7 +138,11 @@ pipeline output in the lab's copy; sub-100307 joined them because the package
 brief's acceptance test names it. Each was rebuilt on the ico4 grid from the
 pipeline's snapped streamline endpoints on the subject's FreeSurfer-registered
 sphere (`tools/build_hcp_cohort.py --layout young-adult`), and the SC files
-carry those endpoints, so `smooth()` and `endpoints_align()` run on them.
+carry those endpoints, so `smooth()` and `endpoints_align()` run on them. The
+FC files hold the HCP's ICA-FIX-cleaned resting-state runs, REST1 and REST2 in
+both phase-encoding directions, placed on the grid through each subject's
+MSMSulc and FreeSurfer spheres (`tools/build_hcp_fc.py`); sub-116221 has three
+runs, which is all the HCP has, and the others four.
 
 The data are the WU-Minn Human Connectome Project's, redistributed under its
 [Open Access Data Use Terms](https://www.humanconnectome.org/study/hcp-young-adult/document/wu-minn-hcp-consortium-open-access-data-use-terms).
@@ -157,7 +181,7 @@ runs it from a blank environment on every push.
 | `.save(path)` | implemented |
 | `.to_atlas(atlas, how="mass"\|"mean")` | implemented; takes an `Atlas` or a name such as `"Schaefer200"`; matches `parcellate_sc.m` to float64 rounding |
 | `.seed(vertex=...)` / `.seed(region=...)` | implemented; `region=` takes a vertex mask or an `(atlas, region)` pair |
-| `.coupling(fc, scope=...)` | implemented; matches the MATLAB to float64 rounding |
+| `.coupling(fc, scope=...)` | implemented; matches the MATLAB to float64 rounding; on the young adults' own FC its map follows the gradient from sensory to association cortex (PORTING.md item 2) |
 | `.plot(values, surface=...)` | implemented; inflated, white, pial and sphere bundled |
 | `.to_cifti(path)` | implemented; fsLR-32k dense connectome, 16.9 GB |
 | `sbci validate <file>` | implemented |
@@ -252,6 +276,52 @@ p-value. Neither survives the correction.*
 *The effect map over the 11 components that track sex, families as clusters,
 relative to its largest value: the fitted difference in connectivity between
 women and men (positive: higher in women), summed over the other endpoint.*
+
+**Coupling across the cohort.** With FC built for the young adults
+(`tools/build_hcp_fc.py`), each of the 903 with four complete resting-state
+runs gives a coupling map, and `local_test` takes the 4,685 cortical vertices
+as its columns: one test per vertex, families as clusters, with head motion
+and intracranial volume added to the model because both shape these measures
+(`motion` and `volume` below, from the HCP's own files; docs/figures/README.md
+says which).
+
+```python
+maps, kept = [], []
+for i, s in enumerate(subjects):
+    fc = sbci.load(f"hcp-ya-full/{s}_fc.h5")                # tools/build_hcp_fc.py
+    if fc.metadata["fc_frames"] == 4800:                      # four complete runs
+        maps.append(sbci.load(paths[i]).coupling(fc))
+        kept.append(i)
+maps = np.array(maps)
+cortex = ~np.isnan(maps).any(axis=0)                          # NaN on the medial wall
+covariates = np.column_stack([female, score, band, count, motion, volume])[kept]
+sex = sbci.local_test(maps[:, cortex], covariates, terms=[1], groups=np.array(groups)[kept])
+sex.significant()                                             # vertices, here
+```
+
+The cohort's mean map is the eleven's (r = 0.972), and two halves of the
+cohort, split by family, reproduce each other's at r = 0.998: the pattern is
+settled, and the question is how people depart from it. Fluid intelligence
+barely does, at 2 vertices of 4,685 at FDR 0.05, with mean coupling rising
+with the score at p 0.036. Sex shows at 325 vertices, 253 of them with
+coupling higher in men, in the inferior parietal, superior frontal and
+opercular cortex, the insula and early visual cortex. Head size carries most
+of the difference: without intracranial volume in the model the count is
+1,104, which is reason to read the structural sex effect above, fitted
+without it, with the same care. The 72 vertices higher in women are the less
+trustworthy part: 44% of them lie within two grid rings of the medial wall,
+where 6% of cortex lies, along the isthmus and posterior cingulate, where the
+mask drops SC endpoints and the FC fills grid cells the HCP's surface leaves
+empty. PORTING.md item 2 has the measurements.
+
+![Where coupling differs between women and men](docs/figures/cohort_coupling_sex.png)
+
+*The fitted difference in structure-function coupling, women minus men, at
+the 325 of 4,685 cortical vertices significant at FDR 0.05 among 900 HCP
+Young Adult subjects with a fluid-intelligence score and four complete
+resting-state runs, given fluid intelligence, age band, streamline count,
+head motion and intracranial volume, families as clusters. Blue: higher in
+men.*
 
 Alignment fits in front of `reduce`: `sbci.align(subjects)` (ENCORE) returns
 the warped densities as `aligned`, and `sbci.endpoints_align(subjects)`

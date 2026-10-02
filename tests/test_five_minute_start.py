@@ -13,9 +13,10 @@ The brief's lines, as written:
     cc.to_cifti("sub-100307_sc.dconn.nii")
 
 The subject is the first of the example cohort, eleven HCP Young Adult subjects
-on a public Google Drive. The download is 50 MB, so the test runs only when
-asked: set ``SBCI_HCP_DIR`` to a directory that already holds the file, or
-``SBCI_DOWNLOAD=1`` to run the download line itself in a temporary directory.
+on a public Google Drive. The download is 90 MB, the subject's SC and FC, so the
+test runs only when asked: set ``SBCI_HCP_DIR`` to a directory that already holds
+the file, or ``SBCI_DOWNLOAD=1`` to run the download line itself in a temporary
+directory.
 Otherwise it skips. The export line is left out: it writes 16.9 GB, and
 ``scripts/write_exchange_file.py`` checks it end to end.
 """

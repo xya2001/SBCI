@@ -268,8 +268,10 @@ class ContinuousConnectome:
         Cosine similarity between the SC and FC profiles, with negative FC
         values kept. ``scope="global"`` gives one map over the surface,
         ``scope="region"`` the within-region pattern (which needs ``labels=``),
-        and ``scope="discrete"`` an atlas-level summary -- that last one is a
-        Pearson correlation rather than a cosine, following the reference.
+        and ``scope="discrete"`` the reference's discrete form on the grid's
+        matrices -- a Pearson correlation rather than a cosine, following the
+        reference. For an atlas-level summary, pass
+        :func:`sbci.coupling.discrete_coupling` the two ``to_atlas`` matrices.
         """
         from .coupling import structure_function_coupling
 

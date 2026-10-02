@@ -21,7 +21,8 @@ connectome (PORTING.md item 6). The lab's young adult connectomes are on the
 retired 0.94 grid, so the SC is smoothed here with the package's kernel
 (``shk``, bandwidth 0.005, the medial wall masked), converted as
 ``tools/import_legacy.py`` does -- medial wall zeroed, unit mass -- and stored
-with those endpoints. There is no FC: the lab's copy has no resting-state data.
+with those endpoints. The FC is built separately, from the HCP's resting-state runs,
+by ``tools/build_hcp_fc.py``.
 
 Every file written is validated. With ``--check`` each file's endpoints are
 re-smoothed and compared with its stored connectome.

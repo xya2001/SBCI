@@ -7,15 +7,14 @@ output quoted here.
 
 ```bash
 pip install "sbci[plotting] @ git+https://github.com/xya2001/SBCI.git"
-sbci download hcp-ya --subject 100307     # one real subject, 50 MB, into the current directory
+sbci download hcp-ya --subject 100307     # one real subject's SC and FC, 90 MB, into the current directory
 ```
 
 Python 3.10 or newer; the plotting extra is only for figures. Every example
 below runs on the released HCP Young Adult subjects: `sbci download hcp-ya
---out hcp-ya` fetches all eleven (about 560 MB) and `--subject` one of them.
-The paths quoted are the lab's copies on the Longleaf cluster, so substitute
-yours. The released files are structural only, so the one method that needs
-FC, `coupling`, is described without a worked example. The `rdk` and `matern` kernels need the
+--out hcp-ya` fetches all eleven, their SC and FC (about 1 GB), and
+`--subject` one of them. The paths quoted are the lab's copies on the
+Longleaf cluster, so substitute yours. The `rdk` and `matern` kernels need the
 Laplace-Beltrami basis, two files from `SBCI_Toolkit/concon_estimate`; *Storing
 endpoints, and re-smoothing from them* says where to put them.
 
@@ -71,18 +70,21 @@ use `tools/import_legacy.py`.
 ## Getting the example cohort
 
 Eleven HCP Young Adult subjects, each as an SC file that carries its
-streamline endpoints: sub-100307, the subject the package brief's acceptance
+streamline endpoints and an FC file from the HCP's resting state: sub-100307,
+the subject the package brief's acceptance
 test names, and ten drawn at random, five women and five men, from the 946
 with complete pipeline output in the lab's copy. They were rebuilt on the ico4 grid from
 the SBCI pipeline's output by `tools/build_hcp_cohort.py --layout
 young-adult` and are hosted on a public Google Drive ([the
 folder](https://drive.google.com/drive/folders/1gG2ZmxxVm4w5dvlCQvMaEEOBypU7nDpx)).
-The lab's copy of the cohort has no resting-state data, so there is no FC yet.
-The package ships the manifest, not the data:
+The FC comes from the HCP's cleaned resting-state runs, through
+`tools/build_hcp_fc.py` (*Functional connectivity from the HCP's resting
+state*, below). The package ships the manifest, not the data:
 
 ```bash
-sbci download hcp-ya --out hcp-ya                    # the eleven SC files into ./hcp-ya, about 560 MB
-sbci download hcp-ya --subject 100307                # one file, sub-100307_sc.h5, into the current directory
+sbci download hcp-ya --out hcp-ya                    # the eleven subjects' SC and FC into ./hcp-ya, about 1 GB
+sbci download hcp-ya --subject 100307                # sub-100307_sc.h5 and _fc.h5, into the current directory
+sbci download hcp-ya --sc-only                       # one modality only (or --fc-only)
 ```
 
 ```python
@@ -100,8 +102,8 @@ band (22-25, 26-30, 31-35 or 36+), never an exact age.
 
 Every file is checked against its SHA-256 from the manifest; a file that
 fails is removed and the error says so. A re-run verifies and skips what is
-present, so the command is safe to repeat. Asking only for FC, which this
-cohort does not hold, says so instead of fetching nothing. Google Drive
+present, so the command is safe to repeat. Asking only for a modality a
+cohort does not hold says so instead of fetching nothing. Google Drive
 answers with a page instead of a file when the file is not shared with anyone
 who has the link; the error names the file id.
 
@@ -110,6 +112,65 @@ Zenodo, which `fetch_cohort` reads as well, fetching only the bundles the
 requested subjects need and resuming an interrupted one
 (`tools/bundle_hcp_cohort.py` writes them). No cohort is released that way at
 present.
+
+
+## Functional connectivity from the HCP's resting state
+
+`tools/build_hcp_fc.py` builds each FC file from the HCP's own processing: the
+four ICA-FIX-cleaned resting-state runs,
+`rfMRI_REST{1,2}_{LR,RL}_Atlas_hp2000_clean.dtseries.nii`, each 1,200 frames
+of 0.72 s on the 32k fs_LR surface.
+
+```bash
+python tools/build_hcp_fc.py --manifest manifest.csv \
+    --fmri /proj/STOR/zz10c/HCP_fMRI --fmri more_runs/ \
+    --spheres /overflow/zzhanglab/encore_project/encore_paper_code/prediction_subs \
+    --fslr fslr/ --mapping mapping_avg_ico4.npz --out hcp-ya-fc
+```
+
+**Where each vertex goes.** The SC files place streamline endpoints through
+the subject's FreeSurfer registration (`?h.sphere.reg`); the HCP's time series
+reach the fs_LR mesh through another one, MSMSulc. So each 32k vertex is
+carried back to the subject's own surface through its MSMSulc sphere, forward
+through its FreeSurfer sphere, and into the grid cell of the nearest fsaverage
+vertex. SC and FC are then compared at the same place, which coupling needs.
+For sub-100307 the cells are compact: in the median cell every member lies
+within 2.4 degrees of its grid vertex (3.3 at the 95th percentile), against a
+grid spacing of about 4, and two 32k vertices of one cell correlate in time at
+a median 0.65, against 0.009 for two at random. One of the 972 subjects in the
+lab's copy, sub-103010, has FreeSurfer surfaces on a different mesh from the
+HCP's native one (147,746 vertices on the left against 147,449); it goes
+through the two white surfaces instead (`--crossmesh`). Run on sub-100307,
+where both routes apply, that one puts 91% of the 32k vertices in the same
+cell as the exact route, 0.24 degrees from it at the median.
+
+**What the FC is.** What the SBCI pipeline computes
+(`calculate_residual_timeseries.py`, `calculate_fc.py`), as far as these data
+allow. ICA-FIX has already removed the motion, white-matter and CSF artefacts
+the pipeline regresses out; each run then has a constant, a linear trend and
+the global signal (the mean over all grayordinates) regressed out. A grid
+vertex's series is the mean of its cell's 32k vertices; a few cortical grid
+vertices at the medial wall's edge, where the HCP's mask and the grid's
+differ, have none and take the nearest. Each run's series are z-scored, the
+runs concatenated, and the FC is the Pearson correlation between grid
+vertices, with the diagonal one and the medial wall zero. Each file records
+its runs, frames and nuisance model.
+
+At the grid's resolution these full-band data are noisy: single grid vertices
+correlate weakly, and the default network stands out once they are pooled
+into regions. Band-passing to 0.01 to 0.1 Hz, which the pipeline does not do,
+strengthens every measure:
+
+| sub-100307 | full band, as released | `--bandpass 0.01 0.1` |
+| --- | --- | --- |
+| grid: spread of the correlations (sd) | 0.052 | 0.131 |
+| grid: neighbouring vertices | 0.27 | 0.43 |
+| grid: a vertex and its mirror image (homotopic) | 0.10 | 0.25 |
+| Desikan regions: homotopic pairs | 0.38 | 0.54 |
+| left isthmus cingulate seed: precuneus, inferior parietal, medial orbitofrontal | 0.46, 0.36, 0.31 | 0.67, 0.49, 0.49 |
+
+The released files follow the pipeline and are not band-passed. `--no-gsr`
+keeps the global signal.
 
 ## Loading
 
@@ -186,15 +247,39 @@ reads its row without materializing the dense matrix.
 ## `coupling` — structure against function
 
 ```python
-sc.coupling(fc, scope="global")                        # (5124,)
-sc.coupling(fc, scope="region", labels=atlas.labels)   # (5124,)
+import sbci
+from sbci.coupling import discrete_coupling
+
+sc = sbci.load("hcp-ya/sub-100307_sc.h5")
+fc = sbci.load("hcp-ya/sub-100307_fc.h5")
+atlas = sbci.load_atlas("Desikan")
+
+whole = sc.coupling(fc, scope="global")                         # (5124,), mean 0.217
+local = sc.coupling(fc, scope="region", labels=atlas.labels)    # (5124,), mean 0.595
+regions = discrete_coupling(sc.to_atlas(atlas), fc.to_atlas(atlas))   # (68,), mean 0.312
+sc.plot(whole, mesh="fsaverage")
 ```
 
-`fc` is a functional connectome on the same grid, which the released young
-adults do not have yet; once they do, this section gets its worked example.
-NaN marks the medial wall and any vertex whose profile is constant. Local
-coupling runs higher than global because neighbouring vertices inside a
-region share both structure and function.
+`fc` is a functional connectome on the same grid. NaN marks the medial wall
+and any vertex whose profile is constant. Local coupling runs higher than
+global because neighbouring vertices inside a region share both structure and
+function. `scope="discrete"` applies the Pearson form to the matrices as they
+come, the grid's, as the MATLAB reference does; for the atlas-level summary,
+hand `discrete_coupling` the two atlas matrices, as above (`to_atlas` averages
+FC through Fisher-z).
+
+On the eleven young adults, global coupling averages 0.200 to 0.268 per
+subject, within-region coupling 0.595 to 0.679, and the Desikan-level form
+0.271 to 0.370.
+The maps agree across subjects (r = 0.53 to 0.71) and follow the gradient
+coupling is known for (Vázquez-Rodríguez et al., PNAS 2019; Baum et al., PNAS
+2020): 0.30 on average over primary and unimodal sensory and motor regions
+against 0.19 over association regions, highest in visual cortex and lowest in
+the cingulate and entorhinal cortex (the README's figure). Most of the map is
+shared between people. Pairing one subject's SC with another's FC lowers the
+mean only from 0.233 to 0.225, and a subject's own FC fits it better than
+another subject's in 60% of pairs, so on eleven subjects individual
+differences in coupling are small next to the pattern they share.
 
 Two things worth knowing: **negative FC values are kept** — discarding them
 flips the sign of the map in association cortex — and **`discrete_coupling` is
@@ -428,7 +513,7 @@ import numpy as np
 import sbci
 from sbci.download import fetch_cohort
 
-paths = fetch_cohort(out="hcp-ya")                         # the eleven, 560 MB
+paths = fetch_cohort(out="hcp-ya", modalities=["sc"])      # the eleven's SC, 560 MB
 subjects = [sbci.load(p) for p in paths]
 
 # ENCORE on the densities: ten minutes on eight cores for the eleven
@@ -879,6 +964,5 @@ means an OnDemand desktop session rather than a plain `ssh`.
 | `sc.smooth()` on a file with no `/endpoints` | `MissingDataError` | nothing to re-smooth from; the group is optional |
 | `sc.smooth()` on endpoints stored as vertices only | `MissingDataError` | `shk` needs where each streamline crossed, not the nearest vertex |
 | `sbci download hcp-aging` | exit status 1: `cohort must be one of ('hcp-ya',)` | only the young adult cohort is released; HCP-Aging data are not distributed |
-| `sbci download hcp-ya --fc-only` | exit status 1: `the hcp-ya cohort has no fc files` | the young adult files are structural only for now |
 
 Every message names what has to happen and where it is tracked.

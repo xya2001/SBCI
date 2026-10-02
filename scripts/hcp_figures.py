@@ -3,17 +3,18 @@
     python scripts/hcp_figures.py hcp-ya docs/figures \
         [--skip-cohort | --only-cohort | --surfaces-only | --only-recovery | --only-migration]
         [--anatomy /path/to/the/first/subject's/pipeline/directory]
-        [--full-cohort DIR --traits CSV [--groups CSV] [--rank 20] [--candidates 1]]
+        [--full-cohort DIR --traits CSV [--groups CSV] [--rank 20] [--candidates 1]
+         [--full-fc FCDIR [--covariates CSV]]]
         [--dataset NAME]
 
 The cohort directory is what ``sbci download hcp-ya`` writes, or what
 ``tools/build_hcp_cohort.py`` builds: ``manifest.csv`` (``subject`` and, where
 the cohort has them, ``sex`` and ``age_bin``) and one ``<subject>_sc.h5``,
-with endpoints, per subject, plus ``<subject>_fc.h5`` where there is FC. The
-coupling figure needs the FC, which the young adult files do not have yet, and
-the warp-migration figure the first subject's own FreeSurfer sulcal depth and
+with endpoints, per subject, plus ``<subject>_fc.h5`` where there is FC
+(``tools/build_hcp_fc.py``). The coupling figure needs the FC, and the
+warp-migration figure the first subject's own FreeSurfer sulcal depth and
 registered spheres from its pipeline directory (``--anatomy``); without them
-both are skipped. Titles say HCP Young Adult unless ``--dataset`` names
+each is skipped. Titles say HCP Young Adult unless ``--dataset`` names
 another. Every surface is drawn on fsaverage.
 
 The single-subject figures take a few minutes. The cohort figures register
@@ -26,6 +27,7 @@ from __future__ import annotations
 import csv
 import sys
 import time
+import warnings
 from pathlib import Path
 
 import matplotlib
@@ -69,8 +71,7 @@ DATASET = "HCP Young Adult"
 def load_cohort(directory: Path):
     """The subjects in manifest order, and their FC paths.
 
-    A path is ``None`` where the subject has no FC, as none of the young adults
-    has yet.
+    A path is ``None`` where the subject has no FC.
     """
     rows = list(csv.DictReader(open(directory / "manifest.csv")))
     subjects = [sbci.load(directory / f"{row['subject']}_sc.h5") for row in rows]
@@ -150,20 +151,19 @@ def region_matrix(out: Path, cc) -> None:
     save(figure, out, "region_matrix.png")
 
 
-def coupling(out: Path, sc, fc) -> None:
-    values = sc.coupling(fc)
-    figure = sc.plot(
-        values,
-        views=VIEWS,
-        cmap=SURFACE_RAMP,
-        symmetric=False,
-        vmin=0.0,
-        mesh=DISPLAY_MESH,
-        engine=DISPLAY_ENGINE,
-    )
+def coupling(out: Path, subjects, functional) -> None:
+    """The global coupling map, averaged over the subjects that have FC."""
+    maps = [
+        sc.coupling(sbci.load(path)) for sc, path in zip(subjects, functional, strict=True) if path
+    ]
+    with warnings.catch_warnings():  # the medial wall is NaN in every subject
+        warnings.simplefilter("ignore", RuntimeWarning)
+        values = np.nanmean(np.array(maps), axis=0)
+    print(f"  coupling: {len(maps)} subjects, mean {np.nanmean(values):.3f}", flush=True)
+    figure = coupling_plot(values, subjects[0])
     figure.suptitle(
-        f"Structure-function coupling in an {DATASET} subject: at each vertex, the cosine "
-        "similarity\nof its SC and FC profiles",
+        f"Structure-function coupling in {len(maps)} {DATASET} subjects: at each vertex, the "
+        "cosine similarity\nof its SC and FC profiles, averaged over the subjects",
         fontsize=TITLE_SIZE,
         y=1.11,
     )
@@ -1110,6 +1110,254 @@ def cohort_trait(
         )
 
 
+UNIMODAL = (
+    "precentral",
+    "postcentral",
+    "paracentral",
+    "pericalcarine",
+    "cuneus",
+    "lingual",
+    "lateraloccipital",
+    "transversetemporal",
+    "superiortemporal",
+)
+"""Desikan regions of primary and unimodal sensory and motor cortex."""
+TRANSMODAL = (
+    "inferiorparietal",
+    "supramarginal",
+    "precuneus",
+    "superiorfrontal",
+    "rostralmiddlefrontal",
+    "caudalmiddlefrontal",
+    "medialorbitofrontal",
+    "lateralorbitofrontal",
+    "middletemporal",
+    "inferiortemporal",
+    "posteriorcingulate",
+    "isthmuscingulate",
+    "rostralanteriorcingulate",
+)
+"""Desikan regions of association (transmodal) cortex."""
+
+
+def cohort_coupling(
+    out: Path,
+    directory: Path,
+    fc_directory: Path,
+    traits: Path,
+    trait: str = "fluid_intelligence_pmat24",
+    groups: Path | None = None,
+    frames: int = 4800,
+    covariates: Path | None = None,
+) -> None:
+    """Structure-function coupling across a full young adult cohort, and what it tracks.
+
+    For every subject with an SC file in ``directory`` and an FC file of ``frames``
+    frames in ``fc_directory`` (all four resting-state runs), the global coupling map;
+    the maps are saved beside the FC files as ``coupling_maps.npz`` and reused. Reports
+    the mean map's gradient from unimodal to transmodal cortex, how well two halves of
+    the cohort (split by family) reproduce it, and, vertex by vertex with the false-
+    discovery rate across vertices, the association of coupling with ``trait`` and with
+    sex, each given the other, the age band and the streamline count. ``groups`` makes
+    families the clusters of every test (:func:`cohort_trait`). ``covariates``, a table
+    with a ``subject`` column and one numeric column per further covariate, adds each to
+    every test; the analysis in the documents passes head motion (the mean over the four
+    runs of the HCP's ``Movement_RelativeRMS_mean.txt``, in mm), since motion shapes FC
+    and goes with traits, and head size (FreeSurfer's estimated intracranial volume, in
+    litres), since it differs between the sexes. Subjects missing any of them are left
+    out. Draws ``cohort_coupling.png``, the mean map, and ``cohort_coupling_sex.png``,
+    where coupling differs between women and men.
+    """
+    from sbci.atlas import load_atlas
+
+    table = open_access_table(traits, trait)
+    saved = fc_directory / "coupling_maps.npz"
+    if saved.exists():
+        with np.load(saved) as z:
+            names, maps, count = list(z["subjects"]), z["maps"], z["count"]
+        print(f"  reusing {saved.name}: {len(names)} subjects", flush=True)
+    else:
+        t = time.time()
+        names, maps, count = [], [], []
+        for path in sorted(fc_directory.glob("sub-*_fc.h5")):
+            subject = path.name.split("_")[0]
+            sc_path = directory / f"{subject}_sc.h5"
+            if not sc_path.exists():
+                continue
+            fc = sbci.load(path)
+            if int(fc.metadata.get("fc_frames") or 0) != frames:
+                continue
+            sc = sbci.load(sc_path)
+            names.append(subject)
+            maps.append(sc.coupling(fc).astype(np.float32))
+            count.append(float(sc.metadata["streamline_count"]))
+        maps, count = np.array(maps), np.array(count)
+        np.savez(saved, subjects=np.array(names), maps=maps, count=count)
+        print(f"  coupling maps of {len(names)} subjects in {time.time() - t:.0f}s", flush=True)
+    cortex = ~np.isnan(maps).any(axis=0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        mean_map = np.nanmean(maps, axis=0)
+    atlas = load_atlas("Desikan")
+    labels = np.asarray(atlas.labels)
+    region = {
+        name[3:] + name[:2]: np.nanmean(mean_map[labels == k + 1])
+        for k, name in enumerate(atlas.names)
+        if (labels == k + 1).any()
+    }
+    unimodal = [v for n, v in region.items() if n[:-2] in UNIMODAL]
+    transmodal = [v for n, v in region.items() if n[:-2] in TRANSMODAL]
+    order = sorted(region.items(), key=lambda kv: kv[1])
+    print(
+        f"  {len(names)} subjects with all four runs: mean coupling {np.nanmean(mean_map):.3f}; "
+        f"unimodal regions {np.mean(unimodal):.3f}, transmodal {np.mean(transmodal):.3f}; lowest "
+        + ", ".join(f"{n} {v:.2f}" for n, v in order[:4])
+        + "; highest "
+        + ", ".join(f"{n} {v:.2f}" for n, v in order[-4:]),
+        flush=True,
+    )
+    rows = [dict(subject=s, **table[s]) for s in names]
+    family = np.arange(len(rows)).astype(str)
+    if groups is not None:
+        with open(groups, newline="") as handle:
+            group_of = {r["subject"]: r["group"] for r in csv.DictReader(handle)}
+        family = np.array([group_of[s] for s in names])
+    halves = np.random.default_rng(0).permutation(np.unique(family))
+    first_half = np.isin(family, halves[: halves.size // 2])
+    a, b = maps[first_half][:, cortex].mean(axis=0), maps[~first_half][:, cortex].mean(axis=0)
+    print(
+        f"  two halves of the cohort, split by family ({int(first_half.sum())} and "
+        f"{int((~first_half).sum())} subjects): their mean maps correlate at "
+        f"r = {np.corrcoef(a, b)[0, 1]:.3f}",
+        flush=True,
+    )
+    known = np.array([r["trait"] not in ("", "NA", "nan") for r in rows])
+    score = np.array([float(r["trait"]) if k else np.nan for r, k in zip(rows, known, strict=True)])
+    female = np.array([r["sex"] == "F" for r in rows], dtype=float)
+    band = np.array([BAND_MIDPOINTS[r["age_bin"]] for r in rows])
+    millions = count / 1e6
+    extra = []
+    if covariates is not None:
+        with open(covariates, newline="") as handle:
+            given = {r.pop("subject"): r for r in csv.DictReader(handle)}
+        columns = list(next(iter(given.values())))
+        for column in columns:
+            value = [given.get(s, {}).get(column, "") for s in names]
+            value = np.array([float(v) if v not in ("", "NA", "nan") else np.nan for v in value])
+            known &= np.isfinite(value)
+            extra.append(value)
+        mean_coupling = maps[:, cortex].mean(axis=1)
+        for column, value in zip(columns, extra, strict=True):
+            r = [np.corrcoef(value[known], other[known])[0, 1] for other in (score, female)]
+            print(
+                f"  covariate {column}: median {np.median(value[known]):.4g}; r with {trait} "
+                f"{r[0]:+.2f}, with sex (women 1) {r[1]:+.2f}, with mean coupling "
+                f"{np.corrcoef(value[known], mean_coupling[known])[0, 1]:+.2f}",
+                flush=True,
+            )
+    clusters = None if groups is None else family[known]
+    values = maps[known][:, cortex]
+    tests = {}
+    for name, design, rises in (
+        (trait, np.column_stack([score, female, band, millions, *extra]), "with the score"),
+        ("sex", np.column_stack([female, score, band, millions, *extra]), "in women"),
+    ):
+        design = design[known]
+        result = sbci.local_test(values, design, terms=[1], groups=clusters)
+        whole = sbci.local_test(values.mean(axis=1), design, terms=[1], groups=clusters)
+        tests[name] = result
+        hit = result.significant()
+        strongest = int(np.nanargmin(result.pvalue))
+        r = np.corrcoef(values[:, strongest], design[:, 0])[0, 1]
+        direction = "higher" if whole.coefficients[0, 1] > 0 else "lower"
+        print(
+            f"  coupling against {name}, given the rest ({int(known.sum())} subjects): "
+            f"{hit.size} of {values.shape[1]} "
+            f"vertices at FDR 0.05 (smallest adjusted p {np.nanmin(result.adjusted):.2g}, "
+            f"r {r:+.2f} there); mean coupling p {whole.pvalue[0]:.2g}, {direction} {rises}",
+            flush=True,
+        )
+    first = sbci.load(directory / f"{names[0]}_sc.h5")
+    figure = coupling_plot(mean_map, first)
+    figure.suptitle(
+        f"Structure-function coupling across {len(names)} {DATASET} subjects: at each vertex, "
+        "the cosine similarity\nof its SC and FC profiles, averaged over the subjects",
+        fontsize=TITLE_SIZE,
+        y=1.11,
+    )
+    save(figure, out, "cohort_coupling.png")
+
+    # Where coupling differs between women and men: the fitted difference at the
+    # vertices that survive the correction, and in which regions they lie.
+    sexes = tests["sex"]
+    hit = sexes.significant()
+    if not hit.size:
+        return
+    difference = np.zeros(maps.shape[1])
+    difference[np.flatnonzero(cortex)[hit]] = sexes.coefficients[hit, 1]
+    found = difference[np.flatnonzero(cortex)[hit]]
+    where = {}
+    for vertex in np.flatnonzero(difference):
+        k = labels[vertex]
+        if k > 0:
+            name = atlas.names[k - 1]
+            where.setdefault(name, []).append(difference[vertex])
+    busiest = sorted(where.items(), key=lambda kv: -len(kv[1]))[:6]
+    print(
+        f"  sex: coupling higher in women at {100 * (found > 0).mean():.0f}% of the {hit.size} "
+        f"vertices, the difference (women minus men) {found.min():+.3f} to {found.max():+.3f}; "
+        "most of them in "
+        + ", ".join(
+            f"{n} ({len(v)}, {'women' if np.mean(v) > 0 else 'men'} higher)" for n, v in busiest
+        ),
+        flush=True,
+    )
+    peak = float(np.abs(difference).max())
+    figure = first.plot(
+        difference,
+        views=VIEWS,
+        cmap="coolwarm",
+        symmetric=True,
+        threshold=0.05 * peak,
+        mesh=DISPLAY_MESH,
+        engine=DISPLAY_ENGINE,
+    )
+    named = trait.replace("_", " ")
+    if trait == "fluid_intelligence_pmat24":
+        named = "fluid intelligence"
+    nuisance = f"{named}, age band, streamline count" + "".join(
+        f", {column}" for column in (columns if covariates is not None else [])
+    )
+    figure.suptitle(
+        f"Where structure-function coupling differs between women and men, {int(known.sum())} "
+        f"{DATASET} subjects:\nthe fitted difference (women minus men) at the {hit.size} of "
+        f"{values.shape[1]} vertices significant at FDR 0.05,\ngiven {nuisance}"
+        + (", families as clusters" if groups is not None else ""),
+        fontsize=TITLE_SIZE,
+        y=1.15,
+    )
+    save(figure, out, "cohort_coupling_sex.png")
+
+
+def coupling_plot(values: np.ndarray, cc):
+    """A coupling map on fsaverage, coloured over its own 2nd to 98th percentiles.
+
+    The range is the map's own so that the gradient from sensory to association
+    cortex reads, rather than a band of one colour.
+    """
+    low, high = np.round(np.nanpercentile(values, [2, 98]), 2)
+    return cc.plot(
+        values,
+        views=VIEWS,
+        cmap=SURFACE_RAMP,
+        symmetric=False,
+        vmin=float(low),
+        vmax=float(high),
+        mesh=DISPLAY_MESH,
+        engine=DISPLAY_ENGINE,
+    )
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 3:
         print(__doc__)
@@ -1133,6 +1381,13 @@ def main(argv: list[str]) -> int:
         rank = int(argv[argv.index("--rank") + 1]) if "--rank" in argv else 20
         candidates = int(argv[argv.index("--candidates") + 1]) if "--candidates" in argv else 1
         out.mkdir(parents=True, exist_ok=True)
+        if "--full-fc" in argv:
+            # --full-fc DIR: the cohort's FC files; the coupling analysis instead of the FPCA
+            fc_directory = Path(argv[argv.index("--full-fc") + 1])
+            extra = Path(argv[argv.index("--covariates") + 1]) if "--covariates" in argv else None
+            print("full cohort coupling", flush=True)
+            cohort_coupling(out, directory, fc_directory, traits, groups=groups, covariates=extra)
+            return 0
         print("full cohort", flush=True)
         cohort_trait(out, directory, traits, rank=rank, candidates=candidates, groups=groups)
         return 0
@@ -1150,12 +1405,11 @@ def main(argv: list[str]) -> int:
     subjects, functional = load_cohort(cohort_dir)
     print(f"loaded {len(subjects)} {DATASET} subjects", flush=True)
     first = subjects[0]
-    fc_first = sbci.load(functional[0]) if functional[0] is not None else None
     if surfaces_only:
         print("surface figures", flush=True)
         seed_profile(out, first)
-        if fc_first is not None:
-            coupling(out, first, fc_first)
+        if any(functional):
+            coupling(out, subjects, functional)
         smoothing_power(out, first)
         return 0
     if only_recovery or only_migration:
@@ -1171,8 +1425,8 @@ def main(argv: list[str]) -> int:
         print("single subject", flush=True)
         seed_profile(out, first)
         region_matrix(out, first)
-        if fc_first is not None:
-            coupling(out, first, fc_first)
+        if any(functional):
+            coupling(out, subjects, functional)
         print("smoothing", flush=True)
         smoothing_power(out, first)
         print("alignment recovery", flush=True)

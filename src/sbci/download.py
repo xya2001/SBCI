@@ -201,8 +201,8 @@ def fetch_cohort(
         or ``None`` for the whole cohort.
     modalities
         ``"sc"``, ``"fc"``, or both; a subject without one of them gets the
-        other. Asking only for what the cohort does not hold (FC from
-        ``hcp-ya``, which has none yet) raises ``ValueError``.
+        other. Asking only for a modality the cohort does not hold raises
+        ``ValueError``.
     force
         Re-download files that are already present and correct.
     fetcher

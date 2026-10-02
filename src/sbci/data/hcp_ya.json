@@ -1,9 +1,9 @@
 {
   "cohort": "hcp-ya",
-  "description": "Eleven HCP Young Adult subjects: sub-100307, the subject the package brief's acceptance test names, and ten drawn at random (seed 0), five women and five men, from the 946 with complete SBCI pipeline output in the lab's copy. One SC file per subject with its streamline endpoints, rebuilt on the ico4 grid by tools/build_hcp_cohort.py --layout young-adult. Sex and the open-access age band come from the HCP's open-access data; no FC yet. Redistributed under the WU-Minn HCP Open Access Data Use Terms (DATA_USE.txt in the folder).",
+  "description": "Eleven HCP Young Adult subjects: sub-100307, the subject the package brief's acceptance test names, and ten drawn at random (seed 0), five women and five men, from the 946 with complete SBCI pipeline output in the lab's copy. One SC file per subject with its streamline endpoints, rebuilt on the ico4 grid by tools/build_hcp_cohort.py --layout young-adult. Each subject also has its FC, from the HCP's ICA-FIX-cleaned resting-state runs placed on the grid through the subject's own registration by tools/build_hcp_fc.py. Sex and the open-access age band come from the HCP's open-access data. Redistributed under the WU-Minn HCP Open Access Data Use Terms (DATA_USE.txt in the folder).",
   "data_use": "SBCI example cohort: eleven HCP Young Adult subjects\n====================================================\n\nThese files are structural continuous connectomes on the fsaverage ico4 grid\n(5,124 vertices), with each subject's streamline endpoints, in the format of the\nsbci Python package (https://github.com/xya2001/SBCI). They were derived from\ndata of the WU-Minn Human Connectome Project (HCP Young Adult) through the lab's\nSBCI pipeline output and rebuilt with tools/build_hcp_cohort.py --layout\nyoung-adult. `sbci download hcp-ya` fetches and verifies them.\n\nThey are redistributed under the WU-Minn HCP Consortium Open Access Data Use\nTerms, which apply to anyone who downloads them:\nhttps://www.humanconnectome.org/study/hcp-young-adult/document/wu-minn-hcp-consortium-open-access-data-use-terms\n\nIn short, by using these files you agree to those terms, among them: not to\nattempt to identify or contact any subject; to comply with your institution's\nrules for research on human subjects; to redistribute these data, or anything\nderived from them, only under the same terms; and to acknowledge the HCP in any\npublic presentation of results, with this wording:\n\n  \"Data were provided [in part] by the Human Connectome Project, WU-Minn\n  Consortium (Principal Investigators: David Van Essen and Kamil Ugurbil;\n  1U54MH091657) funded by the 16 NIH Institutes and Centers that support the\n  NIH Blueprint for Neuroscience Research; and by the McDonnell Center for\n  Systems Neuroscience at Washington University.\"\n\nThe terms page above is authoritative; this note only points to it.\n",
   "host": "google-drive",
-  "release": "2026-09-30",
+  "release": "2026-10-02",
   "folder": "sbci-hcp-ya-example",
   "subjects": [
     {
@@ -15,6 +15,11 @@
           "drive_id": "1AZE3OcrJ8EL76FurS5M8BSfj21sHDN74",
           "bytes": 50165640,
           "sha256": "8cfe20040854b3e268679efc22186e48d6aba147597f98ea980f272889d8ed0f"
+        },
+        "fc": {
+          "drive_id": "1Cj_LZ35nrB1wRrjHf7NZ5ckcRnGiEUhX",
+          "bytes": 40086811,
+          "sha256": "ff9daab9d8c32eabdda2bf93f22b694aae7a6a7962a0a1405a38a6c5f820fec3"
         }
       }
     },
@@ -27,6 +32,11 @@
           "drive_id": "1_wytVsULK73y4Y0FFZLrFNk4TMcKwDBZ",
           "bytes": 55954545,
           "sha256": "d0cf1492a246af0f2daa459845dad1e7da113c3451ba42efcde7f76dadea49a1"
+        },
+        "fc": {
+          "drive_id": "1pqfwlG2DbQ-uJHIzsmCCy8xCOBwDUt_0",
+          "bytes": 39984683,
+          "sha256": "4e09d433de97091fb439c18e661461f8fa06fbce622f72802d460bc895dd9eb0"
         }
       }
     },
@@ -39,6 +49,11 @@
           "drive_id": "1iMYqK20X_ulhRAubZLqUCIQH-tKMDxoL",
           "bytes": 47806400,
           "sha256": "c964cc93f425480eaf55329f4954bae16e1acdd3946bee7cce8d4d48605de17f"
+        },
+        "fc": {
+          "drive_id": "1699e3qhCxtIqA6X-zsv0uNKcCQ52XqYL",
+          "bytes": 40015908,
+          "sha256": "64ef32046c47e9f6a11827d0017b2b2b47d76ce7487a0539c54632972c991cc4"
         }
       }
     },
@@ -51,6 +66,11 @@
           "drive_id": "10TYzyrZZJtWWL8q4Pl9ba-paZ7uNO_6X",
           "bytes": 47033858,
           "sha256": "7c868407da588351df85b325296f26bdb20e1b0be643197a56cb26c7818d291f"
+        },
+        "fc": {
+          "drive_id": "1voL6c5hs4hVpuc81ozLdLm0ZHXw9eBOD",
+          "bytes": 39982718,
+          "sha256": "685a1ea8feb1dcc24561ab98e684d0c8b4fb31924f1f0f8ba8b25f7e5c3c0169"
         }
       }
     },
@@ -63,6 +83,11 @@
           "drive_id": "10Cqo-eWZYLorX-74jYUKwwCMeB2WR2Lw",
           "bytes": 49602304,
           "sha256": "5cdfede60bacbc9aba57a991c437a938b376a158539a1d3219be39e051fff297"
+        },
+        "fc": {
+          "drive_id": "1bqiNXiZWkbUNj2EN1sKpu_CQ8-Sxz6ex",
+          "bytes": 39953183,
+          "sha256": "a29f3a6491ad2c3f155476ec47545e21f3b0a28ff6449eab5d48b28721dcb6a8"
         }
       }
     },
@@ -75,6 +100,11 @@
           "drive_id": "1wGGGQGV08yuJGYmp9LwLa-Ue9MJuKF4u",
           "bytes": 50772835,
           "sha256": "30ce3c780ce0306c0556e0ae2f43af66ddd221d40caa01a7f8f292fef66d20f4"
+        },
+        "fc": {
+          "drive_id": "1gGAyh-GtQf6xVPVvNKVDUPZz75E1G2V3",
+          "bytes": 40066417,
+          "sha256": "4a361399b3e1a68a7ec0c6209ce153bb61bcd5a0988838ff39354890f599a671"
         }
       }
     },
@@ -87,6 +117,11 @@
           "drive_id": "1faUXDond-gI1dy7EiGhVd9v28HSv_541",
           "bytes": 50410834,
           "sha256": "79f5a5af2543ee7cba8c5f95a088e3a0a97cb3d43f02b2bb764654ba8c3d6c88"
+        },
+        "fc": {
+          "drive_id": "12aEKFq5VWmNZaScZDm_Kkn2OP8bSDZwA",
+          "bytes": 40113195,
+          "sha256": "c6e5194b4d0f998d6e7e91ced6443348748309e409720fdd057ecaef01cd660b"
         }
       }
     },
@@ -99,6 +134,11 @@
           "drive_id": "1RkIvPSBL3p44sQAbHGQo3JbwT1G5EmDx",
           "bytes": 51711013,
           "sha256": "2413f2119f6b3a0ab69ef9249c1cdf7ce1018e7950f038c7173995893defd631"
+        },
+        "fc": {
+          "drive_id": "1UnMucxUp2ztc6OPU8tYV573pdOx8Fokh",
+          "bytes": 40100342,
+          "sha256": "b6e0f00c141679009e4faa43cd1f5acbbeccb73d5187700e8491317c2caae76c"
         }
       }
     },
@@ -111,6 +151,11 @@
           "drive_id": "1MrtRLDHmaNoDAKFb82t8BUM0Hs7pFw6U",
           "bytes": 51188500,
           "sha256": "8f0137f2057cd575d7d6c202cf10bd3cb10334b4b7e97f0d6846adcaf97b6728"
+        },
+        "fc": {
+          "drive_id": "1flvPzTQqrqQfcvY-YkCYqmrBRHTIq0gT",
+          "bytes": 39995289,
+          "sha256": "35de5c9fdc155a8411f5d14ba7cd589052e39194876788d63f559d5667339aff"
         }
       }
     },
@@ -123,6 +168,11 @@
           "drive_id": "1fXRnm4ohyld2WivjbV9lgs8Z_XPyn2Cj",
           "bytes": 51555724,
           "sha256": "cfde01cc7524ed2735abc2ac4b68e16fc1e70d10f0d6fecaf99fe593238911fc"
+        },
+        "fc": {
+          "drive_id": "1-JmknIi2AgpE4fvjl9DY164Nbp_ubJ9u",
+          "bytes": 40139424,
+          "sha256": "337e6a496d8254e67e74753a62fd13aef868c424c41f8ee481efd2cc9ac5fd12"
         }
       }
     },
@@ -135,6 +185,11 @@
           "drive_id": "1t9iVfoCJ822ec68lrfsp-PXdrf1ExWpZ",
           "bytes": 50511147,
           "sha256": "0ee76142c1fcee7ea8d95206e17de5e9609db100316e871aa9a9e98e0d971cd1"
+        },
+        "fc": {
+          "drive_id": "14AuUz_OmLkRQyKl2j7zAjkV5wED4ihvL",
+          "bytes": 39924042,
+          "sha256": "171f0a360e2dcd35f9c3dd6536a3244fc59a909cfd4a8d7aa16b523376fdf542"
         }
       }
     }
