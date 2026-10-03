@@ -93,8 +93,9 @@ do on the released subjects.
 The example cohort is eleven HCP Young Adult subjects, each with a structural
 connectome (SC, with its streamline endpoints) and a functional one (FC, from
 the HCP's own cleaned resting-state runs placed on the grid through the
-subject's registration), hosted on a public Google Drive and fetched by the
-package:
+subject's registration), hosted on a public Google Drive
+([the folder](https://drive.google.com/drive/folders/1gG2ZmxxVm4w5dvlCQvMaEEOBypU7nDpx),
+for browsing) and fetched by the package:
 
 ```bash
 sbci download hcp-ya --out hcp-ya        # all eleven, about 1 GB
@@ -145,13 +146,15 @@ check proves.
 
 - SBCI: Cole et al. *Surface-Based Connectivity Integration: An atlas-free
   approach to jointly study functional and structural connectivity.* Human
-  Brain Mapping, 2021. MATLAB: [sbci-brain/SBCI_Toolkit](https://github.com/sbci-brain/SBCI_Toolkit).
-- The spherical kernel: Moyer et al., MICCAI 2016; C++:
-  [dcmoyer/concon](https://github.com/dcmoyer/concon).
-- ENCORE: Cole et al., [sbci-brain/ConCon_Alignment](https://github.com/sbci-brain/ConCon_Alignment).
+  Brain Mapping, 2021.
+- ENCORE: Cole et al.,
+  [sbci-brain/ConCon_Alignment](https://github.com/sbci-brain/ConCon_Alignment).
 - ConSEAL: Xiang, Cole and Zhang. *ConSEAL: Connectivity-Informed Streamline
-  Endpoint Alignment for Diffeomorphic Cortical Registration*,
-  arXiv:2605.16742; MATLAB: [MartyCole/Encore](https://github.com/MartyCole/Encore).
+  Endpoint Alignment for Diffeomorphic Cortical Registration.* arXiv:2605.16742.
+- FPCA: *Continuous and Atlas-free Analysis of Brain Structural Connectivity.*
+  Annals of Applied Statistics, 2024.
+- Riemannian diffusion kernel: *Riemannian diffusion kernel-smoothed continuous
+  structural connectivity on cortical surface.* bioRxiv 2025.09.08.674789.
 
 ## License
 
