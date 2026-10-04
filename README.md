@@ -144,17 +144,24 @@ check proves.
 
 ## References
 
-- SBCI: Cole et al. *Surface-Based Connectivity Integration: An atlas-free
-  approach to jointly study functional and structural connectivity.* Human
-  Brain Mapping, 2021.
-- ENCORE: Cole et al.,
-  [sbci-brain/ConCon_Alignment](https://github.com/sbci-brain/ConCon_Alignment).
-- ConSEAL: Xiang, Cole and Zhang. *ConSEAL: Connectivity-Informed Streamline
-  Endpoint Alignment for Diffeomorphic Cortical Registration.* arXiv:2605.16742.
-- FPCA: *Continuous and Atlas-free Analysis of Brain Structural Connectivity.*
-  Annals of Applied Statistics, 2024.
-- Riemannian diffusion kernel: *Riemannian diffusion kernel-smoothed continuous
-  structural connectivity on cortical surface.* bioRxiv 2025.09.08.674789.
+The methods implemented here, and the paper each one ports:
+
+- **SBCI** — Cole, M., Murray, K., St-Onge, E., Risk, B., Zhong, J., Schifitto, G.,
+  Descoteaux, M., & Zhang, Z. (2021). Surface-Based Connectivity Integration: An
+  atlas-free approach to jointly study functional and structural connectivity.
+  *Human Brain Mapping*, 42(11), 3481–3499. <https://doi.org/10.1002/hbm.25447>
+- **ENCORE** — Cole, M., Xiang, Y., Consagra, W., Srivastava, A., Qiu, X., & Zhang, Z.
+  (2025). Alignment of continuous brain connectivity. *arXiv*, 2503.15830.
+  <https://arxiv.org/abs/2503.15830>
+- **ConSEAL** — Xiang, Y., Cole, M., & Zhang, Z. (2026). ConSEAL: Connectivity-informed
+  streamline endpoint alignment for diffeomorphic cortical registration. *arXiv*,
+  2605.16742. <https://arxiv.org/abs/2605.16742>
+- **FPCA** — Consagra, W., Cole, M., Qiu, X., & Zhang, Z. (2024). Continuous and
+  atlas-free analysis of brain structural connectivity. *Annals of Applied
+  Statistics*, 18(3), 1815–1839. <https://doi.org/10.1214/23-AOAS1858>
+- **Riemannian diffusion kernel** — Wang, L., Li, D., & Zhang, Z. (2025). Riemannian
+  diffusion kernel-smoothed continuous structural connectivity on cortical surface.
+  *bioRxiv*, 2025.09.08.674789. <https://doi.org/10.1101/2025.09.08.674789>
 
 ## License
 
