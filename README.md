@@ -150,9 +150,10 @@ The methods implemented here, and the paper each one ports:
   Descoteaux, M., & Zhang, Z. (2021). Surface-Based Connectivity Integration: An
   atlas-free approach to jointly study functional and structural connectivity.
   *Human Brain Mapping*, 42(11), 3481–3499. <https://doi.org/10.1002/hbm.25447>
-- **ENCORE** — Cole, M., Xiang, Y., Consagra, W., Srivastava, A., Qiu, X., & Zhang, Z.
-  (2025). Alignment of continuous brain connectivity. *arXiv*, 2503.15830.
-  <https://arxiv.org/abs/2503.15830>
+- **ENCORE** — Cole, M. R., Xiang, Y., Consagra, W., Srivastava, A., Qiu, X., & Zhang, Z.
+  (2026). ENCORE: Fast geometric framework for aligning brain structural connectivity
+  on cortical manifolds. *Medical Image Analysis*, 114, 104242.
+  <https://doi.org/10.1016/j.media.2026.104242>
 - **ConSEAL** — Xiang, Y., Cole, M., & Zhang, Z. (2026). ConSEAL: Connectivity-informed
   streamline endpoint alignment for diffeomorphic cortical registration. *arXiv*,
   2605.16742. <https://arxiv.org/abs/2605.16742>
