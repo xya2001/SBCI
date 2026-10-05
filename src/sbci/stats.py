@@ -78,19 +78,26 @@ def benjamini_hochberg(pvalues):
     return adjusted
 
 
+def _constant_columns(matrix) -> np.ndarray:
+    """Which columns are a nonzero constant, and so serve as an intercept.
+
+    Constancy is exact equality: a tolerance would take a covariate of tiny
+    scale for a constant, and a column of zeros is no intercept at all.
+    """
+    matrix = np.asarray(matrix, dtype=np.float64)
+    if matrix.shape[0] == 0:
+        return np.zeros(matrix.shape[1], dtype=bool)
+    return np.all(matrix == matrix[:1], axis=0) & (matrix[0] != 0)
+
+
 def _design_matrix(design, add_intercept):
     design = np.asarray(design, dtype=np.float64)
     if design.ndim == 1:
         design = design[:, None]
     # A constant, nonzero column already serves as the intercept; prepending
     # another would make the design rank deficient and count one degree of
-    # freedom too many in the F test. Constancy is exact equality: a tolerance
-    # would take a covariate of tiny scale for a constant, and a column of
-    # zeros is no intercept at all.
-    has_constant = design.shape[0] > 0 and bool(
-        np.any(np.all(design == design[:1], axis=0) & (design[0] != 0))
-    )
-    if add_intercept and not has_constant:
+    # freedom too many in the F test.
+    if add_intercept and not _constant_columns(design).any():
         design = np.column_stack([np.ones(design.shape[0]), design])
     return design
 
@@ -274,7 +281,20 @@ def local_test(
         residual = responses - full @ coefficients
         return coefficients, (residual * residual).sum(axis=0)
 
-    scale = (scores * scores).sum(axis=0)
+    # The scale a residual is judged against is the variation the reduced
+    # model has to explain. With an intercept among its columns the mean is
+    # absorbed, so that is the centred sum of squares: scores sitting at 1e6
+    # with unit spread are as testable as scores at zero. Without one it is
+    # the plain sum of squares.
+    magnitude = (scores * scores).sum(axis=0)
+    if reduced.shape[1] and _constant_columns(reduced).any():
+        centred = scores - scores.mean(axis=0)
+        scale = (centred * centred).sum(axis=0)
+    else:
+        scale = magnitude
+    # Scores agreeing to ten significant digits have no spread at all: what
+    # centring leaves is the rounding of the mean, not variance.
+    no_spread = scale <= 1e-20 * magnitude
 
     def f_statistic(reduced_ss, full_ss):
         with np.errstate(divide="ignore", invalid="ignore"):
@@ -284,7 +304,10 @@ def local_test(
         # scores' own scale, since least squares leaves rounding rather than an
         # exact zero. A perfect fit of a varying response is real, and stays.
         untestable = (
-            ~np.isfinite(reduced_ss) | ~np.isfinite(full_ss) | (reduced_ss <= 1e-10 * scale)
+            ~np.isfinite(reduced_ss)
+            | ~np.isfinite(full_ss)
+            | no_spread
+            | (reduced_ss <= 1e-10 * scale)
         )
         return np.where(untestable, np.nan, value)
 

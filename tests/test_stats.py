@@ -431,3 +431,40 @@ def test_bonferroni_counts_only_the_components_that_could_be_tested():
     finite = np.isfinite(result.pvalue)
     assert finite.tolist() == [True, False, True]
     np.testing.assert_allclose(result.adjusted[finite], np.minimum(2 * result.pvalue[finite], 1.0))
+
+
+def test_shifting_the_scores_changes_nothing_when_the_design_has_an_intercept():
+    """Scores at 1e6 with unit spread are as testable as at zero: the intercept takes the mean."""
+    rng = np.random.default_rng(35)
+    n = 40
+    covariate = rng.standard_normal(n)
+    scores = np.column_stack([2.0 * covariate + rng.standard_normal(n), rng.standard_normal(n)])
+    plain = local_test(scores, covariate, method="none")
+    shifted = local_test(scores + 1e6, covariate, method="none")
+    assert np.isfinite(shifted.statistic).all()
+    np.testing.assert_allclose(shifted.statistic, plain.statistic, rtol=1e-8)
+    np.testing.assert_allclose(shifted.pvalue, plain.pvalue, rtol=1e-8)
+
+
+def test_constant_scores_are_untestable_at_any_level():
+    """A constant column is NaN whether it sits at one, at a tenth or at a million."""
+    rng = np.random.default_rng(36)
+    n = 30
+    covariate = rng.standard_normal(n)
+    scores = np.column_stack(
+        [rng.standard_normal(n), np.ones(n), np.full(n, 0.1), np.full(n, 1e6), np.zeros(n)]
+    )
+    result = local_test(scores, covariate, method="none")
+    assert np.isfinite(result.statistic[0]) and np.isfinite(result.pvalue[0])
+    assert np.isnan(result.statistic[1:]).all() and np.isnan(result.pvalue[1:]).all()
+
+
+def test_without_an_intercept_the_mean_is_part_of_what_the_design_explains():
+    """No intercept, no centring: a response at 1e6 is testable, a response of zeros is not."""
+    rng = np.random.default_rng(37)
+    n = 30
+    covariate = rng.standard_normal(n)
+    scores = np.column_stack([2.0 * covariate + rng.standard_normal(n) + 1e6, np.zeros(n)])
+    result = local_test(scores, covariate, add_intercept=False, method="none")
+    assert result.terms == (0,) and result.residual_dof == n - 1
+    assert np.isfinite(result.statistic[0]) and np.isnan(result.statistic[1])

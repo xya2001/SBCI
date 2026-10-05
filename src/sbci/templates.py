@@ -47,6 +47,33 @@ from .surface import load_surface
 TEMPLATES = ("fsaverage", "fs_LR_32k")
 #: Radius HCP and FreeSurfer spheres are written with.
 SPHERE_RADIUS = 100.0
+#: GIFTI intent codes of a surface's two arrays, ``NIFTI_INTENT_POINTSET`` and
+#: ``NIFTI_INTENT_TRIANGLE``. The arrays are identified by these, not by their
+#: order in the file, which a valid file may reverse.
+INTENT_POINTSET = 1008
+INTENT_TRIANGLE = 1009
+
+
+def _surface_arrays(image, path) -> tuple[np.ndarray, np.ndarray]:
+    """A GIFTI surface's coordinates and triangles, found by intent.
+
+    Only when no array declares either intent is the conventional order --
+    coordinates, then triangles -- assumed, and then the dtypes have to agree
+    with it.
+    """
+    points = [array for array in image.darrays if array.intent == INTENT_POINTSET]
+    triangles = [array for array in image.darrays if array.intent == INTENT_TRIANGLE]
+    if len(points) == 1 and len(triangles) == 1:
+        return points[0].data, triangles[0].data
+    if not points and not triangles and len(image.darrays) == 2:
+        first, second = (np.asarray(array.data) for array in image.darrays)
+        if np.issubdtype(first.dtype, np.floating) and np.issubdtype(second.dtype, np.integer):
+            return first, second
+    raise ValueError(
+        f"{path} does not hold one coordinate array and one triangle array: found "
+        f"{len(points)} and {len(triangles)} by intent among {len(image.darrays)} arrays; "
+        "a GIFTI surface needs one of each"
+    )
 
 
 def _interpolate(points, base, images, faces, query: MeshQuery | None = None):
@@ -82,12 +109,12 @@ class SphereMap:
         """Two sphere surfaces of one mesh as GIFTI, e.g. a subject's native and MSMAll spheres."""
         import nibabel as nib
 
-        source = nib.load(str(source_path))
-        target = nib.load(str(target_path))
-        faces = np.asarray(source.darrays[1].data, dtype=np.int64)
-        if not np.array_equal(faces, np.asarray(target.darrays[1].data, dtype=np.int64)):
+        source, faces = _surface_arrays(nib.load(str(source_path)), source_path)
+        target, target_faces = _surface_arrays(nib.load(str(target_path)), target_path)
+        faces = np.asarray(faces, dtype=np.int64)
+        if not np.array_equal(faces, np.asarray(target_faces, dtype=np.int64)):
             raise ValueError("the two spheres do not share a face list, so they are not one mesh")
-        return cls(source.darrays[0].data, target.darrays[0].data, faces)
+        return cls(source, target, faces)
 
     def forward(self, points) -> np.ndarray:
         """Source-sphere points carried to the target sphere."""

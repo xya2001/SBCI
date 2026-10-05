@@ -70,7 +70,8 @@ def main(path):
     order = int(np.asarray(ref["L_WARP"]).ravel()[0])
     degree = int(np.asarray(ref["H_KERNEL"]).ravel()[0])
     sigma = float(np.asarray(ref["SIGMA"]).ravel()[0])
-    grid = SphericalGrid(vertices, faces, order=order)
+    # reference=True: the divergence is compared against MATLAB's own recurrence
+    grid = SphericalGrid(vertices, faces, order=order, reference=True)
 
     print("--- geometry")
     report("voronoi areas", grid.areas, ref["grid_A"].ravel())

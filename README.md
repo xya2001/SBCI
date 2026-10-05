@@ -4,7 +4,8 @@
 
 Continuous brain connectivity in Python: read, parcellate, smooth, couple,
 align and reduce surface-based connectomes on the ico4 grid, with every method
-a verified port of the SBCI group's MATLAB.
+a port of the SBCI group's MATLAB, checked against the reference and, where the
+reference itself is wrong, corrected by default (PORTING.md).
 
 SBCI, Surface-Based Connectivity Integration (Cole et al., *Human Brain
 Mapping*, 2021), represents structural and functional connectivity as
@@ -76,7 +77,7 @@ vertex, relative to the strongest.*
 | Seed profile | `cc.seed(vertex=...)`, `cc.seed(region=...)` | the MATLAB seed rows, to float64 rounding |
 | Structure-function coupling | `sc.coupling(fc, scope=...)`, three forms | the three MATLAB functions, to float64 rounding |
 | Smoothing | `cc.smooth(kernel="shk" \| "rdk" \| "matern")` from the stored endpoints | `concon` at r = 1.000000 at full scale; MATLAB to 3.25 float32-eps; the Matern closed form |
-| Alignment | `sbci.align(cohort)` (ENCORE, on densities), `sbci.endpoints_align(cohort)` (ConSEAL, on endpoints); `template=fixed` registers onto one subject | the MATLAB references to float64 rounding and r = 0.99999979; ConSEAL to the single precision its reference carries |
+| Alignment | `sbci.align(cohort)` (ENCORE, on densities), `sbci.endpoints_align(cohort)` (ConSEAL, on endpoints); `template=fixed` registers onto one subject | the MATLAB references with `reference=True` / `strict_upstream=True` (float64 rounding, r = 0.99999979; ConSEAL to its reference's single precision); by default the references' three shared errors are corrected and checked against closed forms (PORTING.md item 8) |
 | Carrying a warp | `sbci.migrate_warp(warp, to="fs_LR_32k")` | an identity and a known rotation |
 | Reduction | `sbci.reduce(cohort, rank=K)` (functional PCA, one file at a time) | the MATLAB reference to 2.1e-16 |
 | Inference | `sbci.local_test(scores, design, groups=...)` | `scipy.stats` and statsmodels (no MATLAB reference exists) |
@@ -121,6 +122,7 @@ and `tools/build_hcp_fc.py` build them for anyone with HCP access, and
 | [docs/RESULTS.md](docs/RESULTS.md) | what the methods do on real data: the figures, and the analysis of the 946 young adults |
 | [PORTING.md](PORTING.md) | how each of the seven MATLAB methods was ported and verified, and the errors found in the references |
 | [VERIFICATION.md](VERIFICATION.md) | how to check every claim yourself, in tiers from five minutes to a MATLAB licence |
+| [docs/review-2026-10-05.md](docs/review-2026-10-05.md) | the independent implementation review of October 2026: its eleven findings, three of them the MATLAB references' own, and what was done about each |
 | [SPEC_QUESTIONS.md](SPEC_QUESTIONS.md) | the file-format decisions, answered and open |
 | [BLUEPRINT.md](BLUEPRINT.md) | what the package is, what "finished" means, and the decisions it waits on |
 | [scripts/](scripts/README.md), [tools/](tools/README.md), [docs/figures/](docs/figures/README.md) | worked scripts (with the lab's Longleaf paths), the builders of the bundled data, and the figures |

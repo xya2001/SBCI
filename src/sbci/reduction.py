@@ -199,7 +199,12 @@ class _Deflation:
     """The projector onto the complement of the components already taken.
 
     ``P = I - K (K' G K)^-1 K' G`` for the kept components ``K`` and the inner
-    product ``G``. The reference forms ``P`` and then ``P M P'`` explicitly, two
+    product ``G``. This is the only place the inner product enters the fit: the
+    components are made orthogonal in ``G``, each later one sought in the
+    ``G``-complement of those before it, and within that complement the
+    component is the plain Euclidean eigenvector of ``P M P'``, with unit
+    Euclidean norm, as the reference's ``eigs`` returns it. The reference
+    forms ``P`` and then ``P M P'`` explicitly, two
     ``n^3`` products per outer iteration -- about half a minute each on the
     ico4 grid. ``P`` is a rank-``k`` update of the identity, so applying it is
     ``O(n k)`` plus one product with ``G``; this class applies it and never
@@ -383,7 +388,12 @@ def fit_basis(
     gram
         ``(n, n)`` inner-product matrix, or its diagonal as a 1-D array; on a
         mesh this is ``diag(areas)``. A dense diagonal is recognized and
-        applied elementwise.
+        applied elementwise. It enters only through the deflation: the
+        components are made orthogonal in this inner product, and each later
+        one is sought in the complement of those already taken. The leading
+        component of each step is the Euclidean (unweighted grid) fit to the
+        contracted matrix, as in the reference, so the fitted objective is
+        not the area-weighted approximation error.
     roughness
         ``(n, n)`` penalty matrix, or ``None`` for no penalty.
     rank
@@ -570,20 +580,36 @@ def fit_basis(
     )
 
 
-def project(reduction: Reduction, matrices) -> np.ndarray:
+def project(reduction: Reduction, matrices, reference: bool = False) -> np.ndarray:
     """Score new connectomes against an existing basis.
 
-    Port of ``ConConSmooth.smooth``: least squares of each subject's matrix
-    against the separable products ``psi_k psi_k'`` over the lower triangle,
-    diagonal included. Subjects are first centred on :attr:`Reduction.mean`
-    when the basis was fitted to a centred cohort, and the result is in the
-    units of :attr:`Reduction.scores` -- the fitted coefficient divided by the
-    component's scale -- so it is directly comparable with them.
+    By default this is the fit's own scoring, applied to subjects it did not
+    see. Each subject is centred on :attr:`Reduction.mean` when the basis was
+    fitted to a centred cohort; then, component by component, the coefficient
+    is ``psi_k' Y psi_k`` on what the earlier components left,
+    ``Y - sum_{l<k} c_l psi_l psi_l'``, and is divided by the component's
+    scale -- the contraction and deflation :func:`fit_basis` applies to the
+    training cohort. So the result is in the units of :attr:`Reduction.scores`,
+    and a model trained on those can be given projected scores as they are.
+    (The fit records a component's scores one alternating step before its
+    final vector, as the reference does, so on the training cohort the two
+    agree to the fit's tolerance, and to rounding once the updates have
+    converged.)
 
-    For symmetric input the normal equations have a closed form,
-    ``(X'X)_kl = ((psi_k . psi_l)^2 + sum_i psi_k(i)^2 psi_l(i)^2) / 2`` and
-    ``(X'y)_k = (psi_k' Y psi_k + sum_i psi_k(i)^2 Y_ii) / 2``, which is what is
-    solved here: ``O(n^2 K)`` per subject, and no thirteen-million-row design.
+    ``reference=True`` reproduces ``ConConSmooth.smooth`` instead: least
+    squares of each subject's matrix against the products ``psi_k psi_k'``
+    over the lower triangle, diagonal included. The triangle holds each
+    off-diagonal pair once but every diagonal entry, so the diagonal carries
+    twice the weight it has in the fit's contraction: with a zero diagonal
+    and one component the result is ``1 / (1 + sum_i psi_k(i)^4)`` of the
+    fitted score, two thirds on a two-vertex toy. That is what the MATLAB
+    reference does, and it is kept for comparison with it. For symmetric
+    input its normal equations have a closed form, ``(X'X)_kl = ((psi_k .
+    psi_l)^2 + sum_i psi_k(i)^2 psi_l(i)^2) / 2`` and ``(X'y)_k = (psi_k' Y
+    psi_k + sum_i psi_k(i)^2 Y_ii) / 2``, which is what is solved.
+
+    Either way the cost is ``O(n^2 K)`` per subject, and no
+    thirteen-million-row design is formed.
     """
     matrices = np.asarray(matrices, dtype=np.float64)
     if matrices.ndim == 2:
@@ -593,14 +619,27 @@ def project(reduction: Reduction, matrices) -> np.ndarray:
     if matrices.shape[1:] != (n, n):
         raise ValueError(f"matrices are {matrices.shape[1:]}, the basis is on {n} vertices")
 
-    squares = basis**2
-    normal = 0.5 * ((basis.T @ basis) ** 2 + squares.T @ squares)
+    overlap = (basis.T @ basis) ** 2
+    if reference:
+        squares = basis**2
+        normal = 0.5 * (overlap + squares.T @ squares)
+    else:
+        # The deflation written out: psi_k' Y^(k) psi_k is psi_k' Y psi_k less
+        # what the earlier coefficients leave through the overlaps, c_l (psi_k
+        # . psi_l)^2 -- a unit lower-triangular system in K unknowns, rather
+        # than K rank-one updates of an n x n residual per subject.
+        from scipy.linalg import solve_triangular
+
+        lower = np.tril(overlap, -1) + np.eye(reduction.rank)
     out = np.empty((matrices.shape[0], reduction.rank))
     for i, matrix in enumerate(matrices):
         centred = matrix if reduction.mean is None else matrix - reduction.mean
-        quadratic = (basis * (centred @ basis)).sum(axis=0)
-        right = 0.5 * (quadratic + squares.T @ np.diagonal(centred))
-        out[i], *_ = np.linalg.lstsq(normal, right, rcond=None)
+        quadratic = (basis * (centred @ basis)).sum(axis=0)  # psi_k' Y psi_k for every k
+        if reference:
+            right = 0.5 * (quadratic + squares.T @ np.diagonal(centred))
+            out[i], *_ = np.linalg.lstsq(normal, right, rcond=None)
+        else:
+            out[i] = solve_triangular(lower, quadratic, lower=True, unit_diagonal=True)
 
     scales = np.asarray(reduction.scales, dtype=np.float64)
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -640,6 +679,15 @@ def _grid_gram_and_roughness(area, coordinates=None):
 
 def reduce(cc_list, rank: int = 10, **kwargs) -> Reduction:
     """Fit a reduced-rank basis to a cohort of connectomes.
+
+    On the bundled ico4 grid the fit is given the vertex areas as the inner
+    product and the cotangent energy as the roughness penalty; on any other
+    grid it gets the plain inner product and no penalty. The areas define the
+    inner product in which the components are made orthogonal and later
+    components are deflated, not a weighting of the fit: each component is
+    the Euclidean fit to the grid values, as in the reference, so the
+    objective is not the area-weighted approximation error (see
+    :func:`fit_basis`).
 
     Parameters
     ----------

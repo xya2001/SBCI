@@ -21,6 +21,7 @@ from sbci.alignment import (
     SphericalGrid,
     SphericalWarp,
     Warp,
+    _legendre_derivatives,
     align,
     cart_to_sphere,
     gradient_operators,
@@ -29,6 +30,7 @@ from sbci.alignment import (
     sphere_exp_map,
     sphere_log_map,
     tangent_basis,
+    triangles_fold,
     voronoi_areas,
 )
 
@@ -569,3 +571,199 @@ def test_an_empty_cohort_is_refused_however_it_is_passed():
         align([])
     with pytest.raises(ValueError, match="at least one connectome"):
         align(np.zeros((0, 4, 4)))
+
+
+# --- the Legendre recurrence, the root normalization and folding steps ------
+#
+# Three things the reference does that the port corrects by default and keeps
+# behind ``reference=True`` for the MATLAB comparison, and one it does not.
+
+
+def _normalized_legendre(degree, theta):
+    """``P~_l^m(cos theta)`` for ``m = 0..l`` with the harmonic normalization."""
+    from scipy.special import factorial, lpmv
+
+    order = np.arange(degree + 1)[:, None]
+    normalization = np.sqrt(
+        ((2 * degree + 1) / (4 * np.pi)) * (factorial(degree - order) / factorial(degree + order))
+    )
+    return normalization * np.stack([lpmv(m, degree, np.cos(theta)) for m in range(degree + 1)])
+
+
+@pytest.mark.parametrize("degree", [1, 2, 3, 6, 15])
+def test_the_legendre_derivatives_match_finite_differences(degree):
+    """Both derivatives in theta, at every order, against central differences of the values.
+
+    The reference's recurrence writes the ``m = -1`` member as if the functions
+    were unnormalized, so its ``m = 0`` first derivative is scaled by
+    ``(1 + 1/(l(l+1))) / 2`` and its second derivative is wrong below the top
+    order; ``reference=True`` keeps that.
+    """
+    theta = np.linspace(0.3, np.pi - 0.3, 41)  # away from the poles
+    h1, h2 = 1e-5, 1e-4
+    values = _normalized_legendre(degree, theta)
+    plus, minus = _normalized_legendre(degree, theta + h1), _normalized_legendre(degree, theta - h1)
+    first_fd = (plus - minus) / (2 * h1)
+    plus, minus = _normalized_legendre(degree, theta + h2), _normalized_legendre(degree, theta - h2)
+    second_fd = (plus - 2 * values + minus) / h2**2
+
+    second, first, got = _legendre_derivatives(degree, theta)
+    np.testing.assert_allclose(got, values, rtol=1e-12)
+    np.testing.assert_allclose(first, first_fd, rtol=1e-6, atol=1e-6 * np.abs(first_fd).max())
+    np.testing.assert_allclose(second, second_fd, rtol=1e-5, atol=1e-5 * np.abs(second_fd).max())
+
+    factor = 0.5 * (1 + 1 / (degree * (degree + 1)))
+    reference_second, reference_first, _ = _legendre_derivatives(degree, theta, reference=True)
+    np.testing.assert_allclose(reference_first[0], factor * first[0], rtol=1e-12)
+    np.testing.assert_array_equal(reference_first[1:], first[1:])  # the same arithmetic there
+    assert np.abs(reference_second - second_fd).max() > 0.1 * np.abs(second_fd).max()
+
+
+def test_the_corrected_recurrence_changes_the_divergence_and_not_the_basis():
+    """A pure scale at m = 0: normalizing removed it from the fields, not from their divergence.
+
+    The zonal gradient field ``grad Y_l0 / ||grad Y_l0||`` has divergence
+    ``-l(l+1) Y_l0 / ||grad Y_l0||`` in the area-weighted norm the basis uses:
+    at degree 1 that is ``-2 cos(theta) / sqrt(sum sin(theta)^2 areas)``. The
+    reference's comes out 4/3 of it at degree 1 and 24/13 at degree 3.
+    """
+    vertices, faces = icosphere(2)
+    vertices = rotate_off_poles(vertices)
+    corrected = SphericalGrid(vertices, faces, order=3)
+    reference = SphericalGrid(vertices, faces, order=3, reference=True)
+    assert corrected.reference is False and reference.reference is True
+    np.testing.assert_allclose(corrected.basis, reference.basis, atol=1e-14)
+
+    cos, sin, areas = np.cos(corrected.theta), np.sin(corrected.theta), corrected.areas
+    degree_1 = -2 * cos / np.sqrt((sin**2 * areas).sum())
+    legendre_3 = (5 * cos**3 - 3 * cos) / 2
+    d_legendre_3 = -sin * (15 * cos**2 - 3) / 2
+    degree_3 = -12 * legendre_3 / np.sqrt((d_legendre_3**2 * areas).sum())
+    # degree 1, m = 0 is column 0; degree 3, m = 0 follows the 3 + 5 fields of degrees 1 and 2
+    np.testing.assert_allclose(corrected.laplacian[:, 0], degree_1, atol=1e-13)
+    np.testing.assert_allclose(corrected.laplacian[:, 8], degree_3, atol=1e-13)
+    np.testing.assert_allclose(reference.laplacian[:, 0], (4 / 3) * degree_1, atol=1e-13)
+    np.testing.assert_allclose(reference.laplacian[:, 8], (24 / 13) * degree_3, atol=1e-13)
+
+
+def test_evaluate_root_keeps_unit_norm_once_the_diagonal_is_zeroed():
+    """Interpolation puts mass on the diagonal; normalizing before zeroing it loses that mass.
+
+    A density concentrated near the diagonal -- each vertex connected to its
+    neighbours -- shows it most: transported by the reference's order
+    (``reference=True``) it comes back short of unit norm, by the port's not.
+    """
+    vertices, faces = icosphere(2)
+    grid = SphericalGrid(rotate_off_poles(vertices), faces, order=2)
+    points = np.vstack([grid.vertices, grid.vertices])
+    distance = np.arccos(np.clip(points @ points.T, -1.0, 1.0))
+    local = np.exp(-(distance**2) / (2 * 0.25**2))
+    np.fill_diagonal(local, 0.0)
+    displacement = 0.05 * np.stack([np.sin(3 * grid.theta), np.cos(2 * grid.phi)], axis=1)
+    warp = SphericalWarp(grid, delta=1e-5).compose(displacement)
+    assert not warp.folds()
+
+    corrected = Concon(grid, grid, delta=1e-5)
+    reference = Concon(grid, grid, delta=1e-5, reference=True)
+    root = np.sqrt(local / (local * corrected.area_product).sum())
+
+    def norm(q):
+        return (q**2 * corrected.area_product).sum()
+
+    transported = corrected.evaluate_root(root, warp, warp)
+    assert norm(transported) == pytest.approx(1.0, abs=1e-12)
+    assert np.abs(np.diag(transported)).max() == 0.0
+    assert norm(reference.evaluate_root(root, warp, warp)) < 0.999
+    # nothing left off the diagonal: zeros, not a division by zero
+    nothing = corrected.evaluate_root(np.zeros_like(root), warp, warp)
+    np.testing.assert_array_equal(nothing, 0.0)
+
+
+def test_a_step_that_folds_a_face_is_refused(monkeypatch):
+    """A flipped face has a positive Jacobian (an absolute value), so the reference accepts it.
+
+    At the reviewer's setting -- a step of 2 with two halvings, order 6 on a
+    coarse mesh -- the reference's rule returns warps with folded faces and a
+    positive Jacobian everywhere; the port halves the step instead, and the
+    cost still falls.
+    """
+    vertices, faces = icosphere(1)
+    grid = SphericalGrid(rotate_off_poles(vertices), faces, order=6)
+    rng = np.random.default_rng(5)
+    n = 2 * grid.n_vertices
+    densities = []
+    for _ in range(2):
+        matrix = rng.random((n, n))
+        matrix = matrix + matrix.T
+        np.fill_diagonal(matrix, 0.0)
+        densities.append(matrix)
+    encore = Encore(grid, grid, step=2.0, backtracks=2, max_iterations=5, delta=1e-5)
+    before = (
+        (encore.root(densities[0]) - encore.root(densities[1])) ** 2 * encore.area_product
+    ).sum()
+
+    _, lh_warp, rh_warp, after = encore.register(densities[0], densities[1])
+    assert not triangles_fold(lh_warp.vertices, grid.faces)
+    assert not triangles_fold(rh_warp.vertices, grid.faces)
+    assert not lh_warp.folds() and not rh_warp.folds()
+    assert after <= before + 1e-12
+
+    monkeypatch.setattr(SphericalWarp, "folds", lambda self: False)  # the reference's rule
+    _, lh_accepting, rh_accepting, _ = encore.register(densities[0], densities[1])
+    assert triangles_fold(lh_accepting.vertices, grid.faces) or triangles_fold(
+        rh_accepting.vertices, grid.faces
+    )
+    assert min(lh_accepting.jacobian.min(), rh_accepting.jacobian.min()) > 0
+
+
+def test_the_fold_check_leaves_a_default_step_registration_untouched(pair, monkeypatch):
+    """At the default step no trial folds, so the check may not change a single bit."""
+    grid, densities = pair
+    encore = Encore(grid, grid, step=0.05, max_iterations=5, delta=1e-5)
+    checked = encore.register(densities[0], densities[1])
+    monkeypatch.setattr(SphericalWarp, "folds", lambda self: False)
+    unchecked = encore.register(densities[0], densities[1])
+
+    np.testing.assert_array_equal(checked[0], unchecked[0])
+    for mine, theirs in zip(checked[1:3], unchecked[1:3], strict=True):
+        np.testing.assert_array_equal(mine.vertices, theirs.vertices)
+        np.testing.assert_array_equal(mine.jacobian, theirs.jacobian)
+    assert checked[3] == unchecked[3]
+
+
+def test_a_mesh_wound_inward_is_tested_for_folds_with_its_faces_reversed(grid):
+    """The fold test assumes outward faces; an inward mesh is a valid grid everywhere else."""
+    inward = SphericalGrid(grid.vertices, grid.faces[:, ::-1], order=2)
+    assert triangles_fold(inward.vertices, inward.faces)
+    assert not SphericalWarp(inward, delta=1e-5).folds()
+    smooth = 0.02 * np.stack([np.sin(3 * grid.theta), np.cos(2 * grid.phi)], axis=1)
+    rough = 0.3 * np.random.default_rng(8).normal(size=(grid.n_vertices, 2))
+    for displacement, expected in ((smooth, False), (rough, True)):
+        outward = SphericalWarp(grid, delta=1e-5).compose(displacement)
+        reversed_faces = SphericalWarp(inward, delta=1e-5).compose(displacement)
+        assert outward.folds() is expected
+        assert reversed_faces.folds() is expected
+
+
+def test_reference_mode_reaches_the_grids_and_the_estimator(pair):
+    """``align(reference=True)`` builds reference grids and hands the switch to :class:`Encore`."""
+    from sbci.alignment import _hemisphere_grids
+
+    assert all(g.reference for g in _hemisphere_grids(order=1, reference=True))
+    assert not any(g.reference for g in _hemisphere_grids(order=1))
+
+    grid, densities = pair
+    reference = SphericalGrid(grid.vertices, grid.faces, order=2, reference=True)
+    encore = Encore(reference, reference, max_iterations=2, delta=1e-5, reference=True)
+    assert encore.concon.reference and not Encore(grid, grid).concon.reference
+    template = encore.root(densities[0])
+    _, _, _, cost = encore.register(template, densities[1], target_is_root=True)
+    result = align(
+        densities[1:2],
+        template=template,
+        grids=(reference, reference),
+        reference=True,
+        max_iterations=2,
+        delta=1e-5,
+    )
+    assert result.costs[0] == cost

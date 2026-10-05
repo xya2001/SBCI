@@ -10,6 +10,8 @@ from.
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -112,13 +114,21 @@ def test_the_leading_component_finds_the_strongest_truth(cohort):
 
 
 def test_scores_reproduce_the_subjects_they_came_from(cohort):
-    """Projecting the data onto its own basis returns its own scores."""
+    """Projecting the data onto its own basis returns its own scores.
+
+    To the fit's tolerance: the fit records a component's scores one
+    alternating step before its final vector, so at the default ``tol_outer``
+    the two differ at the 1e-3 level (the fixed-point test below pins the
+    identity itself). The reference form is systematically further off.
+    """
     matrices, _ = cohort
     result = fit_basis(matrices, np.eye(matrices.shape[1]), rank=4, seed=0)
     again = project(result, matrices)
-    fitted = result.scores * result.scales
+    np.testing.assert_allclose(again, result.scores, atol=1e-2)
     for k in range(result.rank):
-        assert abs(np.corrcoef(again[:, k], fitted[:, k])[0, 1]) > 0.99
+        assert abs(np.corrcoef(again[:, k], result.scores[:, k])[0, 1]) > 0.99
+    reference_form = project(result, matrices, reference=True)
+    assert np.abs(again - result.scores).max() < np.abs(reference_form - result.scores).max()
 
 
 def test_a_higher_rank_never_explains_less(cohort):
@@ -359,6 +369,7 @@ def test_projecting_the_training_cohort_recovers_its_own_scores(cohort):
     result = reduce(raw, rank=3, seed=0)
     assert result.mean is not None
     again = project(result, np.stack(raw))
+    np.testing.assert_allclose(again, result.scores, atol=1e-2)
     for k in range(result.rank):
         assert abs(np.corrcoef(again[:, k], result.scores[:, k])[0, 1]) > 0.99
     # reconstruct() is the mean plus the components weighted by the subject's scores
@@ -372,6 +383,7 @@ def test_projecting_the_training_cohort_recovers_its_own_scores(cohort):
 
 
 def test_the_closed_form_projection_equals_the_explicit_least_squares(cohort):
+    """reference=True is ConConSmooth.smooth: lower-triangle least squares, diagonal included."""
     matrices, _ = cohort
     result = fit_basis(matrices, np.eye(matrices.shape[1]), rank=3, seed=0)
     n = matrices.shape[1]
@@ -379,7 +391,92 @@ def test_the_closed_form_projection_equals_the_explicit_least_squares(cohort):
     design = np.column_stack([np.outer(b, b)[lower] for b in result.basis.T])
     explicit = np.stack([np.linalg.lstsq(design, m[lower], rcond=None)[0] for m in matrices])
     np.testing.assert_allclose(
-        project(result, matrices) * result.scales, explicit, rtol=1e-8, atol=1e-10
+        project(result, matrices, reference=True) * result.scales, explicit, rtol=1e-8, atol=1e-10
+    )
+
+
+def _random_cohort(seed=11, n=12, n_subjects=7):
+    """Centred positive semidefinite matrices with no low-rank structure to find."""
+    rng = np.random.default_rng(seed)
+    matrices = rng.standard_normal((n_subjects, n, n))
+    matrices = matrices @ matrices.transpose(0, 2, 1)
+    return matrices - matrices.mean(axis=0, keepdims=True)
+
+
+@pytest.mark.parametrize("rank", [1, 3])
+@pytest.mark.parametrize("uniform", [True, False], ids=["uniform_gram", "diagonal_gram"])
+def test_projecting_the_training_cohort_returns_its_scores_at_the_fixed_point(rank, uniform):
+    """The default projection is the fit's own scoring, so the training cohort gets its scores back.
+
+    Exactly so once the alternating updates have stopped moving: the fit
+    records a component's scores one step before its final vector, as the
+    reference does, so at the default tolerance the two differ at the 1e-3
+    level, and ``tol_outer=0`` still stops at the first bit-identical
+    objective, where the vector is 1e-8 from its fixed point. A negative
+    tolerance never stops early and runs the updates to the fixed point.
+    Under a non-uniform inner product the components are not Euclidean-
+    orthogonal, and only the sequential deflation gets the scores back.
+    """
+    matrices = _random_cohort()
+    n = matrices.shape[1]
+    gram = np.ones(n) if uniform else np.random.default_rng(12).uniform(0.5, 2.0, n)
+    result = fit_basis(matrices, gram, rank=rank, seed=0, max_outer=80, tol_outer=-1.0)
+    np.testing.assert_allclose(project(result, matrices), result.scores, atol=1e-10)
+    if rank > 1 and not uniform:
+        basis = result.basis
+        independent = np.stack([(basis * (m @ basis)).sum(axis=0) for m in matrices])
+        assert np.abs(independent / result.scales - result.scores).max() > 1e-3
+
+
+def test_projection_is_the_sequential_deflation_of_the_fit():
+    """For any matrix, each coefficient is psi_k' Y psi_k on what the earlier components left.
+
+    Written out as fit_basis deflates: subtract a component's coefficient
+    times ``psi_k psi_k'`` before scoring the next. project() does the same
+    through the overlaps ``(psi_k . psi_l)^2``, which only differs from
+    scoring each component alone when the components are not
+    Euclidean-orthogonal, so the inner product here is not uniform.
+    """
+    matrices = _random_cohort()
+    n = matrices.shape[1]
+    result = fit_basis(matrices, np.random.default_rng(12).uniform(0.5, 2.0, n), rank=3, seed=0)
+    assert np.abs(result.basis.T @ result.basis - np.eye(3)).max() > 1e-3
+    result.mean = matrices.mean(axis=0) + 0.5  # as reduce() would have recorded one
+
+    rng = np.random.default_rng(13)
+    new = rng.standard_normal((2, n, n))
+    new = new @ new.transpose(0, 2, 1)
+    expected = np.empty((2, 3))
+    for i, matrix in enumerate(new):
+        residual = matrix - result.mean
+        for k in range(3):
+            psi = result.basis[:, k]
+            expected[i, k] = (residual @ psi) @ psi
+            residual = residual - expected[i, k] * np.outer(psi, psi)
+    np.testing.assert_allclose(project(result, new), expected / result.scales, rtol=1e-12)
+    assert project(result, new[0]).shape == (1, 3)  # one matrix is allowed
+
+
+def test_the_two_vertex_toy_pins_the_diagonal_weighting_of_the_reference():
+    """[[0, t], [t, 0]]: the default returns the fitted score, the reference two thirds of it.
+
+    The lower triangle holds the off-diagonal pair once but both diagonal
+    entries, so against the fit's full-matrix contraction the diagonal
+    carries double weight; with a zero diagonal and one component the
+    reference form returns ``1 / (1 + sum_i psi_i^4)`` of the fitted score,
+    2/3 for ``psi = (1, 1) / sqrt(2)``. Inherited from ConConSmooth.smooth
+    and kept behind ``reference=True`` on purpose.
+    """
+    toy = np.stack([[[0.0, t], [t, 0.0]] for t in (0.1, 0.2, 0.3, 0.4)])
+    with warnings.catch_warnings():
+        # The +-t eigenvalue tie of a 2 x 2 zero-diagonal matrix trips the
+        # inversion warning; the sign goes into the scale and cancels.
+        warnings.simplefilter("ignore", RuntimeWarning)
+        result = fit_basis(toy, np.ones(2), rank=1, alpha=0.0, seed=0)
+    np.testing.assert_allclose(np.abs(result.basis[:, 0]), np.full(2, np.sqrt(0.5)), rtol=1e-12)
+    np.testing.assert_allclose(project(result, toy), result.scores, rtol=1e-12)
+    np.testing.assert_allclose(
+        project(result, toy, reference=True), result.scores * 2 / 3, rtol=1e-12
     )
 
 

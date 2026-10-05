@@ -203,9 +203,10 @@ spherical harmonic degree up to four that moves the grid's vertices 1.7
 degrees on average and 4 at most,
 and the deformed copy was registered back onto the undeformed subject, both
 through the package's smoother. ENCORE, searching its default degree-6 basis,
-undoes 88% of the displacement in ten steps: the endpoints come back from
-1.63 to 0.20 degrees, and the cost falls to 0.16 of its start. ConSEAL, with
-the paper's update rule and a stopping threshold of 1e-7, brings them to
+undoes 88% of the displacement in eleven steps: the endpoints come back from
+1.63 to 0.20 degrees, and the cost falls to 0.15 of its start. ConSEAL, with
+the unregularized update (the public code without its clamp and smoothing) and
+a stopping threshold of 1e-7, brings them to
 within 0.11 degrees, 93%, in sixty iterations. The figure shows, vertex by
 vertex, how far the endpoints still are from where they started. Two rules
 this test taught, measured in PORTING.md item 7: build every density from the

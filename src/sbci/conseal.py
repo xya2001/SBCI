@@ -93,6 +93,13 @@ first four are corrected. PORTING.md item 7 has the measurements.
     where ``F`` was negative -- the unclamped barycentric weights allow that --
     and clamped to zero, the derivative of ``sqrt(max(F, 0))`` is zero but the
     reference multiplies a nonzero ``dF`` by ``5e14``.
+14. **The tangent basis shares ENCORE's Legendre recurrence**, whose ``m = 0``
+    term applies the unnormalized relation to normalized functions
+    (:func:`sbci.alignment._legendre_derivatives`). The basis fields come out
+    right; the divergence of every zonal field, which enters the gradient
+    through ``grid.laplacian``, is too large by ``2 / (1 + 1/(l(l+1)))``.
+    Found by the review of 5 October 2026; ``strict_upstream=True`` builds the
+    default grids with the reference's recurrence.
 """
 
 from __future__ import annotations
@@ -110,6 +117,7 @@ from .alignment import (
     sparse_times_dense,
     sphere_exp_map,
     sphere_log_map,
+    triangles_fold,
     voronoi_areas,
 )
 from .errors import MissingDataError
@@ -700,14 +708,6 @@ def _transport(tangent, origin, destination):
     bad = denominator[:, 0] < 1e-8
     moved[bad] = tangent[bad]
     return moved
-
-
-def triangles_fold(vertices, faces) -> bool:
-    """Whether any triangle has turned inside out, by the reference's normal test."""
-    vertices = np.asarray(vertices, dtype=np.float64)
-    p1, p2, p3 = vertices[faces[:, 0]], vertices[faces[:, 1]], vertices[faces[:, 2]]
-    normals = (np.cross(p2 - p1, p3 - p1) * (p1 + p2 + p3)).sum(axis=1)
-    return bool(np.any(normals <= 0))
 
 
 class StationaryWarp:
@@ -1308,15 +1308,25 @@ class ConSEAL:
         """Register ``moving`` onto ``fixed``; returns ``(lh_warp, rh_warp, costs, warped)``.
 
         ``fixed`` is an :class:`EndpointConnectome` or a square-root density
-        such as a template. ``moving`` is copied; ``warped`` is that copy with
-        its endpoints carried along, and ``costs`` the trace from the initial
-        cost onward. ``callback(iteration, cost)`` is called after every step.
+        such as a template. ``moving`` is copied and registered from where its
+        endpoints currently sit, so a connectome that has already been warped
+        -- one from an earlier alignment's ``connectomes``, say -- is
+        registered onward rather than reset to the locations it was built
+        with; ``warped`` is that copy with its endpoints carried along, and
+        ``costs`` the trace from the initial cost onward.
+        ``callback(iteration, cost)`` is called after every step.
         """
         if isinstance(fixed, EndpointConnectome):
             q1 = fixed.q_transform(kernel)
         else:
             q1 = np.asarray(fixed, dtype=np.float64)
         moving = moving.copy()
+        # The fresh identity warps act on the committed locations, so commit
+        # the current ones: a no-op for a connectome that was never warped,
+        # and for one that was, the difference between registering it onward
+        # and silently snapping it back to where it was built. The rollback
+        # below then also returns to the state the registration started from.
+        moving.commit()
         if init_rotation:
             lh_warp, rh_warp = self._rigid(q1, moving, kernel, verbose)
         else:
@@ -1389,17 +1399,18 @@ def dice_score(first: EndpointConnectome, second: EndpointConnectome, threshold:
 # --- the public entry point ---------------------------------------------------------
 
 
-def default_grids(order: int = DEFAULT_WARP_ORDER):
+def default_grids(order: int = DEFAULT_WARP_ORDER, reference: bool = False):
     """Both hemispheres of the bundled ico4 sphere as :class:`SphericalGrid`, unrotated.
 
     ENCORE rotates the sphere clear of the coordinate poles because its
     Jacobian is formed in ``(theta, phi)``; ConSEAL's Jacobian is an area
     ratio, so the grids stay in the file's frame and endpoint coordinates need
-    no rotation.
+    no rotation. ``reference=True`` builds the tangent basis with the
+    reference's Legendre recurrence (:class:`~sbci.alignment.SphericalGrid`).
     """
     from .alignment import _hemisphere_grids
 
-    return _hemisphere_grids(order, rotate=False)
+    return _hemisphere_grids(order, rotate=False, reference=reference)
 
 
 def _as_subject(item, lh_grid, rh_grid, needs: str = "connectomes that carry their endpoints"):
@@ -1464,8 +1475,18 @@ def endpoints_align(
         icosahedral rotations are fitted to the grid rather than assumed, and
         the densities are transported by interpolation, so the search runs on
         the bundled FreeSurfer sphere, which is an icosphere to 1.7e-4.
-    area_weighted, strict_upstream
+    area_weighted
         See :class:`ConSEAL`.
+    strict_upstream
+        Reproduce the reference's errors, items 1 to 4 of the module docstring
+        (see :class:`ConSEAL`), and one more that lives in the shared
+        geometry: the Legendre recurrence behind the tangent basis treats the
+        normalized functions as unnormalized at ``m = 0``, so the divergence
+        of every zonal basis field -- which enters the gradient through
+        ``grid.laplacian`` -- is too large by ``2 / (1 + 1/(l(l+1)))``, 4/3 at
+        degree 1 (:class:`~sbci.alignment.SphericalGrid`). The default grids
+        are then built with ``reference=True``; grids passed in through
+        ``grids`` keep the setting they were built with.
     grids
         ``(lh_grid, rh_grid)`` to work on; defaults to :func:`default_grids`.
 
@@ -1478,7 +1499,9 @@ def endpoints_align(
     """
     from .smoothing import Endpoints
 
-    lh_grid, rh_grid = grids if grids is not None else default_grids(order)
+    if grids is None:
+        grids = default_grids(order, reference=strict_upstream)
+    lh_grid, rh_grid = grids
     subjects = [_as_subject(item, lh_grid, rh_grid) for item in connectomes]
     if not subjects:
         raise ValueError("endpoints_align needs at least one connectome")

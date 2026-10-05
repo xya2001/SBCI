@@ -164,8 +164,19 @@ def voronoi_areas(vertices, faces):
 # --- spherical harmonic tangent basis --------------------------------------
 
 
-def _legendre_derivatives(degree, colatitude):
-    """``(ddP, dP, P)`` for one degree, carrying the harmonic normalization."""
+def _legendre_derivatives(degree, colatitude, reference: bool = False):
+    """``(ddP, dP, P)`` for one degree, carrying the harmonic normalization.
+
+    The derivative in theta comes from the recurrence on the **normalized**
+    functions, ``2 dP~_l^m = sqrt((l-m)(l+m+1)) P~_l^{m+1} - sqrt((l+m)(l-m+1))
+    P~_l^{m-1}``, whose ``m = -1`` member is ``P~_l^{-1} = -P~_l^{1}``. The
+    reference writes that member as ``-P_l^1 / (l(l+1))``, the relation for
+    the *unnormalized* functions, so its zonal (``m = 0``) derivative is scaled
+    by ``(1 + 1/(l(l+1))) / 2``: 0.75 at degree 1, 0.502 at degree 15. Its
+    second derivative also carries the ``m + 1`` term with the wrong sign.
+    ``reference=True`` keeps that arithmetic bit for bit, for the MATLAB
+    comparison.
+    """
     from scipy.special import factorial, lpmv
 
     colatitude = np.asarray(colatitude, dtype=np.float64).ravel()
@@ -183,24 +194,35 @@ def _legendre_derivatives(degree, colatitude):
         zero = np.zeros_like(values)
         return zero, zero, values
 
-    below = np.vstack([-values[1:2] / (degree * (degree + 1)), values[:-1]])
-    above = np.vstack([values[1:], np.zeros((1, colatitude.size))])
-    first = -0.5 * ((below * lower) - (above * upper))
+    padding = np.zeros((1, colatitude.size))
+    above = np.vstack([values[1:], padding])
+    if reference:
+        below = np.vstack([-values[1:2] / (degree * (degree + 1)), values[:-1]])
+        first = -0.5 * ((below * lower) - (above * upper))
+        d_below = np.vstack([first[1:2] / (degree * (degree + 1)), -first[:-1]])
+        d_above = np.vstack([first[1:], padding])
+        second = 0.5 * ((d_below * lower) - (d_above * upper))
+        return second, first, values
 
-    d_below = np.vstack([first[1:2] / (degree * (degree + 1)), -first[:-1]])
-    d_above = np.vstack([first[1:], np.zeros((1, colatitude.size))])
-    second = 0.5 * ((d_below * lower) - (d_above * upper))
+    below = np.vstack([-values[1:2], values[:-1]])
+    first = -0.5 * ((below * lower) - (above * upper))
+    # the same recurrence on the first derivatives, whose m = -1 member is -dP~_l^1
+    d_below = np.vstack([-first[1:2], first[:-1]])
+    d_above = np.vstack([first[1:], padding])
+    second = -0.5 * ((d_below * lower) - (d_above * upper))
     return second, first, values
 
 
-def _harmonic_derivatives(degree, theta, phi):
+def _harmonic_derivatives(degree, theta, phi, reference: bool = False):
     """Gradient and Laplacian of the real harmonics of one degree.
 
     Ordered ``Re(Y_0), Re(Y_1), Im(Y_1), ...`` as the reference orders them.
+    ``reference`` selects the reference's Legendre recurrence
+    (:func:`_legendre_derivatives`).
     """
     theta = np.asarray(theta, dtype=np.float64).ravel()
     phi = np.asarray(phi, dtype=np.float64).ravel()
-    _, first, values = _legendre_derivatives(degree, theta)
+    _, first, values = _legendre_derivatives(degree, theta, reference)
 
     order = np.arange(degree + 1)[:, None]
     sin_phi, cos_phi = np.sin(order * phi), np.cos(order * phi)
@@ -224,11 +246,18 @@ def _harmonic_derivatives(degree, theta, phi):
     return gradient, laplacian
 
 
-def tangent_basis(order, theta, phi, areas):
+def tangent_basis(order, theta, phi, areas, reference: bool = False):
     """Gradient and rotated-gradient fields of the harmonics up to ``order``.
 
     Returns ``basis`` of shape ``(P, 2(order+1)^2 - 2, 2)`` in the ``(e1, e2)``
     frame, and the Laplacian of each field.
+
+    With ``reference=True`` the fields are differentiated by the reference's
+    Legendre recurrence (:func:`_legendre_derivatives`). That scales every
+    zonal gradient field by a constant, which the area-weighted normalization
+    below removes again, so the basis itself is the same to rounding; the
+    Laplacian of those fields, normalized by the same constant, comes out
+    ``2 / (1 + 1/(l(l+1)))`` times too large -- 4/3 at degree 1.
     """
     theta = np.asarray(theta, dtype=np.float64).ravel()
     phi = np.asarray(phi, dtype=np.float64).ravel()
@@ -241,7 +270,7 @@ def tangent_basis(order, theta, phi, areas):
     index = 0
     for degree in range(1, order + 1):
         width = 2 * (degree + 1) - 1
-        gradient, laplacian = _harmonic_derivatives(degree, theta, phi)
+        gradient, laplacian = _harmonic_derivatives(degree, theta, phi, reference)
         fields[:, index : index + width, 0] = gradient[0].T
         fields[:, index : index + width, 1] = gradient[1].T
         field_laplacian[:, index : index + width] = laplacian.T
@@ -542,14 +571,26 @@ def gradient_operators(vertices, faces, e1, e2):
 
 
 class SphericalGrid:
-    """A spherical mesh with its Voronoi areas and tangent basis."""
+    """A spherical mesh with its Voronoi areas and tangent basis.
 
-    def __init__(self, vertices, faces, order: int = DEFAULT_ORDER):
+    ``order`` is the spherical harmonic order of the tangent basis.
+    ``reference=True`` builds the basis with the reference's Legendre
+    recurrence, whose zonal derivatives are wrong by ``(1 + 1/(l(l+1))) / 2``
+    (see :func:`tangent_basis`); the basis fields are unchanged to rounding
+    but their divergence, ``laplacian``, is not, and it enters every
+    registration gradient. The setting is kept as ``reference`` so the
+    estimators built on the grid can see what they were given.
+    """
+
+    def __init__(self, vertices, faces, order: int = DEFAULT_ORDER, reference: bool = False):
         self.vertices = normalize_rows(vertices)
         self.faces = np.asarray(faces, dtype=np.int64)
+        self.reference = bool(reference)
         self.theta, self.phi = cart_to_sphere(self.vertices)
         self.areas = voronoi_areas(self.vertices, self.faces)
-        self.basis, self.laplacian = tangent_basis(order, self.theta, self.phi, self.areas)
+        self.basis, self.laplacian = tangent_basis(
+            order, self.theta, self.phi, self.areas, self.reference
+        )
         self.e1 = np.stack(
             [
                 np.cos(self.theta) * np.cos(self.phi),
@@ -617,6 +658,21 @@ def parallel_transport(tangent, origin, destination):
     return moved
 
 
+def triangles_fold(vertices, faces) -> bool:
+    """Whether any triangle has turned inside out, by the reference's normal test.
+
+    A face is folded when its normal points into the sphere, ``((p2 - p1) x
+    (p3 - p1)) . (p1 + p2 + p3) <= 0``, so the faces must be oriented outward
+    (counter-clockwise seen from outside) for the test to mean anything; an
+    inward mesh reads as folded everywhere. Shared by ENCORE's
+    :class:`SphericalWarp` and ConSEAL's :class:`sbci.conseal.StationaryWarp`.
+    """
+    vertices = np.asarray(vertices, dtype=np.float64)
+    p1, p2, p3 = vertices[faces[:, 0]], vertices[faces[:, 1]], vertices[faces[:, 2]]
+    normals = (np.cross(p2 - p1, p3 - p1) * (p1 + p2 + p3)).sum(axis=1)
+    return bool(np.any(normals <= 0))
+
+
 class SphericalWarp:
     """A diffeomorphism of the sphere, as the image of each vertex."""
 
@@ -626,6 +682,15 @@ class SphericalWarp:
         self.base = grid.vertices
         self.vertices = grid.vertices.copy()
         self.jacobian = np.ones(grid.n_vertices)
+        # The fold test wants outward faces. A mesh wound the other way is a
+        # valid grid everywhere else (areas, queries and the Jacobian do not
+        # care), so test it with its faces reversed rather than refuse it.
+        if not triangles_fold(self.base, self.faces):
+            self._fold_faces = self.faces
+        elif not triangles_fold(self.base, self.faces[:, ::-1]):
+            self._fold_faces = self.faces[:, ::-1]
+        else:
+            raise ValueError("the mesh faces are not consistently oriented")
         self._e1, self._e2 = grid.e1, grid.e2
         self._step = 2 * delta
         self._query = MeshQuery(grid.vertices, grid.faces)
@@ -659,6 +724,14 @@ class SphericalWarp:
         clone.jacobian = clone._compute_jacobian()
         return clone
 
+    def folds(self) -> bool:
+        """Whether the warp has turned a face inside out, so it is no longer a diffeomorphism.
+
+        The Jacobian cannot tell: it is the absolute value of the determinant,
+        the right factor for transporting a density but blind to a flip.
+        """
+        return triangles_fold(self.vertices, self._fold_faces)
+
     def _compute_jacobian(self):
         """Determinant of the differential, by central differences."""
         angles = {}
@@ -684,7 +757,14 @@ class SphericalWarp:
 
 
 class Concon:
-    """A connectivity density over the product of two spherical meshes."""
+    """A connectivity density over the product of two spherical meshes.
+
+    ``reference=True`` makes :meth:`evaluate_root` normalize before it zeroes
+    the diagonal, as ``Concon.m`` does, so the transported square-root density
+    comes back short of unit norm by the mass interpolation put on the
+    diagonal: 0.02 to 0.2% on ico4 for realistic warps. The default zeroes
+    first and then normalizes.
+    """
 
     def __init__(
         self,
@@ -692,12 +772,14 @@ class Concon:
         rh_grid: SphericalGrid,
         delta: float = DEFAULT_DELTA,
         derivative: str = "difference",
+        reference: bool = False,
     ):
         if derivative not in ("analytic", "difference"):
             raise ValueError(f"derivative must be 'analytic' or 'difference', got {derivative!r}")
         self.lh_grid = lh_grid
         self.rh_grid = rh_grid
         self.derivative_method = derivative
+        self.reference = bool(reference)
         self._operators = None
         self.step = 2 * delta
         self.n_per_hemi = lh_grid.n_vertices
@@ -783,14 +865,26 @@ class Concon:
         return warped
 
     def evaluate_root(self, root, lh_warp: SphericalWarp, rh_warp: SphericalWarp):
-        """Push a square-root density through, keeping it a unit vector."""
+        """Push a square-root density through, keeping it a unit vector.
+
+        Interpolation leaks mass onto the diagonal, which the density does not
+        carry, so the diagonal is zeroed before the result is normalized. The
+        reference (``Concon.m`` lines 62-63) normalizes first, and its result
+        is short of unit norm by that leaked mass; ``reference=True`` on the
+        constructor reproduces it. A density whose every entry lands on the
+        diagonal comes back as zeros rather than as a division by zero.
+        """
         jacobian = np.sqrt(np.concatenate([lh_warp.jacobian, rh_warp.jacobian]))
         coords = self._coordinates(lh_warp.vertices, rh_warp.vertices)
         warped = interpolate_product(coords, coords, root) * np.outer(jacobian, jacobian)
         warped = np.maximum((warped + warped.T) / 2, 0)
-        warped = warped / np.sqrt((warped**2 * self.area_product).sum())
+        if self.reference:
+            warped = warped / np.sqrt((warped**2 * self.area_product).sum())
+            np.fill_diagonal(warped, 0.0)
+            return warped
         np.fill_diagonal(warped, 0.0)
-        return warped
+        norm = np.sqrt((warped**2 * self.area_product).sum())
+        return warped / norm if norm > 0 else warped
 
 
 # --- the estimator ---------------------------------------------------------
@@ -853,7 +947,13 @@ class Alignment:
 
 
 class Encore:
-    """Template estimation and registration on a pair of spherical meshes."""
+    """Template estimation and registration on a pair of spherical meshes.
+
+    ``reference=True`` is handed to the :class:`Concon` underneath, whose
+    :meth:`Concon.evaluate_root` then loses unit norm as the reference's does;
+    the grids carry their own ``reference`` setting for the tangent basis. A
+    step that folds a face is refused in both modes (:meth:`register`).
+    """
 
     def __init__(
         self,
@@ -865,10 +965,14 @@ class Encore:
         delta: float = DEFAULT_DELTA,
         derivative: str = "difference",
         backtracks: int = 4,
+        reference: bool = False,
     ):
         self.lh_grid = lh_grid
         self.rh_grid = rh_grid
-        self.concon = Concon(lh_grid, rh_grid, delta, derivative=derivative)
+        self.reference = bool(reference)
+        self.concon = Concon(
+            lh_grid, rh_grid, delta, derivative=derivative, reference=self.reference
+        )
         self.area_product = self.concon.area_product
         self.step = step
         self.max_iterations = max_iterations
@@ -919,7 +1023,11 @@ class Encore:
     ):
         """Warp ``moving`` onto ``target``; returns result, warps and cost.
 
-        ``callback(iteration, cost)`` is called after every accepted step.
+        A step is accepted when it lowers the cost by at least ``threshold``
+        and folds no face on either hemisphere; otherwise it is halved and
+        retried up to ``backtracks`` times, and the registration stops when
+        every attempt fails. ``callback(iteration, cost)`` is called after
+        every accepted step.
         """
         lh_warp = SphericalWarp(self.lh_grid, self.delta)
         rh_warp = SphericalWarp(self.rh_grid, self.delta)
@@ -962,6 +1070,15 @@ class Encore:
             accepted = False
             for _attempt in range(self.backtracks + 1):
                 trial = (last[0].compose(scale * moves[0]), last[1].compose(scale * moves[1]))
+                # A warp that folds a face is not a diffeomorphism, whatever
+                # it does to the cost, and is refused like a cost increase.
+                # The reference accepts it: its Jacobian is an absolute value,
+                # so a flipped face still reads as positive. This holds in
+                # both modes -- the reference only ever folds at step lengths
+                # far above its default, so the comparison is unaffected.
+                if trial[0].folds() or trial[1].folds():
+                    scale *= 0.5
+                    continue
                 trial_image = self.concon.evaluate_root(source, *trial)
                 trial_residual = fixed - trial_image
                 trial_cost = (trial_residual**2 * self.area_product).sum()
@@ -1018,11 +1135,14 @@ def rotate_off_poles(vertices, tolerance: float = 1e-3):
     return vertices @ pole_rotation(vertices, tolerance).T
 
 
-def _hemisphere_grids(order, rotate: bool = True, return_rotations: bool = False):
+def _hemisphere_grids(
+    order, rotate: bool = True, return_rotations: bool = False, reference: bool = False
+):
     """The bundled ico4 sphere, split into two hemispheres.
 
     With ``return_rotations`` the pair of ``3 x 3`` rotations applied to the two
     hemispheres comes back as well (identities when ``rotate`` is false).
+    ``reference`` is passed on to :class:`SphericalGrid`.
     """
     from .spec import N_VERTICES_PER_HEMI
     from .surface import load_surface
@@ -1040,7 +1160,10 @@ def _hemisphere_grids(order, rotate: bool = True, return_rotations: bool = False
         lh_rotation, rh_rotation = pole_rotation(lh_vertices), pole_rotation(rh_vertices)
         lh_vertices = lh_vertices @ lh_rotation.T
         rh_vertices = rh_vertices @ rh_rotation.T
-    grids = (SphericalGrid(lh_vertices, left, order), SphericalGrid(rh_vertices, right, order))
+    grids = (
+        SphericalGrid(lh_vertices, left, order, reference=reference),
+        SphericalGrid(rh_vertices, right, order, reference=reference),
+    )
     if return_rotations:
         return grids, (lh_rotation, rh_rotation)
     return grids
@@ -1059,6 +1182,7 @@ def align(
     grids=None,
     derivative: str = "difference",
     backtracks: int = 4,
+    reference: bool = False,
     verbose: bool = False,
 ) -> Alignment:
     """Estimate a template and register every connectome onto it.
@@ -1102,6 +1226,22 @@ def align(
         the registration stops. The reference stops at the first such step,
         which on a small deformation is the first step of all; ``0``
         reproduces that.
+    reference
+        Reproduce two errors in the reference's arithmetic, for comparison
+        with its MATLAB output; ``False``, the default, corrects both. The
+        reference's Legendre recurrence treats the normalized functions as
+        unnormalized at ``m = 0``, so every zonal field's derivative in theta
+        is scaled by ``(1 + 1/(l(l+1))) / 2`` -- 0.75 at degree 1, 0.502 at
+        degree 15. The normalized basis fields come out the same, but their
+        divergence (:attr:`SphericalGrid.laplacian`) is 4/3 of the true one
+        at degree 1, and it enters every registration gradient. And
+        :meth:`Concon.evaluate_root` normalizes the transported density
+        before zeroing its diagonal, so it falls short of unit norm by the
+        mass interpolation put there: 0.02 to 0.2% on ico4. Grids passed in
+        through ``grids`` keep the setting they were built with. A step that
+        folds a face is refused in both modes; the reference's Jacobian is an
+        absolute value and cannot see one, but it only ever folds at step
+        lengths far above the default.
 
     Returns
     -------
@@ -1132,7 +1272,9 @@ def align(
             raise ValueError(f"connectome {index} is not a nonnegative density with positive mass")
 
     if grids is None:
-        (lh_grid, rh_grid), rotations = _hemisphere_grids(order, return_rotations=True)
+        (lh_grid, rh_grid), rotations = _hemisphere_grids(
+            order, return_rotations=True, reference=reference
+        )
     else:
         lh_grid, rh_grid = grids
         rotations = (np.eye(3), np.eye(3))
@@ -1159,6 +1301,7 @@ def align(
         delta=delta,
         derivative=derivative,
         backtracks=backtracks,
+        reference=reference,
     )
 
     if template is None:

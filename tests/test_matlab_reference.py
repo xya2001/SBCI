@@ -428,9 +428,11 @@ def encore_grids(encore_reference):
 
     order = int(encore_reference["L"].ravel()[0])
     faces = encore_reference["grid_lh_T"].astype(int) - 1
+    # reference=True: MATLAB's basis Laplacian comes from its own Legendre
+    # recurrence, which the port corrects by default
     return (
-        SphericalGrid(encore_reference["grid_lh_V"], faces, order),
-        SphericalGrid(encore_reference["grid_rh_V"], faces, order),
+        SphericalGrid(encore_reference["grid_lh_V"], faces, order, reference=True),
+        SphericalGrid(encore_reference["grid_rh_V"], faces, order, reference=True),
     )
 
 
@@ -485,7 +487,7 @@ def test_alignment_template_matches_matlab(encore_reference, encore_grids):
     """The Karcher median, which involves no finite differences and is exact."""
     from sbci.alignment import Encore
 
-    encore = Encore(*encore_grids, max_iterations=15, delta=1e-10)
+    encore = Encore(*encore_grids, max_iterations=15, delta=1e-10, reference=True)
     mine = encore.template(
         [encore_reference["F1"], encore_reference["F2"], encore_reference["F3"]],
         iterations=5,
@@ -519,7 +521,8 @@ def test_alignment_quantities_behind_the_finite_difference(encore_reference, enc
 
     assert _relative(lh_warp.jacobian, encore_reference["warp_J_composed"].ravel()) < 1e-2
 
-    concon = Concon(lh_grid, rh_grid, delta=1e-10)
+    # reference=True: evaluate_Q normalizes before it zeroes the diagonal
+    concon = Concon(lh_grid, rh_grid, delta=1e-10, reference=True)
     assert (
         _relative(
             concon.evaluate(encore_reference["F_test"], lh_warp, rh_warp),
@@ -541,9 +544,16 @@ def test_alignment_registration_agrees_with_matlab(encore_reference, encore_grid
     from sbci.alignment import Encore
 
     # backtracks=0: the reference stops at its first non-improving step, and
-    # this reproduces its run rather than improving on it.
+    # this reproduces its run rather than improving on it; reference=True keeps
+    # its root normalization (the grids already carry its basis).
     encore = Encore(
-        *encore_grids, step=0.05, max_iterations=15, threshold=1e-8, delta=1e-10, backtracks=0
+        *encore_grids,
+        step=0.05,
+        max_iterations=15,
+        threshold=1e-8,
+        delta=1e-10,
+        backtracks=0,
+        reference=True,
     )
     result, _, _, _ = encore.register(encore_reference["F1"], encore_reference["F2"])
     theirs = encore_reference["reg_result"]

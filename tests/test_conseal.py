@@ -701,3 +701,85 @@ def test_endpoints_align_refuses_a_misshapen_template(grid, connectome):
         endpoints_align(
             [connectome], template=np.ones(3), sigma=0.05, kernel_degree=12, grids=(grid, grid)
         )
+
+
+# --- registering from where the endpoints are, and the shared basis switch --------
+
+
+def _furthest_move(before, after):
+    """Largest angle any endpoint of ``before`` travelled to its place in ``after``."""
+    return max(
+        np.arccos(np.clip((p * q).sum(1), -1, 1)).max()
+        for p, q in zip(before.positions(), after.positions(), strict=True)
+    )
+
+
+def test_registering_an_already_warped_connectome_starts_where_it_is(grid, connectome, kernel):
+    """A connectome warped before -- one an alignment returned, say -- is not snapped back.
+
+    The fresh warps act on the committed locations. Before the fix the copy
+    ``register`` works on kept the locations the object was built with, so
+    registering a warped connectome onto itself reported a cost of zero while
+    moving every endpoint back by the whole warp.
+    """
+    k, dk = kernel
+    engine = ConSEAL(grid, grid, max_iterations=1)
+    # relocating through the identity is not exactly idempotent on ico2 triangles
+    _, _, _, same = engine.register(connectome, connectome, k, dk)
+    baseline = _furthest_move(connectome, same)
+
+    lh_warp, rh_warp = StationaryWarp(grid, viscosity=0.0), StationaryWarp(grid, viscosity=0.0)
+    field = 0.2 * grid.basis[:, 0, :]
+    assert lh_warp.compose(field) and rh_warp.compose(field)
+    warped = connectome.copy()
+    warped.warp(lh_warp, rh_warp)
+    carried = np.arccos(np.clip((lh_warp.vertices * grid.vertices).sum(1), -1, 1)).max()
+    assert carried > 0.05  # the warp moves the endpoints by far more than the baseline
+
+    _, _, costs, registered = engine.register(warped, warped, k, dk)
+    assert costs.tolist() == [0.0]
+    assert _furthest_move(warped, registered) <= 2 * baseline
+    assert _furthest_move(warped, registered) < 0.1 * carried
+
+
+def test_registering_a_fresh_connectome_is_unchanged_by_the_commit(
+    grid, connectome, kernel, monkeypatch
+):
+    """For a connectome that was never warped the commit is a no-op, bit for bit."""
+    k, dk = kernel
+    rng = np.random.default_rng(12)
+    moving = EndpointConnectome.from_points(grid, grid, *synthetic(rng, jitter=0.15))
+    engine = ConSEAL(grid, grid, max_iterations=2)
+    lh, rh, costs, warped = engine.register(connectome, moving, k, dk)
+    assert len(costs) > 1
+    monkeypatch.setattr(EndpointConnectome, "commit", lambda self: None)  # the code before the fix
+    lh_before, rh_before, costs_before, warped_before = engine.register(connectome, moving, k, dk)
+    assert costs.tolist() == costs_before.tolist()
+    np.testing.assert_array_equal(lh.vertices, lh_before.vertices)
+    np.testing.assert_array_equal(rh.velocity, rh_before.velocity)
+    for name in ("weights_in", "index_in", "weights_out", "index_out"):
+        np.testing.assert_array_equal(getattr(warped, name), getattr(warped_before, name))
+
+
+def test_strict_upstream_builds_the_default_grids_with_the_reference_basis(grid, monkeypatch):
+    """The recurrence error is one more thing ``strict_upstream`` reproduces; given grids stay."""
+    import sbci.conseal as conseal
+
+    lh, rh = conseal.default_grids(order=1, reference=True)
+    assert lh.reference and rh.reference
+    assert not any(g.reference for g in conseal.default_grids(order=1))
+
+    asked = []
+
+    def small_grids(order, reference=False):
+        asked.append(reference)
+        return grid, grid
+
+    monkeypatch.setattr(conseal, "default_grids", small_grids)
+    rng = np.random.default_rng(41)
+    subject = EndpointConnectome.from_points(grid, grid, *synthetic(rng, n=600))
+    settings = {"template": 0, "sigma": 0.05, "kernel_degree": 12, "max_iterations": 0}
+    endpoints_align([subject], strict_upstream=True, **settings)
+    endpoints_align([subject], **settings)
+    endpoints_align([subject], grids=(grid, grid), strict_upstream=True, **settings)
+    assert asked == [True, False]

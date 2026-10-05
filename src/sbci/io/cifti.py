@@ -48,6 +48,12 @@ login node.
 Because the values are a density, integrating them needs the fsLR vertex
 areas. :func:`write_cifti` writes those beside the connectome as a companion
 ``.dscalar.nii``, so the exchange file can be parcellated without this package.
+
+A functional connectome goes through the same operator. Its entries are
+Pearson correlations, and because ``P`` is row-stochastic, ``P D P'`` gives
+each fsLR vertex pair the area-weighted mean of the ico4 correlations covering
+it -- taken directly, not through Fisher z. The sidecar's ``exchange_values``
+says which of the two a file holds (:data:`EXCHANGE_VALUES`).
 """
 
 from __future__ import annotations
@@ -61,7 +67,7 @@ from typing import Any
 import numpy as np
 
 from .. import spec
-from ..metadata import Metadata
+from ..metadata import Metadata, MetadataError
 
 N_FSLR_PER_HEMI = 32492
 N_FSLR = 2 * N_FSLR_PER_HEMI
@@ -70,6 +76,15 @@ INTENT_DENSE = 3001
 """NIfTI intent code of a ``.dconn.nii`` (``NIFTI_INTENT_CONNECTIVITY_DENSE``)."""
 INTENT_DENSE_SCALARS = 3006
 """NIfTI intent code of a ``.dscalar.nii`` (``NIFTI_INTENT_CONNECTIVITY_DENSE_SCALARS``)."""
+
+EXCHANGE_VALUES = {
+    "sc": "density per fsaverage vertex squared",
+    "fc": (
+        "Pearson correlation, unitless; each fsLR vertex pair carries the area-weighted "
+        "mean of the ico4 correlations covering it, averaged directly (no Fisher z)"
+    ),
+}
+"""What the ``.dconn.nii`` entries are, by modality: the sidecar's ``exchange_values``."""
 
 _RESAMPLING_UNAVAILABLE = (
     "The ico4 to fsLR-32k overlap matrix is not bundled. Regenerate it with "
@@ -177,6 +192,10 @@ def write_cifti(path: str | Path, connectome: Any, block: int = 8192) -> Path:
     path = Path(path)
     if not os.access(path.parent, os.W_OK):
         raise OSError(f"cannot write to {path.parent}")
+    stem = path.name.split(".")[0]
+    # Built first: metadata the sidecar cannot describe should fail here, not
+    # after the dense file has gone to disk.
+    metadata = sidecar(connectome.metadata.fields, stem)
     resampled = resample(connectome.dense(), block=block)
 
     axis = _brain_model_axis()
@@ -186,8 +205,7 @@ def write_cifti(path: str | Path, connectome: Any, block: int = 8192) -> Path:
     image.nifti_header.set_intent(INTENT_DENSE)
     image.to_filename(str(path))
 
-    stem = path.name.split(".")[0]
-    (path.parent / f"{stem}.json").write_text(sidecar(connectome.metadata.fields, stem))
+    (path.parent / f"{stem}.json").write_text(metadata)
 
     fslr_area, _ = vertex_areas()
     from nibabel.cifti2 import ScalarAxis
@@ -218,13 +236,23 @@ def read_cifti(path: str | Path) -> dict[str, Any]:
 def sidecar(fields: dict, stem: str) -> str:
     """The JSON written beside the exchange file: the connectome's metadata plus the exchange keys.
 
+    ``exchange_values`` says what the entries are, which depends on the modality
+    (``included_connections``): a density for SC, correlations for FC. Metadata that
+    does not name the modality is refused rather than labelled a density by default.
+
     Serialized through :meth:`Metadata.to_json`, which writes NumPy scalars as the numbers
     they are; ``json.dumps`` alone would refuse a ``streamline_count`` held as ``np.int64``
     after the 17 GB ``.dconn.nii`` had already been written.
     """
     fields = dict(fields)
+    modality = fields.get("included_connections")
+    if modality not in EXCHANGE_VALUES:
+        raise MetadataError(
+            f"included_connections is {modality!r}, so the sidecar cannot say what the "
+            f"values are; expected one of {tuple(EXCHANGE_VALUES)}"
+        )
     fields["exchange_space"] = spec.EXCHANGE_SPACE
     fields["exchange_density"] = spec.EXCHANGE_DENSITY
-    fields["exchange_values"] = "density per fsaverage vertex squared"
+    fields["exchange_values"] = EXCHANGE_VALUES[modality]
     fields["exchange_vertex_areas"] = f"{stem}_vertexarea.dscalar.nii"
     return Metadata(dict(sorted(fields.items()))).to_json(indent=2)

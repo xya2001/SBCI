@@ -170,8 +170,12 @@ mean = sc.to_atlas(atlas, how="mean")   # (68, 68), a density
 `"mass"` sums the area-weighted connectivity crossing each region pair, so the
 total is preserved. `"mean"` divides that by the product of the two regions'
 areas, giving a density comparable across regions of different size; this
-reproduces `parcellate_sc.m`. FC is aggregated through Fisher-z automatically,
-because averaging correlations directly is biased.
+reproduces `parcellate_sc.m`. On the diagonal, where `parcellate_sc.m` leaves
+zeros, the mean is over the region's distinct vertex pairs: a vertex paired
+with itself has no connectivity and is left out of the denominator, so a
+region whose pairs all carry one value returns that value, and a region of a
+single vertex, having no pair, gets NaN. FC is aggregated through Fisher-z
+automatically, because averaging correlations directly is biased.
 
 ![The Desikan region matrix of an HCP Young Adult subject](docs/figures/region_matrix.png)
 
@@ -182,11 +186,13 @@ mass on a log scale.*
 
 ```python
 sc.seed(vertex=1234)      # (5124,) — that vertex's density slice
-sc.seed(region=mask)      # (5124,) — a region's area-weighted marginal
+sc.seed(region=mask)      # (5124,) — the area-weighted mean profile of a region's cortical vertices
 ```
 
 `region=` takes a boolean mask over vertices, so
-`atlas.labels == atlas.region_ids[10]` selects one region. The vertex form
+`atlas.labels == atlas.region_ids[10]` selects one region. Medial-wall
+vertices inside the region are left out of the mean, as `to_atlas` leaves
+their area out; a region with no cortical vertex is refused. The vertex form
 reads its row without materializing the dense matrix.
 
 ## `coupling` — structure against function
@@ -461,8 +467,17 @@ result.reconstruct(0)   # subject 1 rebuilt from its 20 numbers
 
 Score new subjects against an existing basis with
 `sbci.reduction.project(result, matrices)`, which is how a test-retest or
-held-out set is handled. A single connectome is allowed and gives its own
-rank-K separable approximation:
+held-out set is handled. It scores a subject exactly as the fit scored the
+training subjects, so projecting the training cohort returns `result.scores`
+to the fit's own tolerance: the fit records each score one alternating step
+before its final component, as the reference does, which is 1e-3 at the
+default `tol_outer` and rounding once the fit has converged.
+`reference=True` gives the MATLAB `ConConSmooth.smooth` projection instead, a
+least-squares fit over the lower triangle with the diagonal, which weighs the
+diagonal differently and comes out smaller by the factor 1/(1 + Σ_i ψ_k(i)⁴):
+two thirds on a two-vertex toy, 0.04% on a smooth ico4 component (PORTING.md
+item 5). A single connectome is allowed and gives its own rank-K separable
+approximation:
 
 ```python
 sc.reduce(rank=10)
@@ -582,8 +597,17 @@ cohort, and start with a small `max_iterations` to see the cost falling.
 `result.traces` holds each subject's cost before registration and after every
 accepted step.
 
-Three things to know before trusting the numbers:
+Four things to know before trusting the numbers:
 
+- **Three errors in the reference are corrected by default.** Its Legendre
+  derivative recurrence has a wrong m = 0 term, which leaves the tangent basis
+  fields right but makes the divergence of every zonal field up to twice too
+  large, and the registration gradient uses it; its transported square-root
+  density is normalized before its diagonal is zeroed, so the cost is
+  evaluated on vectors 0.02% to 0.2% short of unit norm; and it accepts a
+  warp that folds the mesh whenever the cost falls. The port fixes the three;
+  `reference=True` restores the first two for comparison with the MATLAB run
+  (a fold is never accepted). PORTING.md item 4 has the sizes.
 - **The bundled grid is rotated first.** The Jacobian is built in `(theta, phi)`
   coordinates and closes with a factor of `sin(theta)`, so a vertex on the
   coordinate axis gets a Jacobian of exactly zero and loses its whole row and
@@ -648,20 +672,26 @@ seconds per 100,000 streamlines rather than minutes. Six things to know:
   5% Laplacian smoothing of the velocity field every step. The paper's own
   experiments were run from a fork without the clamp and smoothing, at step 0.1
   and threshold 1e-6; `viscosity=0, step_clamp=float("inf"), delta=0.1,
-  threshold=1e-6` gives that update rule. PORTING.md item 7 explains the
-  lineage.
-- **Four errors in the reference are corrected by default.** Its gradient adds
+  threshold=1e-6` removes the regularization and takes the fork's step and
+  threshold. It is still the public code's update: the fork also composes the
+  vertex map directly and differentiates the kernel its own way, which the
+  package does not reproduce, so call this the unregularized public update,
+  not the paper's. PORTING.md item 7 explains the lineage.
+- **Five errors in the reference are corrected by default.** Its gradient adds
   a term in the wrong tangent frame and differentiates a differently
-  normalized kernel; a refused warp step still enters its velocity field; and
-  a rising cost is accepted as convergence. `strict_upstream=True` reproduces
-  all four, and does so to the digits of the MATLAB reference run.
+  normalized kernel; a refused warp step still enters its velocity field; a
+  rising cost is accepted as convergence; and the tangent basis it shares with
+  ENCORE carries a wrong m = 0 term in its Legendre derivative recurrence,
+  which leaves the basis fields right but their divergences up to twice too
+  large (PORTING.md item 4). `strict_upstream=True` reproduces all five, and
+  does so to the digits of the MATLAB reference run.
 - **Rigid initialization is off by default**, as in the reference's own
   example; `init_rotation=True` runs the multi-shell rotation search first.
 - **The stopping threshold is absolute.** The public default of 1e-4 is a
   quarter of the whole cost when two subjects are alike, and stops the
   registration after a few iterations; `threshold=1e-7` lets it converge. On
-  a known deformation the public defaults undo a third of it, the paper's
-  update rule four fifths (PORTING.md item 7).
+  a known deformation the public defaults undo a third of it, the
+  unregularized update four fifths (PORTING.md item 7).
 - **The Karcher median can be one subject.** With `template=None` the median
   starts at the subject nearest the mean and takes Weiszfeld steps until one
   is shorter than 0.005, as `get_template` does. When the subjects sit evenly
@@ -676,7 +706,7 @@ seconds per 100,000 streamlines rather than minutes. Six things to know:
   one it lands on, and two machines can decide differently. Pass `template=` the subject to hold
   fixed, or a precomputed square-root density -- the normalized mean of the subjects'
   `q_transform(kernel)` arrays, for one -- to choose.
-- **The paper's unregularized update onto one subject can align away a real
+- **The unregularized update onto one subject can align away a real
   difference.** With `delta=0.1, step_clamp=inf, viscosity=0` and the template
   collapsed onto a subject, the planted bundle of the synthetic cohort in
   PORTING.md item 7 (`anatomy=0.05`) is gone from a rank-4 FPCA that finds it
@@ -692,8 +722,8 @@ warp (degree 4, 1.7 degrees on average, 4 at most) and registered back onto
 the undeformed subject, both through the package's smoother. Top: how far the
 endpoints still are from where they started, vertex by vertex. Bottom: the
 same as a histogram, and the cost per iteration. ENCORE, with its default
-degree-6 basis, brings the endpoints back from 1.63 to 0.20 degrees in ten
-steps; ConSEAL with the paper's update (`delta=0.1, step_clamp=inf,
+degree-6 basis, brings the endpoints back from 1.63 to 0.20 degrees in
+eleven steps; ConSEAL with the unregularized update (`delta=0.1, step_clamp=inf,
 viscosity=0`) and a stopping threshold of 1e-7 to 0.11 degrees in sixty. The
 reference has to go through the same smoother as the deformed copy, and the
 warp has to be one a smoothed density can see; PORTING.md item 7 shows what
@@ -808,6 +838,12 @@ wb_command -metric-resample sub-004.L.myelin.32k_fs_LR.func.gii \
     L.sphere.32k_fs_LR.surf.gii sub-004_encore.L.sphere.surf.gii \
     BARYCENTRIC sub-004.L.myelin.aligned.func.gii
 ```
+
+The example resamples a map that sits on the group fs_LR sphere. A map that a
+subject's own MSMAll registration put there went through one more map, that
+subject's, which the group warp cannot know: compose the subject's sphere
+pair first (`SphereMap.from_gifti(native_sphere, msmall_sphere)`, the second
+point below) before resampling that subject's maps.
 
 The order of the two spheres carries the direction, and the two methods
 differ in it. ENCORE's warp is a pull-back: the aligned value at a vertex is

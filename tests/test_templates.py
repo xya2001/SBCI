@@ -111,3 +111,96 @@ def test_migrated_warp_round_trips_and_saves(tmp_path):
 def test_maps_need_one_vertex_set():
     with pytest.raises(ValueError, match="same"):
         SphereMap(np.eye(3), np.eye(4)[:, :3][:2], np.array([[0, 1, 2]]))
+
+
+# --- reading spheres from GIFTI ----------------------------------------------
+
+
+def _tetrahedron():
+    """The smallest closed triangle mesh: four unit vertices, four faces."""
+    vertices = normalize_rows(
+        np.array([[1.0, 1.0, 1.0], [1.0, -1.0, -1.0], [-1.0, 1.0, -1.0], [-1.0, -1.0, 1.0]])
+    )
+    faces = np.array([[0, 1, 2], [0, 3, 1], [0, 2, 3], [1, 3, 2]])
+    return vertices, faces
+
+
+def _rotated(vertices, degrees):
+    from scipy.spatial.transform import Rotation
+
+    rotation = Rotation.from_rotvec(np.radians(degrees) * np.array([0.0, 0.0, 1.0])).as_matrix()
+    return vertices @ rotation.T
+
+
+def _write_sphere(path, vertices, faces, triangles_first=False, intents=True):
+    """A GIFTI sphere at radius 100, its two arrays in either order, with or without intents."""
+    nib = pytest.importorskip("nibabel")
+    from nibabel import gifti
+
+    coordinates = gifti.GiftiDataArray(
+        (vertices * 100.0).astype(np.float32),
+        intent="NIFTI_INTENT_POINTSET" if intents else 0,
+        datatype="NIFTI_TYPE_FLOAT32",
+    )
+    triangles = gifti.GiftiDataArray(
+        faces.astype(np.int32),
+        intent="NIFTI_INTENT_TRIANGLE" if intents else 0,
+        datatype="NIFTI_TYPE_INT32",
+    )
+    arrays = [triangles, coordinates] if triangles_first else [coordinates, triangles]
+    nib.save(gifti.GiftiImage(darrays=arrays), str(path))
+    return path
+
+
+@pytest.mark.parametrize("triangles_first", [False, True])
+def test_from_gifti_finds_the_arrays_by_intent_not_position(tmp_path, triangles_first):
+    """A GIFTI may store its triangles first; a source vertex still lands on its rotated image."""
+    vertices, faces = _tetrahedron()
+    rotated = _rotated(vertices, 25.0)
+    source = _write_sphere(tmp_path / "source.surf.gii", vertices, faces, triangles_first)
+    # the target in the other order: the two files need not even agree
+    target = _write_sphere(tmp_path / "target.surf.gii", rotated, faces, not triangles_first)
+
+    sphere_map = SphereMap.from_gifti(source, target)
+    np.testing.assert_array_equal(sphere_map.faces, faces)
+    np.testing.assert_allclose(sphere_map.forward(vertices), rotated, atol=1e-6)
+    np.testing.assert_allclose(sphere_map.inverse(rotated), vertices, atol=1e-6)
+
+
+def test_from_gifti_assumes_the_conventional_order_only_without_intents(tmp_path):
+    vertices, faces = _tetrahedron()
+    rotated = _rotated(vertices, 40.0)
+    source = _write_sphere(tmp_path / "source.surf.gii", vertices, faces, intents=False)
+    target = _write_sphere(tmp_path / "target.surf.gii", rotated, faces, intents=False)
+    sphere_map = SphereMap.from_gifti(source, target)
+    np.testing.assert_allclose(sphere_map.forward(vertices), rotated, atol=1e-6)
+    # triangles first and no intents: the dtypes give it away, and it is refused rather than guessed
+    reversed_ = _write_sphere(tmp_path / "rev.surf.gii", vertices, faces, True, intents=False)
+    with pytest.raises(ValueError, match="one coordinate array and one triangle array"):
+        SphereMap.from_gifti(reversed_, target)
+
+
+def test_from_gifti_refuses_a_file_without_one_of_each_array(tmp_path):
+    nib = pytest.importorskip("nibabel")
+    from nibabel import gifti
+
+    vertices, faces = _tetrahedron()
+    coordinates = gifti.GiftiDataArray(
+        (vertices * 100.0).astype(np.float32),
+        intent="NIFTI_INTENT_POINTSET",
+        datatype="NIFTI_TYPE_FLOAT32",
+    )
+    nib.save(gifti.GiftiImage(darrays=[coordinates, coordinates]), str(tmp_path / "twice.surf.gii"))
+    good = _write_sphere(tmp_path / "good.surf.gii", vertices, faces)
+    with pytest.raises(ValueError, match="found 2 and 0 by intent"):
+        SphereMap.from_gifti(tmp_path / "twice.surf.gii", good)
+
+
+def test_from_gifti_refuses_two_different_meshes(tmp_path):
+    vertices, faces = _tetrahedron()
+    source = _write_sphere(tmp_path / "source.surf.gii", vertices, faces)
+    target = _write_sphere(
+        tmp_path / "target.surf.gii", vertices, faces[::-1], triangles_first=True
+    )
+    with pytest.raises(ValueError, match="do not share a face list"):
+        SphereMap.from_gifti(source, target)

@@ -69,6 +69,8 @@ def main():
     rng = np.random.default_rng(2026)
     vertices, faces = icosphere(args.subdivisions)
     grid = SphericalGrid(vertices, faces, order=args.order)
+    # the reference's engine runs on the reference's basis: same fields, its divergence
+    grid_ref = SphericalGrid(vertices, faces, order=args.order, reference=True)
     n = grid.n_vertices
     print(
         f"ico{args.subdivisions}: {n} vertices per hemisphere, basis {grid.basis.shape[1]} fields"
@@ -88,7 +90,7 @@ def main():
 
     q1 = fixed.q_transform(kernel)
     engine = ConSEAL(grid, grid)
-    strict = ConSEAL(grid, grid, strict_upstream=True)
+    strict = ConSEAL(grid_ref, grid_ref, strict_upstream=True)
 
     def tangent(field):
         return grid.e1 * field[:, :1] + grid.e2 * field[:, 1:]
@@ -102,15 +104,15 @@ def main():
         moved.warp(lh, rh)
         return engine.cost(q1 - moved.q_transform(kernel))
 
-    def analytic(eng, kern, deriv):
+    def analytic(eng, kern, deriv, on):
         q2, q2_e1, q2_e2 = moving.q_transform(kern, deriv, eng.strict_upstream)
         difference = q1 - q2
-        g_lh = eng._gradient(difference, q2, q2_e1, q2_e2, np.arange(n), grid)
-        g_rh = eng._gradient(difference, q2, q2_e1, q2_e2, np.arange(n, 2 * n), grid)
+        g_lh = eng._gradient(difference, q2, q2_e1, q2_e2, np.arange(n), on)
+        g_rh = eng._gradient(difference, q2, q2_e1, q2_e2, np.arange(n, 2 * n), on)
         return g_lh, g_rh
 
-    g_lh, g_rh = analytic(engine, kernel, derivative)
-    u_lh, u_rh = analytic(strict, kernel_up, derivative_up)
+    g_lh, g_rh = analytic(engine, kernel, derivative, grid)
+    u_lh, u_rh = analytic(strict, kernel_up, derivative_up, grid_ref)
     print(f"initial cost {engine.cost(q1 - moving.q_transform(kernel)):.6e}")
     cos_lh = (g_lh * u_lh).sum() / np.sqrt((g_lh**2).sum() * (u_lh**2).sum())
     cos_rh = (g_rh * u_rh).sum() / np.sqrt((g_rh**2).sum() * (u_rh**2).sum())
@@ -129,7 +131,7 @@ def main():
     print(header + f" {'reference':>13} {'ratio':>7}")
     zero = np.zeros((n, 2))
     coeff_port = 2.0 * _coefficients(engine, moving, q1, kernel, derivative, n, grid)
-    coeff_ref = 2.0 * _coefficients(strict, moving, q1, kernel_up, derivative_up, n, grid)
+    coeff_ref = 2.0 * _coefficients(strict, moving, q1, kernel_up, derivative_up, n, grid_ref)
     for k in picks:
         field = basis[:, k, :]
         numeric = (cost_of(field, zero, eps) - cost_of(field, zero, -eps)) / (2 * eps)

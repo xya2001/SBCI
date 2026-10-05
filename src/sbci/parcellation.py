@@ -60,9 +60,10 @@ def parcellate(
     how
         ``"mass"`` sums the area-weighted connectivity crossing each region
         pair, so the total over all pairs is preserved. ``"mean"`` divides that
-        mass by the product of the two regions' total areas, giving a density
-        comparable across regions of different size. ``"mean"`` reproduces
-        ``parcellate_sc.m``.
+        mass by the total weight of the vertex pairs it ran over -- the product
+        of the two regions' areas, less the self-pairs within a region -- giving
+        a density comparable across regions of different size. ``"mean"``
+        reproduces ``parcellate_sc.m`` off the diagonal.
     fisher_z
         Aggregate through ``arctanh`` and map back with ``tanh``. Required for
         FC, where averaging correlations directly is biased. Only meaningful
@@ -70,10 +71,17 @@ def parcellate(
 
     Notes
     -----
-    The region diagonal is computed here (within-region connectivity, with the
-    vertex self-diagonal excluded). The legacy MATLAB routine loops only over
-    ``i < j`` and leaves the diagonal at zero -- see ``PORTING.md`` item 3;
-    WP1 should confirm which behavior the released files carry.
+    The region diagonal is within-region connectivity, defined under
+    ``"mean"`` as the area-weighted mean over the region's *distinct* vertex
+    pairs. The vertex self-diagonal of ``dense`` is zero
+    (:data:`sbci.spec.DIAGONAL_INCLUDED`), so the self-pairs' weight
+    ``sum_i a_i^2`` is left out of the within-region denominators too:
+    dividing by the full ``A_k^2`` would put a region whose pairs all carry
+    ``r`` at ``r (1 - sum_i a_i^2 / A_k^2)``, about 4% low for a
+    Schaefer200-sized region on ico4. A region with a single vertex (or none
+    at this resolution) has no distinct pair, and its diagonal entry is
+    ``NaN``. The legacy MATLAB routine loops only over ``i < j`` and leaves
+    the region diagonal at zero -- see ``PORTING.md`` item 3.
     """
     if how not in HOW:
         raise ValueError(f"how must be one of {HOW}, got {how!r}")
@@ -95,8 +103,15 @@ def parcellate(
     if how == "mean":
         totals = np.asarray(weights.sum(axis=0)).ravel()
         denominator = np.outer(totals, totals)
+        # Within a region the mass runs over distinct vertex pairs only, so the
+        # self-pairs come off the diagonal denominators. A region of one vertex
+        # has no pair, and no within-region mean: NaN rather than zero.
+        self_pairs = np.asarray(weights.multiply(weights).sum(axis=0)).ravel()
+        diagonal = np.diag_indices_from(denominator)
+        denominator[diagonal] -= self_pairs
         with np.errstate(invalid="ignore", divide="ignore"):
             out = np.where(denominator > 0, mass / denominator, 0.0)
+        out[diagonal] = np.where(denominator[diagonal] > 0, out[diagonal], np.nan)
     else:
         out = mass
 

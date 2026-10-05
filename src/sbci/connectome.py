@@ -154,7 +154,10 @@ class ContinuousConnectome:
             region areas to give a density. The default is ``"mass"`` for a
             structural connectome and ``"mean"`` for a functional one: FC is
             aggregated through Fisher-z, which is an average of correlations
-            and has no mass -- asking for ``"mass"`` on FC is refused.
+            and has no mass -- asking for ``"mass"`` on FC is refused. Under
+            ``"mean"`` a region's diagonal entry is the mean over its distinct
+            vertex pairs, so a region with a single cortical vertex has none
+            and reads ``NaN``.
 
         Vertices outside the cortical mask contribute neither connectivity nor
         area, so an atlas that labels the medial wall (``PALS_B12_Lobes``) is
@@ -188,9 +191,14 @@ class ContinuousConnectome:
         """Connectivity profile of one seed, as a map over the surface.
 
         Give either a ``vertex`` index, returning that vertex's density slice,
-        or a ``region``, returning the area-weighted marginal over it. A region
-        is a boolean mask over vertices, or an ``(atlas, region)`` pair naming
-        one -- ``cc.seed(region=("Desikan", "LH_bankssts"))``.
+        or a ``region``, returning the area-weighted mean of its vertices'
+        profiles, ``sum_i a_i D[i, :] / sum_i a_i`` over the region's cortical
+        vertices ``i``. A region is a boolean mask over vertices, or an
+        ``(atlas, region)`` pair naming one --
+        ``cc.seed(region=("Desikan", "LH_bankssts"))``. Medial-wall vertices
+        in the region are left out, as :meth:`to_atlas` leaves them out: their
+        rows are zero, so their area would only scale the profile down. A
+        region lying entirely in the medial wall is refused.
 
         Examples
         --------
@@ -222,14 +230,21 @@ class ContinuousConnectome:
             )
         if member.size != n:
             raise ValueError(f"region mask has {member.size} entries, expected {n}")
-        weights = np.where(member, self.area, 0.0)
-        total = weights.sum()
-        if total == 0:
+        if not member.any():
             raise ValueError("region mask selects no vertices")
+        cortical = member & self.mask
+        if not cortical.any():
+            raise ValueError(
+                "the region has no cortical vertices: it lies entirely in the medial wall"
+            )
+        weights = np.where(cortical, self.area, 0.0)
+        total = weights.sum()
+        if total <= 0:
+            raise ValueError("the region's cortical vertices carry no area")
         # Sum the members' rows straight from the condensed vector: no n x n
         # matrix for a region of a few dozen vertices.
         profile = np.zeros(n, dtype=np.float64)
-        for vertex in np.flatnonzero(member):
+        for vertex in np.flatnonzero(cortical):
             profile += weights[vertex] * self._row(int(vertex))
         return profile / total
 

@@ -140,8 +140,9 @@ src/sbci/
 **Design rules that have earned their place.** The specification lives in one
 module, so changing a convention is a one-file change. The loader refuses an
 underspecified file rather than defaulting — a silently defaulted bandwidth
-makes two incomparable files look comparable. Every method is a verified port,
-and misuse raises an `SbciError` that names what has to happen. Heavy
+makes two incomparable files look comparable. Every method is a port checked
+against its reference and against independent mathematical invariants, and
+misuse raises an `SbciError` that names what has to happen. Heavy
 dependencies are optional: a
 compute node running the pipeline should not need a rendering stack.
 

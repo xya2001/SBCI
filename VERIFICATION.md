@@ -162,7 +162,12 @@ traces and warps are therefore comparable across machines only with
 `template=` given or a third subject in the cohort. A verifier comparing
 against the numbers in these documents should expect rounding-level
 differences on other hardware, and exact agreement only on the same
-instruction set.
+instruction set. After the corrections of 5 October 2026 (PORTING.md item 8)
+the recording was repeated with `tests/reference/record_outputs.py`, which
+runs ENCORE and ConSEAL in the default and in the reference arithmetic: on
+the same CPU type the reference arithmetic reproduces the earlier recording
+bit for bit, and `tests/reference/compare_outputs.py` reports, array by
+array, what the corrections change.
 
 **The exchange file must survive a round trip.**
 `scripts/write_exchange_file.py` writes the 16.9 GB `.dconn.nii`, reads it back
@@ -220,15 +225,24 @@ Expected agreement, and what to reject:
 | `coupling` (3 forms) | 3.6 to 88.2 float64-eps | worse than 10 float32-eps |
 | `smooth` (rdk) | 3.25 float32-eps | worse than 10 float32-eps |
 | `smooth` (shk) | r = 1.00000000, scale 1.000000 against the released matrices | see PORTING.md item 6 |
-| `endpoints_align` (ConSEAL) | the single precision the MATLAB reference carries: kernel 4e-8, gradient 6e-7, six-iteration cost trace 1e-7 | see PORTING.md item 7 |
+| `endpoints_align` (ConSEAL), `strict_upstream=True` | the single precision the MATLAB reference carries: kernel 4e-8, gradient 6e-7, six-iteration cost trace 1e-7 | see PORTING.md item 7 |
 | `reduce` | 2.1e-16 on the basis | worse than 1e-10 |
-| `align` geometry, basis, template | 1.6 to 44 float64-eps | worse than 1e-12 |
-| `align` registration | r = 0.99999979 | see the note below |
+| `project`, `reference=True` | the lower-triangle least squares of `ConConSmooth.smooth` | worse than 1e-10 |
+| `align` geometry, basis, template, `reference=True` | 1.6 to 44 float64-eps | worse than 1e-12 |
+| `align` registration, `reference=True` | r = 0.99999979 | see the note below |
 
-### Four bugs in the reference that a verifier will hit
+The reference flags matter. The references carry three mathematical errors
+(items 5 to 7 below) that the port shared until October 2026; by default the
+port now computes the right thing, and the rows above are reproduced only with
+`reference=True` (ENCORE, `project`) or `strict_upstream=True` (ConSEAL), which
+restore the reference's arithmetic.
 
-These are not port defects. Anyone reproducing this will meet them, and should
-not conclude the port is broken:
+### Seven things in the references that a verifier will hit
+
+The first four are not port defects. Anyone reproducing this will meet them,
+and should not conclude the port is broken. The last three are errors in the
+references that the port reproduced until the review of 5 October 2026; it now
+corrects them by default:
 
 1. **`ConConBasis.Fit` cannot run as published.** Line 260 reads `auto_sparse`,
    which is never defined; the parsed option is `params.auto_sparse`. Every call
@@ -248,12 +262,47 @@ not conclude the port is broken:
    from the reference — the same distance the reference sits from itself. **No
    independent implementation can do better**, so do not treat the registration
    agreement as a defect.
+5. **The Legendre derivative recurrence has a wrong m = 0 term.**
+   `legendre_2nd_derivative.m` builds `P_l^{-1}` as `-P_l^1 / (l(l+1))`, the
+   relation for *unnormalized* functions, from the *normalized* ones, for
+   which `P_l^{-1} = -P_l^1`. The m = 0 derivative comes out a factor
+   `(1 + 1/(l(l+1)))/2` too small: 0.75 at degree 1, 0.502 at degree 15. The
+   normalized basis fields are unaffected; the divergence of every zonal
+   field is too large by the inverse factor, and both registration gradients
+   use it. `tests/test_alignment.py` checks every order against finite
+   differences and the divergence against `-l(l+1) Y`.
+6. **The transported square-root density is normalized before its diagonal is
+   zeroed** (`Concon.m`), so it is not the unit vector the cost assumes: on
+   ico4 the norm is short by 0.02% to 0.2% for realistic warps, 5% on a
+   coarse grid with very local connectivity. The port zeroes first.
+7. **`ConConSmooth.smooth` projects onto the lower triangle with the
+   diagonal**, while the fit scores by contracting the whole matrix. The two
+   differ by the factor `1/(1 + sum_i psi_k(i)^4)`: two thirds on a two-vertex
+   toy, 0.04% on a smooth ico4 component. The port's `project()` now scores a
+   new subject exactly as the fit scored the training cohort.
 
 ---
 
 ## What cannot be verified, and should be challenged
 
 A reviewer should push on these rather than accept them.
+
+**Agreement with MATLAB is not correctness.** Tier 4 proves that the port
+computes what the reference computes; it cannot catch an error the two share.
+The review of 5 October 2026 found three (items 5 to 7 of the Tier 4 list:
+the Legendre recurrence, the normalization order of the transported
+square-root density, the projection objective), each reproduced here to
+rounding and each wrong. They are corrected by default and kept behind
+`reference=True` / `strict_upstream=True` for the comparisons. What now
+stands between the port and a fourth such error is the independent
+invariants in the suite -- derivatives against finite differences and the
+divergence against `-l(l+1) Y`, unit norm after transport, no accepted fold,
+a pre-warped object registering onto itself without moving, the training
+cohort projecting onto its own scores, a region mean that does not depend on
+the grid, an F test that does not change when the response is shifted -- and
+a reviewer should look for the invariant the suite does not yet assert rather
+than re-run the agreement. PORTING.md item 8 lists the findings and their
+sizes.
 
 **`sbci.stats.local_test` has no reference at all.** Neither
 `SBCI_Modeling_FPCA` nor the toolkit contains inference code. The choice of
@@ -294,9 +343,10 @@ the alignment check, not for a second full-scale kernel comparison.
 
 **The format is a draft.** `SPEC_VERSION` is `0.1.0-draft` and
 `SPEC_QUESTIONS.md` lists what is unratified; PORTING.md item 3 records the
-one divergence that changes every published region matrix, the triangle and
-diagonal conventions of `parcellate_sc.m`. Files written before these are
-settled may need rewriting.
+one divergence that changes every published region matrix, the triangle
+convention of `parcellate_sc.m` (its diagonal convention was decided in
+October 2026: the mean over distinct vertex pairs). Files written before
+these are settled may need rewriting.
 
 **The young adults' FC is built here, not by the pipeline.** The lab's copy
 of the cohort holds no pipeline FC, so the FC files of the eleven, and of the

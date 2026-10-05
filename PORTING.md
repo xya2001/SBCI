@@ -231,11 +231,23 @@ difference rather than a rounding detail:
   triangle at zero, so its output is not symmetric. This package returns a
   symmetric matrix.
 - **Diagonal.** It also leaves the region diagonal at zero, discarding
-  within-region connectivity, which the port computes.
+  within-region connectivity. The port computes it as the area-weighted mean
+  over the region's *distinct* vertex pairs: a vertex paired with itself has
+  no connectivity and is left out of the denominator, and a one-vertex
+  region, having no pair, gets NaN. Until the review of 5 October 2026 (item
+  8) the denominator was the squared region area, which counted the
+  self-pairs and ran the diagonal low by `1 - sum_i a_i^2 / A^2`: half with
+  two vertices, about 4% for Schaefer-sized regions on ico4. Of the 11,831
+  regions in the 44 bundled atlases, 68 have a single cortical vertex on
+  ico4 (21 of them in Schaefer-1000, 15 in Schaefer-900) and 45 have none
+  (six in Gordon, one to four in each CoCoNest scale); those read NaN on the
+  diagonal, and an empty region keeps its zeros off it, as the reference
+  does. Desikan's and Schaefer-200's smallest regions have five.
 
-- **Open divergence:** the triangle and diagonal conventions above. Confirm
-  which behavior the released files should carry -- it changes every published
-  region matrix, so it is a decision, not a detail.
+- **Open divergence:** the triangle convention above. The diagonal one was
+  decided with the review. Confirm which behavior the released files should
+  carry -- it changes every published region matrix, so it is a decision, not
+  a detail.
 
 ## 4. ENCORE -- DONE, VERIFIED IN TWO TIERS
 
@@ -257,7 +269,7 @@ difference rather than a rounding detail:
 | --- | --- |
 | Voronoi vertex areas (libigl massmatrix) | 1.6 float64-eps |
 | Spherical harmonic tangent basis | 13.6 eps |
-| Basis Laplacian | 5.9 eps |
+| Basis Laplacian (`reference=True`; item 8 says why the default differs) | 5.9 eps |
 | Tangent frames, exponential and logarithm maps | 0.5 to 4 eps |
 | Barycentric query against the AABB tree | 2.0 eps, same triangle 162/162 |
 | Identity warp Jacobian | exact |
@@ -382,6 +394,16 @@ mesh before the frames are built; `align()` refuses a grid that still has
 poles. Worth reporting upstream: the reference's own demo grid happens to avoid
 the poles, which is why this has not bitten anyone.
 
+### Three more, found by the review of 5 October 2026
+
+The Legendre derivative recurrence that builds the tangent basis has a wrong
+m = 0 term, the transported square-root density is normalized before its
+diagonal is zeroed, and a warp that folds the mesh is accepted whenever the
+cost falls. All three are the reference's, reproduced here to rounding until
+the review; item 8 has the sizes. The port now corrects them by default;
+`reference=True` restores the first two so that the agreement above can still
+be demonstrated, and the fold check stays on in either mode.
+
 ### Still open
 
 - The registration loop descends a gradient built from the unstable
@@ -459,6 +481,38 @@ With the same initialization, the port reproduces the reference exactly:
 and scores. The tests in `tests/test_reduction.py` check what holds
 without MATLAB: exact recovery of genuinely low-rank data, ordering by weight,
 monotone explained variance, and scores that reproduce their own subjects.
+
+### Fitting and projection were two objectives
+
+`ConConSmooth.smooth` scores a new subject by least squares over the lower
+triangle *with the diagonal*; `ConConBasis.Fit` scores the training subjects
+by contracting the whole matrix. For a zero-diagonal connectome and one
+component the two differ by exactly `1/(1 + sum_i psi(i)^4)`: two thirds on
+a two-vertex toy, 0.9996 for a smooth component on ico4. The port's
+`project()` reproduced `smooth`, and its docstring called the result directly
+comparable with `Reduction.scores`, which it was not. Since the review of
+5 October 2026 (item 8) it scores a new subject exactly as the fit scored the
+training cohort -- the sequential deflation `c_k = psi_k' Y psi_k - sum_{l<k}
+c_l (psi_k . psi_l)^2`, solved through the overlaps in `O(n^2 K)` -- so
+projecting that cohort returns its scores: to rounding at a converged fit
+(2.5e-16 in the tests), and to the fit's tolerance otherwise, because the fit
+records each score one alternating step before its final component, as the
+reference does (1e-3 at the default `tol_outer`; the reference's triangle form
+was off by 5e-2 to 1e-1 on the same cohorts). `project(..., reference=True)`
+keeps the reference's triangle objective, bit for bit.
+
+### What the areas weight
+
+`reduce()` passes the vertex areas as the Gram matrix, and they define the
+inner product in which the components are made orthogonal and in which each
+new component is deflated against the earlier ones. They do not enter the
+leading component of a step: that is the Euclidean eigenvector of the
+contracted matrix, as in the reference (matched to 6e-15 above), so the
+objective is the unweighted fit on the grid, not the area-weighted
+approximation error. On a four-vertex toy with areas 100, 100, 1, 1 the
+returned component has twice the area-weighted residual of an alternative.
+Whether the method should minimize the weighted error is WP1's decision; the
+docstrings now say what the areas do.
 
 ### A trap in the roughness penalty
 
@@ -1252,7 +1306,7 @@ mode, float64 against MATLAB's `single` kernels:
 
 | Stage | Agreement (max abs, relative to the largest entry) |
 | --- | --- |
-| Voronoi areas, frames, tangent basis, divergence | 3e-16 to 6e-15 (float64 rounding) |
+| Voronoi areas, frames, tangent basis, divergence (`strict_upstream=True`; item 14 below) | 3e-16 to 6e-15 (float64 rounding) |
 | heat kernel `K`, cutoff included | 4.1e-8 |
 | kernel derivatives `dK.x/y/z` | 1.3e-6 |
 | adjacency (float64 here, float32 there) | 2.0e-4 of the largest entry, 2.0e-9 absolute |
@@ -1323,6 +1377,17 @@ corrects 1 to 4. Numbering matches the module docstring.
     `simulation.m` copies `lh_warp` where it means `rh_warp`.
 11. Kernels, frames and the adjacency are `single`; `build_adjacency.cpp`
     accumulates a million outer products in float32.
+14. **The tangent basis shares ENCORE's Legendre recurrence**, with its wrong
+    m = 0 term (item 4, *Three more*; item 8; the module docstring's items 12
+    and 13 are the cotangent weights and the square root's chain rule, below
+    under *The gradient, measured*). The basis fields are right,
+    their divergences are not, and the gradient uses them.
+    `strict_upstream=True` reproduces it with the other four errors; the
+    default grids carry the corrected basis. Found by the review of
+    5 October 2026, which also found a defect of the port's own: `register()`
+    copied an `EndpointConnectome` but kept its older committed locations, so
+    an object returned by one alignment was silently reset at the start of
+    the next; it now commits the copy's current locations first.
 
 ### The gradient, measured
 
@@ -1341,34 +1406,43 @@ the port's first-order prediction:
 
 | Grid, settings | port's direction | reference's direction | cosine between the two gradient fields (lh, rh) |
 | --- | --- | --- | --- |
-| ico2, sigma 0.05, degree 12, order 3, 3,000 streamlines | 0.955 | 0.961 | 0.964, 0.851 |
-| ico3, same, 20,000 streamlines | 1.083 | 1.077 | 0.861, 0.939 |
-| ico4, sigma 0.005, degree 30, order 15, 100,000 streamlines (the paper's) | 0.873 | 0.794 | 0.833, 0.747 |
+| ico2, sigma 0.05, degree 12, order 3, 3,000 streamlines | 1.050 | 1.058 | 0.969, 0.828 |
+| ico3, same, 20,000 streamlines | 1.138 | 1.139 | 0.855, 0.923 |
+| ico4, sigma 0.005, degree 30, order 15, 100,000 streamlines (the paper's) | 1.019 | 0.986 | 0.716, 0.691 |
 
 Both directions descend; the port's prediction of its own descent rate is
-within 13% on the paper's settings. Per coefficient the reference is
-unreliable: on ico4 its coefficients for the eight sampled basis fields are off
-by factors of 0.28 to 2.7 with two sign flips, against 0.25 to 2.1 for the port
+within 2% on the paper's settings (13% before the review corrected the
+divergence, item 8). Per coefficient the reference is unreliable: on ico4
+its coefficients for the eight sampled basis fields are off by factors of
+0.28 to 3.4 with three sign flips, against 0.25 to 2.1 with two for the port
 on the same fields (the transported-density model behind both is itself only
 first order on a mesh). The definitive measurement is the exact gradient of the
 discrete cost, all 510 left-hemisphere coefficients by finite differences:
 
 | Quantity | port | reference |
 | --- | --- | --- |
-| cosine with the exact gradient, all 510 coefficients | **0.931** | 0.678 |
-| cosine on the 20 largest exact coefficients | 0.996 | 0.941 |
-| norm, relative to the exact gradient | 1.050 | 0.753 |
-| descent efficiency: first-order decrease per unit step, as a fraction of the exact gradient's | 0.931 | 0.678 |
+| cosine with the exact gradient, all 510 coefficients | **0.981** (0.931 before the corrected divergence) | 0.678 |
+| cosine on the 20 largest exact coefficients | 0.997 | 0.941 |
+| norm, relative to the exact gradient | 0.947 | 0.753 |
+| descent efficiency: first-order decrease per unit step, as a fraction of the exact gradient's | 0.981 | 0.678 |
 
 (ico4, sigma 0.005, degree 30, order 15, 100,000 streamlines per subject;
-1,020 cost evaluations, 83 minutes on 8 cores.) The port's gradient is the
-gradient of the cost up to the transported-density approximation and the
-mesh; the reference's points 47 degrees away from it and buys two thirds of
-the decrease per step. Both descend, which is why the reference works at all:
+1,020 cost evaluations, 59 minutes on 8 cores, rerun on 5 October 2026 with
+the corrected divergence; the reference's column runs on the reference's own
+basis and is unchanged from the earlier run.) The port's gradient points 11
+degrees from the exact gradient of the discrete cost, the remainder being the
+transported-density approximation and the mesh; the reference's points 47
+degrees away and buys two thirds of the decrease per step. Both descend,
+which is why the reference works at all:
 its large components are right (cosine 0.94 on the twenty largest) and its
 errors live in the smaller ones.
 
 ### On ico4, real data
+
+*Measured before the correction of the shared divergence (item 8, finding
+2). On two released young adults the corrected gradient moves ConSEAL's
+aligned endpoints by 0.02 degrees on average after three iterations (item
+8, *What the corrections change*).*
 
 `tests/reference/conseal_adni_ico4.py` aligns three ADNI subjects
 (`sub-168S6561`, `sub-068S0473`, `sub-002S0413`: 1,001,877, 1,034,758 and
@@ -1419,6 +1493,12 @@ bit for bit), and relocating the endpoints is a k-d-tree
 query.
 
 ### Measured on a known deformation
+
+*The synthetic measurements in this subsection were made before the review
+of 5 October 2026 corrected the divergence both gradients use (item 8,
+finding 2); the figure's numbers on sub-100307 were regenerated with the
+corrected code and came out the same to the digits quoted, ENCORE in eleven
+steps rather than ten.*
 
 The reference's own tests compare registrations of unrelated subjects, which
 says the cost falls but not how far the warp is from the right one. So: a
@@ -1488,12 +1568,17 @@ smooth warp is undone 65%. ConSEAL on the smooth warp reaches 0.10 degrees, 94% 
 figure in docs/RESULTS.md uses the smooth warp and the matching reference
 (`scripts/hcp_figures.py`: `WARP_ORDER`, `WARP_AMPLITUDE`, `ENCORE_ORDER`),
 on sub-100307: ENCORE brings the endpoints from 1.63 to 0.20 degrees, 88%,
-with the cost at 0.16 of its start; ConSEAL to 0.11 degrees, 93%.
+with the cost at 0.15 of its start; ConSEAL to 0.11 degrees, 93%.
 Two rules follow for any comparison: build every density from the same
 endpoints through the same smoother, and judge a registration by a warp it can
 represent.
 
 ### Measured on the synthetic cohort
+
+*Measured before the correction of the shared divergence (item 8, finding
+2); the conclusions are about which template and which regularization
+preserve a planted difference, and do not rest on the gradient's exact
+direction.*
 
 `sbci.example_cohort(n_subjects=10, n_streamlines=20000, anatomy=a)` plants
 one bundle whose weight rises with age and jitters every subject's anatomy by
@@ -1539,9 +1624,90 @@ and 6 of 6 and after ENCORE in 4, 6 and 6 of 6; after the paper's ConSEAL in
 - Bandwidth cross-validation is ported in both forms and untested against
   MATLAB, since the paper does not use it.
 
+## 8. The review of 5 October 2026 -- ELEVEN FINDINGS, ALL CONFIRMED; THREE WERE THE REFERENCES' OWN
+
+An independent implementation review (5 October 2026, of v0.0.1.dev0 at
+commit 4b1850b) built the wheel, ran the suite (724 passed, 31 skipped) and
+then checked the mathematics rather than the agreement: fitting against
+projection, area weighting, shift invariance, regional aggregation, the
+harmonic derivatives, warp orientation, transported-density normalization,
+repeated registration, seed masks and file interoperability. Every one of its
+eleven findings reproduced here with independent probes before anything was
+changed. The lesson is the one VERIFICATION.md now states first: **a green
+suite and MATLAB agreement cannot catch an error the reference shares**, and
+three of the findings were exactly that. `docs/review-2026-10-05.md` is the
+response written for the reviewer; this item is the record.
+
+| # | Finding | Cause | Fixed by | Size |
+| --- | --- | --- | --- | --- |
+| 1 | `project()` scores differ from the fit's | `ConConSmooth.smooth` fits the lower triangle with the diagonal; the fit contracts the whole matrix (**reference**) | the fit's own scoring; `reference=True` keeps the triangle | factor 1/(1 + sum psi^4): two thirds on two vertices, 0.04% on ico4 |
+| 2 | wrong m = 0 term in the Legendre derivative recurrence | `legendre_2nd_derivative.m` applies the unnormalized relation to normalized functions (**reference**, shared by ENCORE and ConSEAL) | the normalized relation; `reference=True` / `strict_upstream=True` keep the reference's | m = 0 derivative times (1 + 1/(l(l+1)))/2; zonal divergences up to twice too large; the basis fields unchanged |
+| 3 | `ConSEAL.register` resets an object that was already warped | the copy kept the older committed locations | `commit()` on the copy | endpoints moved 0.05 on the unit sphere while the trace read 0 |
+| 4 | ENCORE accepts a map that folds | acceptance by cost alone; the Jacobian is an absolute value (**reference**) | a folding trial is rejected, always | 22 of 80 faces at step 2; none in 40 trials at the default step |
+| 5 | the transported square-root density is not of unit norm | normalized before its diagonal is zeroed (`Concon.m`, **reference**) | zero first; `reference=True` keeps the order | 0.02% to 0.2% on ico4; 5% on a coarse, very local toy |
+| 6 | the areas do not weight the first component | the Gram enters only the deflation (**reference**) | documented; the method decision stays with WP1 | twice the area-weighted residual on a four-vertex toy |
+| 7 | `seed(region=)` divides by masked area | weights over every selected vertex | intersect with the mask; refuse an all-masked region | 0.8327 of the cortical-only profile on sub-100307's PALS left limbic lobe |
+| 8 | an intercept-adjusted F test changes when the response is shifted | the untestable rule judged on the uncentred scale | the centred scale when the design has an intercept | F = 10.9 became NaN after adding 1e6 |
+| 9 | the within-region mean counts each vertex paired with itself | denominator A_k^2 | mean over distinct pairs; a one-vertex region gets NaN | 0.8(1 - 1/n): 4% low for Schaefer-sized regions |
+| 10 | GIFTI arrays read by position | `darrays[0]`, `darrays[1]` | by intent | a triangles-first file gave zero faces |
+| 11 | the FC exchange sidecar says density | one string for both modalities | by modality | provenance only |
+
+Items 1, 2 and 5 are the references' own. The port reproduced them to
+rounding, which is what the agreement tables above measured; it now computes
+the right thing by default and keeps the reference arithmetic behind
+`reference=True` (ENCORE and `project`) and `strict_upstream=True` (ConSEAL,
+whose default grids then carry the reference basis), so that the Tier 4
+comparisons still run. Item 4 is corrected without a switch: a fold is never
+a diffeomorphism, and at the default step the check never fires on the
+recorded runs. The reviewer's diagnostic scripts were not adopted; each
+invariant has its own test in the suite -- the harmonic derivatives against
+finite differences and the divergence against `-l(l+1) Y`, unit norm after
+transport, no accepted fold, a pre-warped object registered onto itself,
+the training cohort projecting onto its own scores, a region mean that does
+not depend on the grid, shift invariance, both GIFTI orders, the FC sidecar.
+
+### What the corrections change on the released subjects
+
+Recorded with `tests/reference/record_outputs.py` on two of the released
+young adults, sub-100307 and sub-103010 (`reduce` and `project` on four), on
+an AMD EPYC 9654 node, and set against the recording of 2 October 2026 made
+on the same CPU type with `tests/reference/compare_outputs.py` (the
+cluster's Intel and AMD nodes round differently, VERIFICATION.md Tier 3):
+
+- **The reference arithmetic reproduces the earlier results bit for bit.**
+  `align(reference=True)`, and `endpoints_align` on grids built with
+  `reference=True`, return the identical costs, template, warped vertices,
+  aligned density and endpoints (worst difference 0.0 over seven arrays);
+  every method the review left alone -- parcellation off the diagonal, the
+  three couplings, the vertex seed, smoothing, the FPCA basis, scores, scales
+  and explained fractions -- is identical too.
+- **ENCORE.** The corrected gradient takes the two subjects to costs lower by
+  4e-4 and 1.1e-3 relative (0.012707 against 0.012712 for sub-100307), in 15
+  accepted steps rather than 11, with more halvings near convergence (352 s
+  against 48 s on 8 cores). The warped left-hemisphere vertices land 0.043
+  degrees from the reference's on average and 0.25 at most; the aligned
+  density differs by 1.5% of its largest entry (correlation 0.999991). The
+  Karcher template is identical: it does not involve the gradient.
+- **ConSEAL**, three iterations: the costs differ by up to 1.4e-3 relative at
+  the last iteration (higher for one subject, lower for the other), and the
+  aligned endpoints sit 0.023 degrees from the reference's on average, 0.11
+  at most.
+- **Projection.** On the four-subject rank-4 fit the default projection
+  returns the fitted scores to 0.9% (median), which is the fit's own
+  tolerance at the default `tol_outer`; the reference's triangle objective
+  runs 2.2% lower still (median ratio 0.978).
+- **Region seed.** sub-100307's PALS left limbic lobe has 170 cortical and 34
+  medial-wall vertices; the old profile was 0.832668 of the corrected one,
+  the number the review measured.
+- **Within-region means.** The Desikan SC diagonal moves by 1.9e-10 in
+  density units and the Schaefer-200 FC diagonal rises by up to 0.042 in
+  correlation; neither atlas has a one-vertex region, so neither matrix
+  gains a NaN.
+
 ## Status
 
-All seven items are ported and verified; what is left is under each item's
+All seven ports are done and verified, and the review of 5 October 2026
+(item 8) has been answered in full; what is left is under each item's
 *Still open*. They were done in the order 3, 1, 2, 5, 4, 6, 7: parcellation
 unblocked the first notebook, kernel smoothing the WP3 speed target, and the
 two alignments came last because nothing else depends on them.

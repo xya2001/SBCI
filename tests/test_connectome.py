@@ -63,10 +63,39 @@ def test_seed_vertex_matches_the_dense_row(connectome):
         np.testing.assert_allclose(connectome.seed(vertex=vertex), matrix[vertex], rtol=1e-6)
 
 
-def test_seed_region_is_the_area_weighted_marginal(connectome):
+def test_seed_region_is_the_area_weighted_mean_profile(connectome):
     member = np.array([True, True, False, False, False])
     expected = connectome.dense() @ np.where(member, connectome.area, 0.0)
     np.testing.assert_allclose(connectome.seed(region=member), expected / 3.0, rtol=1e-6)
+
+
+def test_seed_region_leaves_medial_wall_vertices_out(connectome):
+    """Vertex 4 is medial wall: adding it to a region must not scale the profile down."""
+    cortical = np.array([True, True, False, False, False])
+    with_wall = cortical.copy()
+    with_wall[4] = True
+    np.testing.assert_allclose(connectome.seed(region=with_wall), connectome.seed(region=cortical))
+    weights = np.where(cortical, connectome.area, 0.0)
+    expected = (connectome.dense().astype(np.float64) @ weights) / weights.sum()
+    np.testing.assert_allclose(connectome.seed(region=with_wall), expected, rtol=1e-6)
+
+
+def test_seed_region_inside_the_medial_wall_is_refused(connectome):
+    with pytest.raises(ValueError, match="no cortical vertices"):
+        connectome.seed(region=np.array([False, False, False, False, True]))
+
+
+def test_seed_region_counts_cortex_only_on_the_real_medial_wall():
+    """PALS_B12_Lobes labels the wall too; a lobe's profile is over its cortex, as in to_atlas."""
+    import sbci
+
+    cc = sbci.example()
+    atlas = sbci.load_atlas("PALS_B12_Lobes")
+    # the lobe with the most medial-wall vertices
+    on_wall = np.bincount(np.asarray(atlas.labels)[~cc.mask], minlength=atlas.n_regions + 1)[1:]
+    lobe = atlas.region_mask(int(np.argmax(on_wall)) + 1)
+    assert (lobe & ~cc.mask).sum() > 10 and (lobe & cc.mask).sum() > 10
+    np.testing.assert_allclose(cc.seed(region=lobe), cc.seed(region=lobe & cc.mask))
 
 
 def test_seed_requires_exactly_one_argument(connectome):
@@ -162,7 +191,9 @@ def test_functional_connectomes_are_aggregated_as_fisher_z_means(connectome, atl
     area = np.where(fc.mask, fc.area, 0.0)
     expected = parcellate(correlations, atlas, area, how="mean", fisher_z=True)
     np.testing.assert_allclose(matrix, expected)
-    assert np.abs(matrix).max() < 1.0  # not saturated
+    assert np.nanmax(np.abs(matrix)) < 1.0  # not saturated
+    assert np.isnan(matrix[2, 2])  # C is the medial-wall vertex alone: no cortical pair
+    assert np.isfinite(matrix[:2, :]).all()
     with pytest.raises(ValueError, match="no mass"):
         fc.to_atlas(atlas, how="mass")
 

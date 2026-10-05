@@ -139,11 +139,8 @@ def test_reading_back_to_ico4_refuses_rather_than_degrading():
         cifti.read_cifti("anything.dconn.nii")
 
 
-def test_write_cifti_sets_the_intent_codes_and_writes_the_companions(tmp_path, monkeypatch):
-    """On a fake 40 x 7 overlap: the .dconn intent, the areas' intent, the JSON sidecar."""
-    import json
-
-    import nibabel as nib
+def _toy_export(monkeypatch, modality):
+    """A connectome-shaped object on a fake 40 x 7 overlap, so an export is kilobytes, not 17 GB."""
     from scipy import sparse
 
     from sbci.metadata import template
@@ -158,24 +155,40 @@ def test_write_cifti_sets_the_intent_codes_and_writes_the_companions(tmp_path, m
     monkeypatch.setattr(cifti, "N_FSLR_PER_HEMI", 20)
     monkeypatch.setattr(cifti, "N_FSLR", 40)
 
-    class Toy:
+    common = dict(registration_reference="fsaverage", pipeline_version="x", container_version="y")
+    if modality == "sc":
         metadata = template(
             "sc",
             normalization="unit-mass",
-            registration_reference="fsaverage",
-            pipeline_version="x",
-            container_version="y",
             streamline_count=1,
             streamline_weighting="none",
             kernel="shk",
             bandwidth=0.005,
+            **common,
         )
+    else:
+        metadata = template("fc", normalization="none", fc_nuisance_model="36p", **common)
 
+    class Toy:
         def dense(self):
             dense = rng.random((7, 7)).astype(np.float32)
-            return dense + dense.T
+            dense = dense + dense.T
+            return dense - 1.0 if modality == "fc" else dense  # correlations are signed
 
-    path = cifti.write_cifti(tmp_path / "sub-toy_sc.dconn.nii", Toy(), block=16)
+    toy = Toy()
+    toy.metadata = metadata
+    return toy
+
+
+def test_write_cifti_sets_the_intent_codes_and_writes_the_companions(tmp_path, monkeypatch):
+    """On a fake 40 x 7 overlap: the .dconn intent, the areas' intent, the JSON sidecar."""
+    import json
+
+    import nibabel as nib
+
+    path = cifti.write_cifti(
+        tmp_path / "sub-toy_sc.dconn.nii", _toy_export(monkeypatch, "sc"), block=16
+    )
     image = nib.load(str(path))
     assert image.nifti_header.get_intent()[0] == "ConnDense"
     areas = nib.load(str(tmp_path / "sub-toy_sc_vertexarea.dscalar.nii"))
@@ -184,12 +197,45 @@ def test_write_cifti_sets_the_intent_codes_and_writes_the_companions(tmp_path, m
     assert sidecar["exchange_space"] == "fsLR" and sidecar["kernel"] == "shk"
 
 
+def test_the_sidecar_names_correlations_for_fc_and_a_density_for_sc(tmp_path, monkeypatch):
+    """FC goes through the same operator as SC; its sidecar must not call the values a density."""
+    import json
+
+    cifti.write_cifti(tmp_path / "sub-toy_fc.dconn.nii", _toy_export(monkeypatch, "fc"), block=16)
+    fc = json.loads((tmp_path / "sub-toy_fc.json").read_text())
+    assert fc["included_connections"] == "fc"
+    assert "correlation" in fc["exchange_values"] and "density" not in fc["exchange_values"]
+    assert "Fisher" in fc["exchange_values"]  # says the averaging was direct
+
+    cifti.write_cifti(tmp_path / "sub-toy_sc.dconn.nii", _toy_export(monkeypatch, "sc"), block=16)
+    sc = json.loads((tmp_path / "sub-toy_sc.json").read_text())
+    assert sc["exchange_values"] == "density per fsaverage vertex squared"
+
+
+def test_the_sidecar_refuses_metadata_without_a_modality(tmp_path, monkeypatch):
+    """Rather than labelling unknown values a density -- and before the dense file is written."""
+    from sbci.metadata import MetadataError
+
+    with pytest.raises(MetadataError, match="included_connections"):
+        cifti.sidecar({"streamline_count": 1}, "sub-x")
+    toy = _toy_export(monkeypatch, "sc")
+    del toy.metadata.fields["included_connections"]
+    with pytest.raises(MetadataError, match="included_connections"):
+        cifti.write_cifti(tmp_path / "sub-toy_sc.dconn.nii", toy, block=16)
+    assert not (tmp_path / "sub-toy_sc.dconn.nii").exists()
+
+
 def test_the_sidecar_serializes_numpy_scalars_and_carries_the_exchange_keys():
     """json.dumps alone refuses np.int64; the sidecar must not, after the 17 GB file is written."""
     import json
 
     text = cifti.sidecar(
-        {"streamline_count": np.int64(803_741), "bandwidth": np.float32(0.005)}, "sub-x"
+        {
+            "included_connections": "sc",
+            "streamline_count": np.int64(803_741),
+            "bandwidth": np.float32(0.005),
+        },
+        "sub-x",
     )
     fields = json.loads(text)
     assert fields["streamline_count"] == 803_741
