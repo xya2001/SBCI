@@ -1080,12 +1080,14 @@ def align(
         What every connectome is registered onto. ``None``, the default,
         estimates it first: the Karcher median of the connectomes' square-root
         densities, so that no subject is the reference and every subject
-        moves, which is what a cohort wants. Otherwise a **square-root**
-        density of unit mass in the area inner product, as
-        :attr:`Alignment.template` is (not a connectome): an earlier run's
-        template, to bring a new subject onto it without re-estimating, or
-        one subject's ``Encore(*grids).root(cc.dense())``, to register one
-        subject onto another. With a template given, one connectome is enough.
+        moves, which is what a cohort wants. A :class:`~sbci.ContinuousConnectome`
+        registers the connectomes in the list onto that subject, which stays
+        where it is and need not be in the list: this is how one subject is
+        registered onto another. A **square-root** density array of unit
+        mass in the area inner product, as :attr:`Alignment.template` is,
+        registers onto that: an earlier run's template, to bring a new subject
+        onto it without re-estimating. With a template given, one connectome
+        is enough.
     grids
         ``(lh_grid, rh_grid)`` to align on, as :class:`SphericalGrid`. Defaults
         to the bundled ico4 sphere, split at the hemisphere boundary.
@@ -1161,6 +1163,18 @@ def align(
 
     if template is None:
         template = encore.template(densities, iterations=template_iterations)
+    elif hasattr(template, "dense"):
+        # the fixed subject: its root density on the grids the others are registered on
+        fixed = np.asarray(template.dense(), dtype=np.float64)
+        if fixed.shape != (expected, expected):
+            raise ValueError(
+                f"the template connectome is {fixed.shape}, not {expected} x {expected}"
+            )
+        if not np.isfinite(fixed).all() or fixed.min() < 0 or fixed.sum() <= 0:
+            raise ValueError(
+                "the template connectome is not a nonnegative density with positive mass"
+            )
+        template = encore.root(fixed)
     template = np.asarray(template, dtype=np.float64)
     if template.shape != (expected, expected):
         raise ValueError(

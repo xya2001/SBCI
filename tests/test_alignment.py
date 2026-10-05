@@ -499,6 +499,26 @@ def test_pole_rotation_is_the_rotation_rotate_off_poles_applies():
     np.testing.assert_allclose(rotate_off_poles(vertices) @ rotation, vertices, atol=1e-12)
 
 
+def test_one_subject_registers_onto_another(pair):
+    """template=<connectome> moves the listed subject onto that one, which stays where it is."""
+    from sbci.alignment import Encore
+
+    grid, densities = pair
+    fixed, moving = densities[0], densities[1]
+
+    class _Fixed:  # anything with .dense(), as a ContinuousConnectome has
+        def dense(self):
+            return fixed
+
+    result = align([moving], template=_Fixed(), grids=(grid, grid), max_iterations=2)
+    np.testing.assert_allclose(result.template, Encore(grid, grid).root(fixed))
+    assert len(result.warps) == 1 and len(result.aligned) == 1
+    assert result.traces[0][0] > 0 and result.costs[0] <= result.traces[0][0]
+    # the fixed subject is already on the template, so registering it there costs nothing
+    same = align([fixed], template=_Fixed(), grids=(grid, grid), max_iterations=1)
+    assert same.traces[0][0] == pytest.approx(0.0, abs=1e-12)
+
+
 def test_align_refuses_a_misshapen_template_and_a_negative_density(pair):
     grid, densities = pair
     n = 2 * grid.n_vertices

@@ -1402,6 +1402,20 @@ def default_grids(order: int = DEFAULT_WARP_ORDER):
     return _hemisphere_grids(order, rotate=False)
 
 
+def _as_subject(item, lh_grid, rh_grid, needs: str = "connectomes that carry their endpoints"):
+    """The :class:`EndpointConnectome` on the grids for what :func:`endpoints_align` was given."""
+    from .smoothing import Endpoints
+
+    if isinstance(item, EndpointConnectome):
+        return item
+    if isinstance(item, Endpoints):
+        return EndpointConnectome.from_endpoints(item, lh_grid, rh_grid)
+    endpoints = getattr(item, "endpoints", None)
+    if endpoints is None:
+        raise MissingDataError(f"endpoints_align needs {needs}")
+    return EndpointConnectome.from_endpoints(endpoints, lh_grid, rh_grid)
+
+
 def endpoints_align(
     connectomes,
     template=None,
@@ -1432,12 +1446,14 @@ def endpoints_align(
         What every subject is registered onto. ``None``, the default,
         estimates it first: the Karcher median of the subjects' square-root
         densities (up to ``template_iterations`` Weiszfeld steps), so that no
-        subject is the reference. An integer registers everyone onto that
-        subject's own density, which then stays where it is. A square-root
-        density array registers onto that: an earlier run's
-        :attr:`EndpointAlignment.template`, or the normalized mean of the
-        subjects' ``q_transform(kernel)`` arrays when the median would settle
-        on one subject (USAGE.md, the ConSEAL caveats).
+        subject is the reference. A connectome with endpoints (anything the
+        list takes) registers the listed subjects onto that one, which stays
+        where it is and need not be in the list: this is how one subject is
+        registered onto another. An integer registers everyone onto that
+        subject's own density. A square-root density array registers onto
+        that: an earlier run's :attr:`EndpointAlignment.template`, or the
+        normalized mean of the subjects' ``q_transform(kernel)`` arrays when
+        the median would settle on one subject (USAGE.md, the ConSEAL caveats).
     sigma, kernel_degree
         Heat-kernel bandwidth and truncation degree (0.005 and 30 in the paper).
     order, delta, max_iterations, threshold, step_clamp, viscosity
@@ -1463,19 +1479,7 @@ def endpoints_align(
     from .smoothing import Endpoints
 
     lh_grid, rh_grid = grids if grids is not None else default_grids(order)
-    subjects = []
-    for item in connectomes:
-        if isinstance(item, EndpointConnectome):
-            subjects.append(item)
-        elif isinstance(item, Endpoints):
-            subjects.append(EndpointConnectome.from_endpoints(item, lh_grid, rh_grid))
-        else:
-            endpoints = getattr(item, "endpoints", None)
-            if endpoints is None:
-                raise MissingDataError(
-                    "endpoints_align needs connectomes that carry their endpoints"
-                )
-            subjects.append(EndpointConnectome.from_endpoints(endpoints, lh_grid, rh_grid))
+    subjects = [_as_subject(item, lh_grid, rh_grid) for item in connectomes]
     if not subjects:
         raise ValueError("endpoints_align needs at least one connectome")
 
@@ -1496,7 +1500,15 @@ def endpoints_align(
     if template is None:
         target = engine.template(subjects, kernel, template_iterations, verbose)
     elif isinstance(template, (int, np.integer)):
+        if not 0 <= int(template) < len(subjects):
+            raise ValueError(f"template={template} names no subject; the list has {len(subjects)}")
         target = subjects[int(template)].q_transform(kernel)
+    elif isinstance(template, (EndpointConnectome, Endpoints)) or hasattr(template, "endpoints"):
+        # the fixed subject, built on the same grids as the moving ones; it need not be listed
+        fixed = _as_subject(
+            template, lh_grid, rh_grid, "a template connectome that carries its endpoints"
+        )
+        target = fixed.q_transform(kernel)
     else:
         target = np.asarray(template, dtype=np.float64)
     expected = lh_grid.n_vertices + rh_grid.n_vertices

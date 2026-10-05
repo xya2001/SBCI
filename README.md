@@ -76,7 +76,7 @@ vertex, relative to the strongest.*
 | Seed profile | `cc.seed(vertex=...)`, `cc.seed(region=...)` | the MATLAB seed rows, to float64 rounding |
 | Structure-function coupling | `sc.coupling(fc, scope=...)`, three forms | the three MATLAB functions, to float64 rounding |
 | Smoothing | `cc.smooth(kernel="shk" \| "rdk" \| "matern")` from the stored endpoints | `concon` at r = 1.000000 at full scale; MATLAB to 3.25 float32-eps; the Matern closed form |
-| Alignment | `sbci.align(cohort)` (ENCORE, on densities), `sbci.endpoints_align(cohort)` (ConSEAL, on endpoints) | the MATLAB references to float64 rounding and r = 0.99999979; ConSEAL to the single precision its reference carries |
+| Alignment | `sbci.align(cohort)` (ENCORE, on densities), `sbci.endpoints_align(cohort)` (ConSEAL, on endpoints); `template=fixed` registers onto one subject | the MATLAB references to float64 rounding and r = 0.99999979; ConSEAL to the single precision its reference carries |
 | Carrying a warp | `sbci.migrate_warp(warp, to="fs_LR_32k")` | an identity and a known rotation |
 | Reduction | `sbci.reduce(cohort, rank=K)` (functional PCA, one file at a time) | the MATLAB reference to 2.1e-16 |
 | Inference | `sbci.local_test(scores, design, groups=...)` | `scipy.stats` and statsmodels (no MATLAB reference exists) |

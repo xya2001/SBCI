@@ -576,6 +576,29 @@ def test_endpoints_align_accepts_endpoint_objects_and_a_template_index(grid):
     assert result.costs[0][0] == 0.0
 
 
+def test_endpoints_align_registers_one_subject_onto_another(grid):
+    """template=<the fixed subject> is its Q-transform on the same grids; it need not be listed."""
+    rng = np.random.default_rng(43)
+    fixed = EndpointConnectome.from_points(grid, grid, *synthetic(rng, n=900))
+    moving = EndpointConnectome.from_points(grid, grid, *synthetic(rng, n=900))
+    settings = {"sigma": 0.05, "kernel_degree": 12, "max_iterations": 1, "grids": (grid, grid)}
+    result = endpoints_align([moving], template=fixed, **settings)
+    kernel = HeatKernelBuilder(grid, grid, 12).compute(0.05, derivative=False)
+    np.testing.assert_allclose(result.template, fixed.q_transform(kernel))
+    assert len(result.warps) == 1 and result.costs[0][0] > 0
+    assert endpoints_align([fixed], template=fixed, **settings).costs[0][0] == 0.0
+    as_endpoints = endpoints_align([moving], template=fixed.to_endpoints(), **settings)
+    np.testing.assert_allclose(as_endpoints.template, result.template)
+
+    class Bare:
+        endpoints = None
+
+    with pytest.raises(MissingDataError, match="template"):
+        endpoints_align([moving], template=Bare(), **settings)
+    with pytest.raises(ValueError, match="names no subject"):
+        endpoints_align([moving], template=3, **settings)
+
+
 def test_endpoints_align_refuses_connectomes_without_endpoints(grid):
     class Bare:
         """A connectome-like object that never stored its endpoints."""

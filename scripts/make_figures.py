@@ -421,7 +421,7 @@ def known_warp(grid, rng, amplitude: float):
 
 def alignment_recovery(out: Path) -> None:
     """Deform a subject by a known smooth warp and measure how much of it each method undoes."""
-    from sbci.alignment import Encore, MeshQuery, _hemisphere_grids, align
+    from sbci.alignment import MeshQuery, _hemisphere_grids, align
     from sbci.conseal import DEFAULT_WARP_ORDER, EndpointConnectome, default_grids
     from sbci.smoothing import endpoint_positions
 
@@ -443,7 +443,7 @@ def alignment_recovery(out: Path) -> None:
     grids, rotations = _hemisphere_grids(DEFAULT_WARP_ORDER, return_rotations=True)
     encore = align(
         [subject, deformed],
-        template=Encore(*grids).root(subject.dense()),
+        template=subject,
         grids=grids,
         max_iterations=50,
     )

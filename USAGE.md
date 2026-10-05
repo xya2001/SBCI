@@ -561,17 +561,18 @@ template and hands back the warps and the warped connectomes. With no
 `template=`, which is the default, it estimates the template first: the
 Karcher median of the subjects' square-root densities (ten Weiszfeld steps
 from the subject nearest the mean), so that no subject is the reference and
-every subject moves. That is the cohort study's setting. Pass `template=` a
-square-root density of unit mass to register onto that instead: an earlier
-run's `result.template`, to bring a new subject onto a cohort's template
-without re-estimating it, or one subject's own
-`sbci.alignment.Encore(*grids).root(cc.dense())`, to register one subject
-onto another. A given template needs no second connectome in the list.
+every subject moves. That is the cohort study's setting. To register one
+subject onto another, pass `template=` the fixed subject's connectome: it
+stays where it is, and the connectomes in the list move onto it. Pass a
+square-root density of unit mass, an earlier run's `result.template`, to
+bring a new subject onto a cohort's template without re-estimating it. A
+given template needs no second connectome in the list.
 
 ```python
-new = sbci.align([late_subject], template=result.template)   # onto the cohort's template
-pair = sbci.align([moving], template=sbci.alignment.Encore(*grids).root(fixed.dense()),
-                  grids=grids)                                # one subject onto another
+pair = sbci.align([moving], template=fixed)                  # moving onto fixed; fixed stays as it is
+pair.aligned[0]                                              # moving's density, warped onto fixed
+pair.warps[0]                                                # the warp that took it there
+new = sbci.align([late_subject], template=result.template)   # onto an earlier run's template
 ```
 
 **This is a batch job.** On the ico4 grid each iteration multiplies 5124 x 5124
@@ -620,12 +621,19 @@ aligned = result.aligned_endpoints(0)         # an Endpoints object: re-smooth i
 ```
 It is used the same way as `align`. With no `template=`, the default, it
 estimates the Karcher median of the subjects' square-root densities first
-(up to 100 Weiszfeld steps) and registers every subject onto it. `template=2`
-registers every subject onto subject 3's own density, which stays where it
-is; `template=` a square-root density array registers onto that, whether an
-earlier run's `result.template` or the normalized mean of the subjects'
-`q_transform(kernel)` arrays, which the caveat below on the median explains
-when to prefer.
+(up to 100 Weiszfeld steps) and registers every subject onto it. To register
+one subject onto another, pass `template=` the fixed subject's connectome: it
+stays where it is, and the subjects in the list move onto it. `template=2`
+registers every subject onto subject 3's own density, and `template=` a
+square-root density array registers onto that, whether an earlier run's
+`result.template` or the normalized mean of the subjects' `q_transform(kernel)`
+arrays, which the caveat below on the median explains when to prefer.
+
+```python
+pair = sbci.endpoints_align([moving], template=fixed)         # moving onto fixed; fixed stays as it is
+moving.endpoints = pair.aligned_endpoints(0)                  # moving's endpoints in fixed's frame
+aligned = moving.smooth(kernel="shk", mask_medial_wall=True)  # and its connectome there
+```
 
 Two of the released subjects will do to see it run:
 `sbci.endpoints_align([sbci.load(a), sbci.load(b)], max_iterations=5)` with
@@ -665,8 +673,8 @@ seconds per 100,000 streamlines rather than minutes. Six things to know:
   adults: the median lands 0.001 degrees from sub-212116 and 24 to 27 from the
   others, while every subject is 17 to 20 degrees from the mean. With two
   subjects the median is any point between them, so rounding decides which
-  one it lands on, and two machines can decide differently. Pass `template=` a subject index or a
-  precomputed square-root density -- the normalized mean of the subjects'
+  one it lands on, and two machines can decide differently. Pass `template=` the subject to hold
+  fixed, or a precomputed square-root density -- the normalized mean of the subjects'
   `q_transform(kernel)` arrays, for one -- to choose.
 - **The paper's unregularized update onto one subject can align away a real
   difference.** With `delta=0.1, step_clamp=inf, viscosity=0` and the template
