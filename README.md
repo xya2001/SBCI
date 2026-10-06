@@ -46,6 +46,7 @@ fc = sbci.load(fc_path)                  # functional connectome, from the HCP's
 sc.to_atlas("Schaefer200").shape        # (200, 200)
 sc.plot(sc.seed(vertex=1234))            # a figure; needs the plotting extra
 sc.coupling(fc)                          # structure against function, one value per vertex
+sbci.save_map(sc.seed(vertex=1234), "seed.dscalar.nii")   # for Workbench; .func.gii for FreeSurfer, .csv for a table
 sc.smooth(kernel="shk", mask_medial_wall=True)     # re-smooths from the stored endpoints
 ```
 
@@ -83,6 +84,7 @@ vertex, relative to the strongest.*
 | Inference | `sbci.local_test(scores, design, groups=...)` | `scipy.stats` and statsmodels (no MATLAB reference exists) |
 | Figures | `cc.plot(values, mesh="fsaverage", engine="pyvista")` | drawn on FreeSurfer's fsaverage, shaded by sulcal depth |
 | Exchange | `cc.to_cifti(path)`: a 16.9 GB fsLR-32k dense connectome for Connectome Workbench | mass conserved to 1e-10; Workbench reads it |
+| Export | `sbci.save_map(values, "map.dscalar.nii" \| "map.func.gii" \| "map.csv")` for per-vertex maps; `sbci.region_means(values, atlas)` and `sbci.save_regions(...)` for labelled region tables; `result.to_table(path)` for a test | FreeSurfer 7.4.1 and Workbench 1.5.0 read the files back: the GIFTI is in FreeSurfer's fsaverage4 order (r = 1.0000 after `mri_surf2surf`), the fsLR map keeps the area-weighted mean |
 | Data | `sbci download hcp-ya` | SHA-256 of every file |
 
 [PORTING.md](PORTING.md) records how each port was verified and what was found

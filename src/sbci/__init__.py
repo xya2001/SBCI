@@ -10,6 +10,7 @@ Try it with nothing but the package installed::
     M  = cc.to_atlas("Schaefer200")      # 200 x 200 matrix
     p  = cc.seed(vertex=1234)            # profile over the surface
     cc.plot(p)                           # inflated-surface figure
+    sbci.save_map(p, "seed.dscalar.nii") # for Workbench; .func.gii for FreeSurfer, .csv for a table
     cc.save("sub-example_sc.h5")         # a file that passes `sbci validate`
 
 With a real file, ``cc = sbci.load("sub-100307_sc.h5")`` and the same calls;
@@ -85,6 +86,9 @@ _LAZY: dict[str, str] = {
     "validate_file": "validate",
     "plot_surface": "plotting",
     "structure_function_coupling": "coupling",
+    "save_map": "export",
+    "save_regions": "export",
+    "region_means": "export",
 }
 
 #: Submodules reachable as ``sbci.<name>`` after a plain ``import sbci``.
@@ -98,6 +102,7 @@ _SUBMODULES: tuple[str, ...] = (
     "download",
     "errors",
     "examples",
+    "export",
     "grid",
     "io",
     "metadata",
@@ -118,6 +123,7 @@ if TYPE_CHECKING:  # pragma: no cover - for type checkers only
     from .conseal import EndpointAlignment, EndpointConnectome, EndpointWarp, endpoints_align
     from .coupling import structure_function_coupling
     from .examples import Cohort, example, example_cohort
+    from .export import region_means, save_map, save_regions
     from .parcellation import parcellate
     from .plotting import plot_surface
     from .reduction import Reduction, fit_basis, project, reduce
@@ -164,6 +170,7 @@ __all__ = [
     "Surface",
     "load_surface",
     "parcellate",
+    "region_means",
     # analysis
     "align",
     "Alignment",
@@ -189,6 +196,8 @@ __all__ = [
     "structure_function_coupling",
     # figures and files
     "plot_surface",
+    "save_map",
+    "save_regions",
     "validate_file",
     "Metadata",
     # errors

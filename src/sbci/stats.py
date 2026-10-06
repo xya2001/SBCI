@@ -217,6 +217,42 @@ class LocalTest:
             weights = np.where(keep, weights, 0.0)
         return (basis * weights) @ (basis.sum(axis=0))
 
+    def to_table(self, path, names=None):
+        """Write the results to a ``.csv`` or ``.tsv`` table, one row per component.
+
+        The columns are ``component`` (counted from 0, as :meth:`significant`
+        and the reduction's basis count them), ``statistic``, ``pvalue`` and
+        ``adjusted``, then the fitted coefficient of every design column,
+        ``coef_<name>``. ``names`` names the columns of the design matrix as
+        tested, the intercept included when one was added; without it they
+        are numbered. An untestable component's statistic and p-values are
+        empty cells.
+
+        Examples
+        --------
+        >>> columns = ["intercept", "score", "female", "age", "count"]
+        >>> sex.to_table("sex.csv", names=columns)  # doctest: +SKIP
+        """
+        from .export import _write_table
+
+        coefficients = np.asarray(self.coefficients)
+        if names is None:
+            labels = [str(j) for j in range(coefficients.shape[1])]
+        else:
+            labels = [str(name) for name in names]
+            if len(labels) != coefficients.shape[1]:
+                raise ValueError(
+                    f"{len(labels)} names for the design's {coefficients.shape[1]} columns "
+                    "(column 0 is the intercept when one was added)"
+                )
+        header = ["component", "statistic", "pvalue", "adjusted"]
+        header += [f"coef_{label}" for label in labels]
+        rows = (
+            [k, self.statistic[k], self.pvalue[k], self.adjusted[k], *coefficients[k]]
+            for k in range(self.statistic.size)
+        )
+        return _write_table(path, header, rows)
+
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
         return (
             f"<LocalTest {self.statistic.size} components, "

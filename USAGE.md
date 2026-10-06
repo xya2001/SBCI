@@ -288,6 +288,58 @@ vtk-osmesa`).
 figure = sc.plot(profile / profile.max(), mesh="fsaverage", engine="pyvista")
 ```
 
+## Exporting maps and tables
+
+```python
+import sbci
+
+sc = sbci.load("hcp-ya/sub-100307_sc.h5")
+fc = sbci.load("hcp-ya/sub-100307_fc.h5")
+profile = sc.seed(region=("Desikan", "LH_precuneus"))
+coupling = sc.coupling(fc)
+
+sbci.save_map(profile, "precuneus.dscalar.nii")       # fsLR-32k CIFTI, for Workbench
+sbci.save_map(profile, "precuneus.func.gii")          # precuneus.L.func.gii and .R, fsaverage4's order
+sbci.save_map({"precuneus": profile, "coupling": coupling}, "sub-100307_maps.csv", atlas="Desikan")
+
+means = sbci.region_means(coupling, "Desikan")        # (68,): area-weighted, over each region's cortex
+sbci.save_regions(means, "Desikan", "coupling_desikan.csv", names="coupling")
+sbci.save_regions(sc.to_atlas("Desikan"), "Desikan", "sc_desikan.csv")   # 68 x 68, labelled
+```
+
+The ending of the name picks the form. A `.dscalar.nii` is CIFTI-2 dense
+scalars on fsLR-32k, moved by the operator the exchange file uses: each fsLR
+vertex takes the area-weighted mean of the ico4 values covering it, so a map's
+area-weighted mean over the cortex is unchanged. A `.func.gii` is written as
+two GIFTI files, one a hemisphere, in FreeSurfer's fsaverage4 vertex order:
+the ico4 grid is fsaverage4, the same vertices and triangles numbered
+differently, so the files open on FreeSurfer's own fsaverage4 surfaces, and
+FreeSurfer's tools move them to a finer fsaverage, with no interpolation on
+the way out. A `.csv` or `.tsv` holds one row per grid vertex: its index,
+hemisphere, fsaverage4 index, whether it is cortex, its region in each atlas
+given, then the maps. Several maps go in one file, as a dict or as a 2-D
+array with `names=`; `Reduction.basis` can be passed as it is.
+
+```bash
+module load freesurfer/7.4.1
+mri_surf2surf --srcsubject fsaverage4 --sval precuneus.L.func.gii \
+    --trgsubject fsaverage --tval lh.precuneus.fsaverage.mgz --hemi lh
+```
+
+The medial wall is written as missing, `NaN` in the surface files and an
+empty cell in a table, since it carries no connectivity; `mask=None` writes
+every vertex. `region_means` leaves missing values out and counts cortex only,
+as `to_atlas` does, so a region seed averaged over another region is the
+`to_atlas(how="mean")` entry for the two; for a map of correlations,
+`fisher_z=True` averages them as `to_atlas` averages FC. The fsLR move
+averages, which suits continuous values; a map of labels keeps its values
+exactly in the GIFTI and table forms.
+
+A test's results go out the same way: `result.to_table("sex.csv",
+names=[...])` writes one row per component, with its statistic, p-values and
+coefficients, and its effect map goes through `save_map`. VERIFICATION.md
+(Tier 3) has the checks: FreeSurfer and Workbench read the files back.
+
 ## `save` and `sbci validate`
 
 ```python

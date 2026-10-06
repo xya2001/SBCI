@@ -190,6 +190,29 @@ module load connectome/1.5.0     # 2.0.1 on Longleaf is missing libglapi.so.0
 wb_command -file-information <the .dconn.nii>
 ```
 
+**Exported maps must open where they are meant to.**
+`tests/reference/export_probe.py` writes sub-100307's maps with `save_map`
+and reads them back in FreeSurfer 7.4.1 and Workbench 1.5.0, each check
+beside a control, the same values in the grid's own order, that has to fail:
+
+```
+GIFTI Desikan labels against FreeSurfer's fsaverage4 aparc.annot   lh 0.969, rh 0.964 agree   (control 0.062, 0.060)
+mri_surf2surf fsaverage4 -> fsaverage, against the grid's correspondence   r = 1.0000   (control r = 0.054)
+wb_command -cifti-separate on the .dscalar.nii   the file's own values; 2,874 of 32,492 left vertices missing (the wall)
+area-weighted mean over the cortex   grid 7.993534e-12, fsLR 7.993534e-12
+region_means of each region's seed, against to_atlas(how="mean")   all 68: 1.8e-15 relative; 340 empty pairs read 0
+```
+
+The labels agree on 96% rather than on every vertex because the bundled
+atlas gives each grid vertex the majority label of the fsaverage vertices it
+stands for, and FreeSurfer's fsaverage4 annotation gives the label at the
+vertex itself; the two differ along region borders. The order is bundled by
+`tools/build_fsaverage4_order.py`, which derives it two independent ways that
+agree at every vertex, and the suite checks by digest that it carries the
+grid's triangles onto fsaverage4's. Run the probe with Workbench called by its
+path: `module load connectome/1.5.0` puts an old `libstdc++` ahead of NumPy's,
+and Python then fails to import it (the probe's docstring has the commands).
+
 ---
 
 ## Tier 4 — with MATLAB, the real verification

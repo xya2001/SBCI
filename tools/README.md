@@ -14,6 +14,7 @@ changes (PORTING.md says which item each belongs to).
 | `build_template_spheres.py` | the fs_LR 32k registration spheres `migrate_warp` carries a warp to, `src/sbci/data/templates/fslr32k_spheres.npz` |
 | `align_surface_faces.py` | puts the bundled surfaces' faces in the order the stored triangle indices refer to (SPEC_QUESTIONS.md item 13) |
 | `build_resampling.py` | the ico4 to fsLR-32k overlap matrix behind the exchange format |
+| `build_fsaverage4_order.py` | where each grid vertex sits in FreeSurfer's fsaverage4, `src/sbci/data/surfaces/fsaverage4_order_ico4.npz`, the order `save_map` writes GIFTI in: found by matching the inflated surfaces and, independently, through the grid's correspondence with fsaverage, the two agreeing at every vertex; needs FreeSurfer |
 | `build_fslr_surfaces.py` | fsLR-32k anatomical surfaces from fsaverage, for viewing the exchange file |
 | `import_legacy.py` | converts legacy pipeline `.mat` output (SC, FC, endpoints) into the package's HDF5 files |
 | `build_hcp_cohort.py` | builds HCP Young Adult subjects in the package's format from the lab's pipeline output, validating every file: each subject's SC smoothed with the package's kernel from the pipeline's snapped streamline endpoints on its FreeSurfer-registered sphere, stored with those endpoints (the released example cohort and the 946 of the analysis). Takes a manifest of subject ids and reads nothing else from it; `--check` re-smooths each file's endpoints against its stored SC. The FC comes from `build_hcp_fc.py` |
