@@ -250,8 +250,9 @@ def test_a_local_test_writes_one_row_per_component(tmp_path):
     result = sbci.local_test(scores, covariate)
     path = result.to_table(tmp_path / "test.csv", names=["intercept", "age"])
     header, rows = _read_table(path)
-    assert header[:5] == ["component", "statistic", "pvalue", "adjusted", "partial_r2"]
-    assert header[5:] == ["estimate", "se", "ci_low", "ci_high", "coef_intercept", "coef_age"]
+    assert header[:6] == ["component", "statistic", "pvalue", "adjusted", "partial_r2", "tested"]
+    assert header[6:] == ["estimate", "se", "ci_low", "ci_high", "coef_intercept", "coef_age"]
+    assert {row[5] for row in rows} == {"age"}
     assert [row[0] for row in rows] == ["0", "1", "2"]
     assert float(rows[0][2]) == pytest.approx(result.pvalue[0], rel=1e-9)
     assert rows[2][1:4] == ["", "", ""]
@@ -407,3 +408,31 @@ def test_a_string_of_names_is_one_name_not_its_letters(tmp_path):
     result = sbci.local_test(rng.standard_normal((30, 2)), covariate)
     with pytest.raises(ValueError, match="1 names for the design's 2 columns"):
         result.to_table(tmp_path / "t.csv", names="ab")
+
+
+# --- the eighth review ------------------------------------------------------------
+
+
+def test_a_pair_is_not_left_half_written(tmp_path):
+    """With the left name taken, the right hemisphere used to be written alone."""
+    values = np.random.default_rng(0).standard_normal(5124)
+    (tmp_path / "map.L.func.gii").mkdir()
+    with pytest.raises(IsADirectoryError):
+        sbci.save_map(values, tmp_path / "map.func.gii")
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["map.L.func.gii"]
+
+
+def test_a_write_goes_through_a_link_and_not_onto_a_read_only_file(tmp_path):
+    values = np.random.default_rng(0).standard_normal(5124)
+    (tmp_path / "real").mkdir()
+    target = tmp_path / "real" / "map.csv"
+    target.write_text("old")
+    (tmp_path / "link.csv").symlink_to(target)
+    sbci.save_map(values, tmp_path / "link.csv")
+    assert (tmp_path / "link.csv").is_symlink() and target.read_text() != "old"
+    locked = tmp_path / "locked.csv"
+    locked.write_text("keep")
+    locked.chmod(0o400)
+    with pytest.raises(PermissionError, match="read-only"):
+        sbci.save_map(values, locked)
+    assert locked.read_text() == "keep"

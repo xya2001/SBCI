@@ -12,7 +12,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from sbci.stats import LocalTest, benjamini_hochberg, local_test
+from sbci.stats import LocalTest, benjamini_hochberg, design, local_test
 
 
 def test_the_f_statistic_matches_an_independent_calculation():
@@ -827,3 +827,51 @@ def test_a_contrast_weighing_a_large_column_keeps_its_degrees_of_freedom():
         result = local_test(scores, unit * scale, contrast=rows * scale, add_intercept=False)
         assert result.numerator_dof == expected.numerator_dof == rows.shape[0]
         np.testing.assert_allclose(result.statistic, expected.statistic, rtol=1e-7)
+
+
+# --- the eighth review ------------------------------------------------------------
+
+
+def test_contrasts_from_the_designs_rows_keep_their_degrees_of_freedom_beside_seconds():
+    """A rank-deficient design, dates in seconds since 1970, contrast rows drawn from the design.
+
+    The review saw 4 to 15 of 40 such contrasts lose a degree of freedom: the reduced model,
+    taken as the contrast's null space, held a direction the design cannot see, a column of
+    rounding. (Not reproduced on Longleaf's numpy; the reduced model is now built inside the
+    design's row space, where it cannot arise.) The same model with the dates in days, the
+    contrast carried over exactly, is the reference.
+    """
+    n = 120
+    for seed in range(20):
+        rng = np.random.default_rng(seed)
+        site = np.array(["A", "B", "C"])[rng.integers(0, 3, n)]
+        dummies = np.column_stack([site == "A", site == "B", site == "C"]).astype(float)
+        days = rng.uniform(0, 365, n)
+        in_days = np.column_stack([np.ones(n), dummies, days, rng.normal(0, 1, n)])
+        carry = np.eye(6)
+        carry[0, 4], carry[4, 4] = 1.7e9, 86400.0  # seconds = 1.7e9 + 86400 days
+        in_seconds = in_days @ carry
+        scores = rng.standard_normal((n, 1))
+        q = 1 + seed % 3
+        rows = rng.standard_normal((q, n)) @ in_seconds
+        result = local_test(scores, in_seconds, contrast=rows, add_intercept=False)
+        expected = local_test(
+            scores, in_days, contrast=rows @ np.linalg.inv(carry), add_intercept=False
+        )
+        assert result.numerator_dof == expected.numerator_dof == q
+        np.testing.assert_allclose(result.statistic, expected.statistic, rtol=1e-6)
+
+
+def test_the_table_says_what_was_tested(tmp_path):
+    d = design({"band": ["a", "b", "c", "a", "b", "c", "a", "b"], "x": [1.0, 2, 3, 4, 5, 6, 7, 9]})
+    scores = np.random.default_rng(1).standard_normal((8, 2))
+    cases = {
+        "band[b] - band[c]": {"contrast": {"band[b]": 1, "band[c]": -1}},
+        "0.5 band[b] + 0.5 band[c]; x": {"contrast": [{"band[b]": 0.5, "band[c]": 0.5}, {"x": 1}]},
+        "x": {"terms": ["x"]},
+    }
+    for expected, how in cases.items():
+        path = local_test(scores, d, **how).to_table(tmp_path / "t.csv")
+        rows = path.read_text().splitlines()
+        tested = rows[0].split(",").index("tested")
+        assert all(row.split(",")[tested] == expected for row in rows[1:]), expected

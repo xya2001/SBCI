@@ -102,6 +102,10 @@ def _endpoint_layout(group) -> tuple[int, list]:
     sizes = {name: shape[0] for name, shape in shapes.items()}
     if len(set(sizes.values())) != 1:
         raise InvalidFileError(f"/{ENDPOINTS} datasets disagree on the streamline count: {sizes}")
+    for name, shape in shapes.items():
+        expected = (shape[0], 3) if name.startswith("barycentric") else (shape[0],)
+        if shape != expected:
+            raise InvalidFileError(f"/{ENDPOINTS}/{name} is {shape}, expected {expected}")
     return int(sizes[spec.ENDPOINT_DATASETS[0]]), present
 
 

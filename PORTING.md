@@ -2005,14 +2005,32 @@ and all hold.
 | 3 | (medium) `load_cohort(missing="-999")` splits the string into characters | **confirmed**: the markers became `-` and `9`, so -999 stayed a score, and they replaced the defaults, so `NA` became a group level | a string is one marker, and markers are added to pandas' defaults, as pandas' `na_values` are; `keep_default_missing=False` reads only the markers named |
 | 4 | (medium) the session refusal ignores `exclude=` and writes no report | **confirmed**: it was raised before the caller's exclusions were looked at, with an empty report | a subject the caller leaves out is not held to the one-visit rule, and a refusal carries the report: the subjects whose files cross sessions say which, everyone else is out with the cohort |
 | 5 | (medium) `icc` returns 1.0 for a feature that never varies | **confirmed** for constants such as 0.1 and 0.3, where the mean squares are rounding, which over themselves read 1 | a feature agreeing with itself to ten significant digits does not vary, the rule `local_test` uses, and its ICC is missing |
-| 6 | (medium) `design()` decides factor or number by whether the values parse as numbers | **confirmed**: codes `"01"`, `"02"`, `"03"` made one numeric column, and codes 2, 3, 10 taken as a factor had 10 as the reference, sorted as text | text is a factor whatever it reads as and numbers are numbers unless `categorical=` says otherwise; levels go in their natural order, as numbers when every one reads as a number; the loader keeps codes written with a leading zero as text, where it read them as numbers |
-| 7 | (low) a backup copy becomes a phantom subject | **confirmed**: `sub-01_old_sc.h5` became subject `sub-01_old` | a file named like another subject's with a suffix is one more of that subject's files, a duplicate it reports and leaves the subject out for, unless a table lists it as a subject of its own |
+| 6 | (medium) `design()` decides factor or number by whether the values parse as numbers | **confirmed**: codes `"01"`, `"02"`, `"03"` made one numeric column, and codes 2, 3, 10 taken as a factor had 10 as the reference, sorted as text | text is a factor whatever it reads as and numbers are numbers unless `categorical=` says otherwise; levels go in their natural order, as numbers when every one reads as a number; the loader keeps codes written with a leading zero as text, where it read them as numbers (revised in item 15: one padded value turned a column of ages into a factor) |
+| 7 | (low) a backup copy becomes a phantom subject | **confirmed**: `sub-01_old_sc.h5` became subject `sub-01_old` | a file named like another subject's with a suffix is one more of that subject's files, a duplicate it reports and leaves the subject out for, unless a table lists it as a subject of its own (revised in item 15: that swallowed real subjects with underscores in their ids) |
 | 8 | (low) a re-smoothed half keeps the full streamline count in its metadata | **confirmed**: 20,000 recorded for 10,000 streamlines | smoothing records the count of the streamlines it smoothed; on the released files the recorded count and the stored endpoints agree, 865,820 for sub-100206 |
+
+## 15. The eighth list, 6 October 2026 -- ITEM 14'S EDGES, AND SEVEN SMALL ONES STILL STANDING
+
+Three findings on item 14's changes, and seven low items from earlier lists
+that still stood; each was checked with a probe first.
+
+| # | Finding | Verdict | Fixed by |
+| --- | --- | --- | --- |
+| 1 | (medium) one zero-padded value turns a whole numeric column into a factor | **confirmed**: an age column with one `07` among `30, 25, 41, 33` was read as text, and `design()` made it four columns, silently | item 14's rule is reverted: a column of numbers is read as numbers, as pandas reads it, and a warning names a column holding a number written with a leading zero, and how to make it a factor if it is codes |
+| 2 | (low-medium) the backup-copy merge can swallow a real subject | **confirmed**: with no table, `sub-NDAR_INV1_2` was merged into `sub-NDAR_INV1`, and both were left out for two files | without a table to say which, a name extending another subject's id is set aside and reported -- neither read as a subject nor merged; a table that lists it reads it as one |
+| 3 | (low-medium) some contrasts still lose a degree of freedom | **not reproduced** on Longleaf, in about 1,000 trials on numpy 2.2 and 2.5 (dates over a year, a day, minutes; contrast rows drawn from the design), against 4 to 15 of 40 on the review's machine. The cause it names is real: taken as the null space of the contrast alone, the reduced model held a direction the design cannot see, a column of rounding, which `_rank` re-normalized | the reduced model is built inside the design's row space, `U S` times the null space of `C D^-1 V'`, so no such direction can enter, and its rank is `rank(X) - q` exactly; a test against the same model with the dates in days guards it |
+| 4 | (low) the left/right GIFTI pair is not written all-or-nothing | **confirmed** with the left name taken by a folder: the right hemisphere was written alone | both targets are checked before either is written |
+| 5 | (low) temporary-name writes replace read-only or symbolically linked targets | **confirmed**: a link was replaced by a plain file, its target untouched, and a read-only file was overwritten | a write goes through a link to its target, and a read-only file or a folder is refused, as a plain write would refuse it |
+| 6 | (low) ConSEAL's hidden rigid-last flag after `invert()` | **confirmed**: the order of a warp's rotation and flow was private, and the exported warp described the other order for an inverted warp | `StationaryWarp.rigid_after` says it, and `EndpointWarp` keeps `lh_rigid_after` / `rh_rigid_after` with the warp, saved and loaded |
+| 7 | (low) `Endpoints.take` reads a 0/1 integer mask as indices | **confirmed**: streamlines 1, 0, 1, 0 | 0s and 1s, one per streamline, are refused, saying how to pass a mask or indices |
+| 8 | (low) a file reached twice through links counts twice | **confirmed**: two folders, one a link to the other, made `2 sc files` of one | every real folder is searched once and every file taken once under its name; two names for one file stay two subjects |
+| 9 | (low) the endpoint arrays' width is not checked | **confirmed**: positions two wide passed the header check, which `load` refused | the header check gives each dataset its shape, `(S, 3)` for the positions |
+| 10 | (low) `to_table` does not record which contrast was tested | **confirmed** | a `tested` column holds the hypothesis in the design's names, `age_band[31-35] - age_band[26-30]` or the tested columns |
 
 ## Status
 
-All seven ports are done and verified, and the seven reviews of 5 and 6
-October 2026 (items 8 to 14) have been answered in full; what is left is
+All seven ports are done and verified, and the eight reviews of 5 and 6
+October 2026 (items 8 to 15) have been answered in full; what is left is
 under each item's *Still open*. They were done in the order 3, 1, 2, 5, 4, 6, 7: parcellation
 unblocked the first notebook, kernel smoothing the WP3 speed target, and the
 two alignments came last because nothing else depends on them.

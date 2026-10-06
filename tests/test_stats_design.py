@@ -225,11 +225,11 @@ def test_the_table_carries_estimates_intervals_and_effect_sizes(tmp_path):
     with open(path, newline="") as handle:
         rows = list(csv.reader(handle))
     header = rows[0]
-    assert header[:5] == ["component", "statistic", "pvalue", "adjusted", "partial_r2"]
-    assert header[5:9] == ["estimate_site[B]", "se_site[B]", "ci_low_site[B]", "ci_high_site[B]"]
+    assert header[:6] == ["component", "statistic", "pvalue", "adjusted", "partial_r2", "tested"]
+    assert header[6:10] == ["estimate_site[B]", "se_site[B]", "ci_low_site[B]", "ci_high_site[B]"]
     assert header[-5:] == [f"coef_{name}" for name in d.names]
     low, _ = result.interval(0.95)
-    assert float(rows[1][7]) == pytest.approx(low[0, 0], rel=1e-9)
+    assert float(rows[1][8]) == pytest.approx(low[0, 0], rel=1e-9)
 
 
 def test_features_are_tested_column_by_column():

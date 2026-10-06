@@ -107,13 +107,32 @@ def _floats(values, what: str = "the maps") -> np.ndarray:
     return array
 
 
+def _target(path: Path) -> Path:
+    """Where writing ``path`` lands, refused as a plain write would refuse it.
+
+    Through a symbolic link, the file it points to; a folder, or a file that is
+    read-only, is refused rather than replaced.
+    """
+    target = Path(os.path.realpath(path))
+    if target.is_dir():
+        raise IsADirectoryError(f"{path} is a folder")
+    if target.exists() and not os.access(target, os.W_OK):
+        raise PermissionError(f"{path} is read-only")
+    return target
+
+
 @contextmanager
 def _atomic(path: Path):
-    """A temporary name beside ``path``, with its ending; moved onto it once written."""
-    temporary = path.parent / f".partial-{os.getpid()}-{path.name}"
+    """A temporary name beside where ``path`` lands, with its ending; moved onto it once written.
+
+    Entered for both files of a pair before either is written, it checks both
+    targets first (:func:`_target`), so a pair is not left half written.
+    """
+    target = _target(path)
+    temporary = target.parent / f".partial-{os.getpid()}-{target.name}"
     try:
         yield temporary
-        os.replace(temporary, path)
+        os.replace(temporary, target)
     except BaseException:
         if temporary.exists():
             temporary.unlink()

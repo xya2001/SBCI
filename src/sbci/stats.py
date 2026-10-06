@@ -384,6 +384,20 @@ def _estimable(matrix, rows) -> np.ndarray:
     return gap <= 1e-8 * np.maximum(np.linalg.norm(scaled, axis=1), 1e-300)
 
 
+def _described(weights, labels) -> str:
+    """A contrast row in the design's names: ``a - b``, ``0.5 a + 0.5 b``."""
+    parts: list = []
+    for weight, label in zip(weights, labels, strict=True):
+        if weight == 0:
+            continue
+        term = label if abs(weight) == 1 else f"{abs(weight):g} {label}"
+        if parts:
+            parts.append(f"{'+' if weight > 0 else '-'} {term}")
+        else:
+            parts.append(term if weight > 0 else f"-{term}")
+    return " ".join(parts)
+
+
 def _contrast_matrix(contrast, named, n_terms) -> np.ndarray:
     """``(q, n_columns)`` weights from an array, a dict of column names, or a list of dicts."""
 
@@ -539,7 +553,9 @@ class LocalTest:
         The columns are ``index`` -- ``component`` by default, counted from 0
         as :meth:`significant` and the reduction's basis count them; ``vertex``
         for a test of per-vertex features -- ``statistic``, ``pvalue``,
-        ``adjusted`` and ``partial_r2``; then what was tested -- ``estimate``,
+        ``adjusted`` and ``partial_r2``; ``tested``, the hypothesis in the
+        design's names (``age_band[31-35] - age_band[26-30]``, or the tested
+        columns), the same in every row; then what was tested -- ``estimate``,
         ``se`` and its ``level`` interval, ``ci_low`` and ``ci_high``, with
         the tested column's name appended when several were tested -- and the
         fitted coefficient of every design column, ``coef_<name>``. ``names``
@@ -563,7 +579,11 @@ class LocalTest:
                 f"{len(labels)} names for the design's {coefficients.shape[1]} columns "
                 "(column 0 is the intercept when one was added)"
             )
-        header = [index, "statistic", "pvalue", "adjusted", "partial_r2"]
+        if self.contrast is None:
+            tested = ", ".join(labels[t] for t in self.terms)
+        else:
+            tested = "; ".join(_described(row, labels) for row in np.atleast_2d(self.contrast))
+        header = [index, "statistic", "pvalue", "adjusted", "partial_r2", "tested"]
         blocks = []
         if self.estimate is not None and self.estimate_errors is not None:
             estimate = np.asarray(self.estimate)
@@ -595,6 +615,7 @@ class LocalTest:
                 self.pvalue[k],
                 self.adjusted[k],
                 effect[k],
+                tested,
                 *(column[k] for block in blocks for column in block),
                 *coefficients[k],
             ]
@@ -807,16 +828,18 @@ def local_test(
         reduced_columns = [i for i in range(n_terms) if i not in tested]
         reduced = matrix[:, reduced_columns] if reduced_columns else np.zeros((n_subjects, 0))
     else:
-        # The model the hypothesis leaves: the design's columns in every
-        # combination the contrast does not constrain, its null space. Found on
-        # unit-length columns, where c @ beta is (c / norms) @ (norms * beta): a
-        # contrast weighing a covariate in large units has rows that look
-        # parallel in those units, and until 6 October 2026 their null space,
-        # the reduced model and its rank came out wrong.
+        # The model the hypothesis leaves: every fit the design can make that the
+        # contrast does not constrain. On unit-length columns, where c @ beta is
+        # (c / norms) @ (norms * beta), and inside the design's own row space:
+        # with X D^-1 = U S V', beta = V' g with C D^-1 V' g = 0, so the reduced
+        # model is U S times that null space, of rank exactly rank(X) - q. Taken
+        # as the null space of C alone, it held directions the design cannot
+        # see, whose columns were rounding, and lost a degree of freedom to
+        # them; in a covariate's large units its rows looked parallel besides
+        # (until 6 October 2026).
         rows = hypothesis
-        norms = np.linalg.norm(matrix, axis=0)
-        norms = np.where(norms > 0, norms, 1.0)
-        _, singular, right = np.linalg.svd(hypothesis / norms)
+        norms, left, kept, right = _scaled_svd(matrix)
+        _, singular, _ = np.linalg.svd(hypothesis / norms)
         rank = int((singular > singular.max() * max(hypothesis.shape) * np.finfo(float).eps).sum())
         if rank < hypothesis.shape[0]:
             raise ValueError("the contrast's rows are not independent; drop the redundant ones")
@@ -826,8 +849,9 @@ def local_test(
                 "of coefficients the data cannot tell apart, such as a column of zeros, or one "
                 "dummy of a factor coded at every level beside the intercept"
             )
-        free = right[rank:].T
-        reduced = (matrix / norms) @ free if free.shape[1] else np.zeros((n_subjects, 0))
+        _, _, within = np.linalg.svd((hypothesis / norms) @ right.T)
+        free = within[rank:].T  # the row space's directions the contrast leaves free
+        reduced = (left * kept) @ free if free.shape[1] else np.zeros((n_subjects, 0))
 
     # Degrees of freedom follow the rank, not the column count: a collinear
     # design (dummy codes for every level plus an intercept) still fits by
@@ -835,7 +859,10 @@ def local_test(
     # the fit and the coefficients' covariance are all judged on unit-norm
     # columns, so that a covariate's units change none of them.
     rank_full = _rank(matrix)
-    rank_reduced = _rank(reduced) if reduced.shape[1] else 0
+    if hypothesis is not None:
+        rank_reduced = rank_full - rank  # an estimable contrast of q independent rows takes q
+    else:
+        rank_reduced = _rank(reduced) if reduced.shape[1] else 0
     residual_dof = n_subjects - rank_full
     numerator_dof = rank_full - rank_reduced
     if numerator_dof == 0:

@@ -149,8 +149,9 @@ the files or the tables, saying who was left out and why. Cells read as
 missing are pandas' defaults -- empty, `NA`, `NaN`, `None` and the like, case
 and all, so `none` is a value; `missing="-999"` adds a marker of your own, and
 `keep_default_missing=False` reads only yours. A column of numbers is read as
-numbers, except codes written with a leading zero, `01` and `02`, which stay
-text.
+numbers, codes written with a leading zero (`01`) among them, with a warning
+when it holds one: `design(..., categorical=[...])` makes such a column a
+factor.
 
 Each file's structure is checked as `sbci.load` checks it, without reading its
 arrays -- the metadata, the sizes and shapes of the area, mask and coordinates,
@@ -172,9 +173,10 @@ a session label: the HCP's SC has none, and `{"sc": None, "fc": "REST1"}` pairs
 it with the first day's FC. `exclude={"sub-01": "motion"}` leaves out subjects on
 grounds decided upstream, and the reason stands in the report; a subject left
 out so is not held to the one-visit rule either. A file named like another
-subject's with a suffix -- `sub-01_old_sc.h5` beside `sub-01_sc.h5` -- counts as
-one more of that subject's files, to be chosen between, unless a table lists
-it as a subject of its own. A refusal is a
+subject's with a suffix -- `sub-01_old_sc.h5` beside `sub-01_sc.h5`, or
+`sub-NDAR_INV1_2_sc.h5` beside `sub-NDAR_INV1_sc.h5` -- could be a copy or a
+subject of its own: without a table it is set aside and reported, and a table
+that lists it reads it as a subject. A refusal is a
 `sbci.cohort.CohortError` that carries the report as far as it was built,
 which `sbci cohort --report` writes all the same.
 

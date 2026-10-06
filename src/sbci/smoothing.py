@@ -840,6 +840,17 @@ class Endpoints:
         if index.dtype == bool:
             if index.shape != (self.n_streamlines,):
                 raise ValueError(f"a mask over {self.n_streamlines} streamlines, got {index.shape}")
+        elif (
+            index.dtype.kind in "iu"
+            and index.shape == (self.n_streamlines,)
+            and self.n_streamlines > 2
+            and np.isin(index, (0, 1)).all()
+        ):
+            raise ValueError(
+                "0s and 1s, one per streamline, are a mask written as integers, which would be "
+                "read as indices: streamlines 0 and 1 over and over. Pass mask.astype(bool), or "
+                "np.flatnonzero(mask) for the indices"
+            )
         elif index.size and (
             index.min() < -self.n_streamlines or index.max() >= self.n_streamlines
         ):

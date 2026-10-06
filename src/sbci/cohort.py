@@ -57,6 +57,7 @@ import csv
 import json
 import os
 import re
+import warnings
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
@@ -268,22 +269,16 @@ def _read_table(table, subject_column, missing=MISSING):
     return subject_column, ids, columns
 
 
-_CODE = re.compile(r"[+-]?0\d")
-"""Text that reads as a number but is a code: a leading zero, as in ``01`` or ``007``."""
+_PADDED = re.compile(r"[+-]?0\d")
+"""A number written with a leading zero, as codes often are: ``01``, ``007``."""
 
 
 def _as_column(values, missing=MISSING) -> np.ndarray:
-    """Numbers as float64 with NaN for missing; anything else as strings with None for missing.
-
-    Text that reads as a number is taken as one, except a code written with a
-    leading zero (``01``, ``007``), which no quantity is: such a column stays
-    text, which :func:`sbci.stats.design` makes a factor.
-    """
+    """Numbers as float64 with NaN for missing; anything else as strings with None for missing."""
     cells = [None if _missing(v, missing) else v for v in values]
     present = [v for v in cells if v is not None]
-    coded = any(isinstance(v, str) and _CODE.match(v.strip()) for v in present)
     try:
-        numbers = None if coded else [float(v) for v in present]
+        numbers = [float(v) for v in present]
     except (TypeError, ValueError):
         numbers = None
     if numbers is not None:
@@ -296,16 +291,17 @@ def _as_column(values, missing=MISSING) -> np.ndarray:
 def _find_files(files) -> tuple[list[Path], list[Path]]:
     """The computational files ``files`` names, and the ``.h5`` files whose names say nothing.
 
-    Folders are searched with their subfolders, symbolic links followed (each
-    real folder once).
+    Folders are searched with their subfolders, symbolic links followed, and
+    every real folder is searched once and every file taken once under its name,
+    however many ways lead to it; two names for one file stay two subjects.
     """
     items = [files] if isinstance(files, (str, Path)) else list(files)
-    paths: dict[str, Path] = {}
-    unnamed: dict[str, Path] = {}
+    paths: dict[tuple, Path] = {}
+    unnamed: dict[tuple, Path] = {}
+    seen: set = set()
     for item in items:
         path = Path(item)
         if path.is_dir():
-            seen: set = set()
             for root, folders, names in os.walk(path, followlinks=True):
                 real = os.path.realpath(root)
                 if real in seen:
@@ -315,10 +311,11 @@ def _find_files(files) -> tuple[list[Path], list[Path]]:
                 folders.sort()
                 for name in sorted(names):
                     found = Path(root) / name
+                    key = (os.path.realpath(found), name)
                     if parse_name(name) is not None and found.is_file():
-                        paths.setdefault(os.path.abspath(found), found)
+                        paths.setdefault(key, found)
                     elif _EXTENSION.search(name):
-                        unnamed.setdefault(os.path.abspath(found), found)
+                        unnamed.setdefault(key, found)
         elif not path.exists():
             raise FileNotFoundError(f"no such folder or file: {path}")
         elif parse_name(path.name) is None:
@@ -327,7 +324,7 @@ def _find_files(files) -> tuple[list[Path], list[Path]]:
                 "subject and modality are unknown"
             )
         else:
-            paths.setdefault(os.path.abspath(path), path)
+            paths.setdefault((os.path.realpath(path), path.name), path)
     return list(paths.values()), list(unnamed.values())
 
 
@@ -642,25 +639,27 @@ def load_cohort(
         raise ValueError("require= names table columns, but no table was given")
     in_table = set(table_ids)
 
-    # A file whose id is another subject's with a suffix -- sub-01_old_sc.h5 beside
-    # sub-01_sc.h5 -- is one more of that subject's files, a duplicate to choose
-    # between, rather than a subject of its own; unless a table lists it as one.
-    for subject in sorted(found, key=len, reverse=True):
+    # A file whose id is another subject's with a suffix may be a copy of that
+    # subject's file (sub-01_old beside sub-01) or a subject of its own (sub-NDAR_INV1_2
+    # beside sub-NDAR_INV1). Without a table to say which, it is set aside and
+    # reported, neither read as a subject nor merged into the other; a table that
+    # lists it reads it as one.
+    extending: dict[str, str] = {}
+    for subject in found:
         if subject in in_table:
             continue
         base = next(
             (other for other in sorted(found, key=len) if subject.startswith(other + "_")), None
         )
         if base is not None:
-            for modality, entries in found.pop(subject).items():
-                found[base].setdefault(modality, []).extend(entries)
+            extending[subject] = base
 
     # A subject's files have to come from one visit unless session= says otherwise; a
     # subject the caller leaves out is not asked.
     crossed: dict[str, str] = {}
     if not chosen:
         for subject, by_modality in sorted(found.items()):
-            if subject in excluded_by_caller:
+            if subject in excluded_by_caller or subject in extending:
                 continue
             labels = {
                 m: sorted({"none" if s is None else s for _, s in entries})
@@ -682,6 +681,11 @@ def load_cohort(
             reasons[subject].append(f"excluded by the caller: {excluded_by_caller[subject]}")
         if table is not None and subject not in in_table:
             reasons[subject].append("not in the table")
+        if subject in extending:
+            reasons[subject].append(
+                f"its name extends {extending[subject]}'s: a copy of that subject's file, or a "
+                "subject of its own? A table that lists it reads it as one"
+            )
         made: dict = {}
         for modality in modalities:
             entries = found.get(subject, {}).get(modality, [])
@@ -829,10 +833,21 @@ def load_cohort(
             report=rows,
         )
     files_out = {m: [found[s][m][0][0] for s in included] for m in modalities}
-    covariates = {
-        name: _as_column([cells.get(s) for s in included], missing)
-        for name, cells in covariate_columns.items()
-    }
+    covariates = {}
+    for name, cells in covariate_columns.items():
+        values = [cells.get(s) for s in included]
+        covariates[name] = _as_column(values, missing)
+        padded = sorted(
+            {v.strip() for v in values if isinstance(v, str) and _PADDED.match(v.strip())}
+        )
+        if covariates[name].dtype != object and padded:
+            warnings.warn(
+                f"column {name!r} is read as numbers, though some are written with a leading "
+                f"zero ({', '.join(padded[:3])}), as codes often are; if it holds codes, pass "
+                f"categorical=[{name!r}] to sbci.stats.design",
+                UserWarning,
+                stacklevel=2,
+            )
     return LoadedCohort(
         subjects=included,
         files=files_out,

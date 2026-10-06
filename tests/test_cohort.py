@@ -529,24 +529,49 @@ def test_the_session_check_heeds_exclude_and_reports_a_refusal(folder):
     assert reasons["sub-B"].startswith("refused with the cohort")
 
 
-def test_a_copy_beside_a_subjects_file_is_one_of_its_files(folder):
-    """sub-01_old_sc.h5 beside sub-01_sc.h5 was a subject of its own, sub-01_old."""
+def test_a_name_extending_another_subjects_is_set_aside_without_a_table(folder):
+    """Without a table, a name extending another subject's id is reported, not read.
+
+    sub-01_old was a subject of its own; merged into sub-01 instead, it took
+    sub-NDAR_INV1_2, a real subject, with it, and both NDAR subjects dropped out.
+    """
     root, add = folder
-    for name in ("sub-01_sc.h5", "sub-01_old_sc.h5", "sub-02_sc.h5"):
+    for name in (
+        "sub-01_sc.h5",
+        "sub-01_old_sc.h5",
+        "sub-02_sc.h5",
+        "sub-NDAR_INV1_sc.h5",
+        "sub-NDAR_INV1_2_sc.h5",
+    ):
         add(name)
     cohort = load_cohort(root)
-    assert cohort.subjects == ["sub-02"]
-    assert cohort.excluded == {"sub-01": "2 sc files: sub-01_old_sc.h5, sub-01_sc.h5"}
-    listed = load_cohort(root, {"subject": ["01", "01_old", "02"]})
-    assert listed.subjects == ["sub-01", "sub-01_old", "sub-02"]
+    assert cohort.subjects == ["sub-01", "sub-02", "sub-NDAR_INV1"]
+    assert set(cohort.excluded) == {"sub-01_old", "sub-NDAR_INV1_2"}
+    assert "its name extends sub-NDAR_INV1's" in cohort.excluded["sub-NDAR_INV1_2"]
+    listed = load_cohort(root, {"subject": ["01", "02", "NDAR_INV1", "NDAR_INV1_2"]})
+    assert listed.subjects == ["sub-01", "sub-02", "sub-NDAR_INV1", "sub-NDAR_INV1_2"]
 
 
-def test_a_code_with_a_leading_zero_stays_text(folder):
+def test_numbers_written_with_a_leading_zero_stay_numbers_and_warn(folder):
+    """One 07 among the ages turned the column to text, and design() made it a 4-level factor."""
+    from sbci.stats import design
+
     root, add = folder
-    add("sub-01_sc.h5")
-    add("sub-02_sc.h5")
-    cohort = load_cohort(
-        root, {"subject": ["01", "02"], "site": ["01", "02"], "dose": ["0.5", "2"]}
-    )
-    assert cohort.column("site").tolist() == ["01", "02"]
-    assert cohort.column("dose").tolist() == [0.5, 2.0]
+    for subject in ("01", "02", "03", "04", "05"):
+        add(f"sub-{subject}_sc.h5")
+    table = {"subject": ["01", "02", "03", "04", "05"], "age": ["07", "30", "25", "41", "33"]}
+    with pytest.warns(UserWarning, match="'age' is read as numbers.*categorical=\\['age'\\]"):
+        cohort = load_cohort(root, table)
+    assert cohort.column("age").tolist() == [7.0, 30.0, 25.0, 41.0, 33.0]
+    assert design({"age": cohort.column("age")}).names == ("intercept", "age")
+
+
+# --- the eighth review ------------------------------------------------------------
+
+
+def test_a_file_reached_through_two_links_counts_once(folder):
+    root, add = folder
+    add("sub-01_sc.h5", where="a")
+    (root / "b").symlink_to(root / "a")
+    cohort = load_cohort([root / "a", root / "b"])
+    assert cohort.subjects == ["sub-01"]

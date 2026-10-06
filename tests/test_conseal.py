@@ -1201,3 +1201,29 @@ def test_the_template_holds_the_cohort_once(grid):
     assert one_list < peak < 1.5 * one_list
     normalized = [_Density(q / np.sqrt((q**2).sum())) for q in densities]
     np.testing.assert_allclose(template, engine.template(normalized, None, iterations=5))
+
+
+# --- the eighth review ------------------------------------------------------------
+
+
+def test_an_inverted_warp_says_its_rotation_comes_after_the_flow(bundled_left, tmp_path):
+    """The order of a warp's two parts was a private flag that nothing exported or saved."""
+    from sbci.conseal import EndpointWarp
+
+    warp = StationaryWarp(bundled_left, viscosity=0.0).rotate(rotation_about_x(40.0))
+    assert not warp.rigid_after
+    inverse = warp.copy().invert()
+    assert inverse.rigid_after and not inverse.copy().invert().rigid_after
+    vertices = np.asarray(inverse.vertices)
+    saved = EndpointWarp(
+        lh_vertices=vertices,
+        lh_velocity=inverse.velocity,
+        lh_jacobian=np.ones(len(vertices)),
+        rh_vertices=vertices,
+        rh_velocity=inverse.velocity,
+        rh_jacobian=np.ones(len(vertices)),
+        lh_rigid=np.asarray(inverse.rigid),
+        lh_rigid_after=inverse.rigid_after,
+    ).save(tmp_path / "warp.npz")
+    loaded = EndpointWarp.load(saved)
+    assert loaded.lh_rigid_after is True and loaded.rh_rigid_after is False

@@ -359,3 +359,27 @@ def test_an_incomplete_endpoint_group_names_what_is_missing(tmp_path, connectome
         group.create_dataset("vertex_in", data=np.zeros(3, dtype=np.int32))
     with pytest.raises(FormatError, match="has no vertex_out"):
         read_hdf5(path)
+
+
+# --- the eighth review ------------------------------------------------------------
+
+
+def test_the_header_check_refuses_endpoint_positions_of_the_wrong_width(tmp_path):
+    """Two coordinates a position passed the header check, which load then refused."""
+    import h5py
+
+    import sbci
+    from sbci.errors import InvalidFileError
+    from sbci.io import read_header
+
+    path = tmp_path / "sub-01_sc.h5"
+    sbci.example(modality="sc").save(path)
+    with h5py.File(path, "a") as handle:
+        group = handle["endpoints"]
+        narrow = group["barycentric_in"][()][:, :2]
+        del group["barycentric_in"]
+        group["barycentric_in"] = narrow
+    with pytest.raises(
+        InvalidFileError, match="barycentric_in is \\(20000, 2\\), expected \\(20000, 3\\)"
+    ):
+        read_header(path)

@@ -136,3 +136,15 @@ def test_a_resmoothed_half_records_its_own_streamline_count():
     smoothed = holder.smooth(kernel="shk", bandwidth=0.005, mask_medial_wall=True)
     assert smoothed.metadata.fields["streamline_count"] == half.n_streamlines
     assert half.n_streamlines == sc.endpoints.n_streamlines // 2
+
+
+# --- the eighth review ------------------------------------------------------------
+
+
+def test_take_refuses_a_mask_written_as_integers():
+    """0s and 1s were read as indices: streamlines 0 and 1, over and over."""
+    ends = Endpoints([0, 0, 1, 1], [1, 1, 0, 0], [3, 5, 7, 9], [2, 4, 6, 8], n_per_hemi=10)
+    with pytest.raises(ValueError, match="a mask written as integers"):
+        ends.take(np.array([1, 0, 1, 0]))
+    assert ends.take(np.array([1, 0, 1, 0], dtype=bool)).vtx_in.tolist() == [3, 7]
+    assert ends.take([1, 0]).vtx_in.tolist() == [5, 3]  # indices of another length stay indices

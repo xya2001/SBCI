@@ -911,6 +911,16 @@ class StationaryWarp:
         view.setflags(write=False)
         return view
 
+    @property
+    def rigid_after(self) -> bool:
+        """Whether the rigid rotation acts after the flow, as it does once the warp is inverted.
+
+        A warp is the flow of its velocity field after its rigid rotation; its
+        inverse holds the same parts in the other order. :meth:`invert` turns
+        this over, and :meth:`rotate` starts the warp afresh, the rotation first.
+        """
+        return self._rigid_last
+
     @rigid.setter
     def rigid(self, rotation) -> None:
         rotation = np.asarray(rotation, dtype=np.float64)
@@ -1246,10 +1256,12 @@ class EndpointWarp:
     """One subject's warp of both hemispheres, exported from :class:`StationaryWarp`.
 
     The vertices are the whole map. Each hemisphere's warp is the flow of its
-    velocity field after the rigid rotation ``lh_rigid`` / ``rh_rigid``, the
-    identity unless the registration began with ``init_rotation=True``
-    (module docstring, item 17); a file written before the rigid part was
-    kept loads with identities.
+    velocity field after the rigid rotation ``lh_rigid`` / ``rh_rigid`` -- or
+    the rotation after the flow where ``lh_rigid_after`` / ``rh_rigid_after``
+    is set, as for an inverted warp (:attr:`StationaryWarp.rigid_after`). The
+    rotation is the identity unless the registration began with
+    ``init_rotation=True`` (module docstring, item 17); a file written before
+    the rigid part, or its order, was kept loads with identities, rotation first.
     """
 
     lh_vertices: np.ndarray
@@ -1260,6 +1272,8 @@ class EndpointWarp:
     rh_jacobian: np.ndarray
     lh_rigid: np.ndarray = field(default_factory=lambda: np.eye(3))
     rh_rigid: np.ndarray = field(default_factory=lambda: np.eye(3))
+    lh_rigid_after: bool = False
+    rh_rigid_after: bool = False
 
     def save(self, path) -> Path:
         """Write the warp to ``.npz``; returns the path written, suffix included."""
@@ -1273,7 +1287,9 @@ class EndpointWarp:
     def load(cls, path) -> EndpointWarp:
         """Read a warp written by :meth:`save`."""
         with np.load(Path(path)) as data:
-            return cls(**{k: data[k] for k in data.files})
+            return cls(
+                **{k: bool(data[k]) if k.endswith("_after") else data[k] for k in data.files}
+            )
 
 
 @dataclass
@@ -1819,6 +1835,8 @@ def endpoints_align(
                 rh_jacobian=rh_warp.jacobian,
                 lh_rigid=lh_warp.rigid.copy(),
                 rh_rigid=rh_warp.rigid.copy(),
+                lh_rigid_after=lh_warp.rigid_after,
+                rh_rigid_after=rh_warp.rigid_after,
             )
         )
         result.connectomes.append(warped)
