@@ -577,3 +577,80 @@ def test_without_an_intercept_the_mean_is_part_of_what_the_design_explains():
     result = local_test(scores, covariate, add_intercept=False, method="none")
     assert result.terms == (0,) and result.residual_dof == n - 1
     assert np.isfinite(result.statistic[0]) and np.isnan(result.statistic[1])
+
+
+def _three_levels(n, rng):
+    """A three-level factor coded both ways, and scores that depend on it and on age."""
+    level = np.repeat([0, 1, 2], n // 3)
+    dummies = (level[:, None] == np.arange(3)).astype(float)
+    age = rng.standard_normal(n)
+    scores = (0.5 * age + 0.3 * level)[:, None] + rng.standard_normal((n, 3))
+    implied = np.column_stack([dummies, age])  # the dummies sum to one: an intercept, implied
+    prepended = np.column_stack([dummies[:, 1:], age])  # against a reference level
+    return scores, implied, prepended
+
+
+def test_an_intercept_the_columns_only_imply_absorbs_a_shift_too():
+    """Dummy codes for every level sum to one, so they take the mean as an intercept column does.
+
+    The same model coded against a reference level, with the intercept
+    prepended, gives the same statistics, shifted or not. Until 6 October 2026
+    only an intercept column was recognized, and a shift of 1e6 turned every
+    component of the dummy-coded design NaN.
+    """
+    rng = np.random.default_rng(38)
+    n = 60
+    scores, implied, prepended = _three_levels(n, rng)
+    for shift, rtol in ((0.0, 1e-10), (1e6, 1e-7)):
+        ours = local_test(scores + shift, implied, terms=[3], add_intercept=False, method="none")
+        other = local_test(scores + shift, prepended, terms=[3], method="none")
+        assert np.isfinite(ours.statistic).all()
+        np.testing.assert_allclose(ours.statistic, other.statistic, rtol=rtol)
+        np.testing.assert_allclose(ours.pvalue, other.pvalue, rtol=rtol)
+        assert ours.residual_dof == other.residual_dof == n - 4
+        assert ours.numerator_dof == other.numerator_dof == 1
+
+
+def test_an_implied_intercept_holds_with_families_and_permutations():
+    """The cluster-robust and the permutation tests see the same shift invariance."""
+    rng = np.random.default_rng(39)
+    n = 60
+    scores, implied, prepended = _three_levels(n, rng)
+    families = np.repeat(np.arange(30), 2)
+    for shift, rtol in ((0.0, 1e-10), (1e6, 1e-7)):
+        ours = local_test(scores + shift, implied, terms=[3], add_intercept=False, groups=families)
+        other = local_test(scores + shift, prepended, terms=[3], groups=families)
+        assert np.isfinite(ours.statistic).all()
+        np.testing.assert_allclose(ours.statistic, other.statistic, rtol=rtol)
+    shifted = scores + 1e6
+    ours = local_test(shifted, implied, terms=[3], add_intercept=False, permutations=99, seed=5)
+    other = local_test(shifted, prepended, terms=[3], permutations=99, seed=5)
+    assert np.isfinite(ours.pvalue).all()
+    np.testing.assert_array_equal(ours.pvalue, other.pvalue)
+
+
+def test_constant_scores_stay_untestable_with_an_implied_intercept():
+    """Centring under an implied intercept still leaves a constant response nothing to test."""
+    rng = np.random.default_rng(40)
+    n = 30
+    level = np.repeat([0, 1], n // 2)
+    dummies = (level[:, None] == np.arange(2)).astype(float)
+    design = np.column_stack([dummies, rng.standard_normal(n)])
+    scores = np.column_stack([rng.standard_normal(n), np.ones(n), np.full(n, 1e6), np.zeros(n)])
+    result = local_test(scores, design, terms=[2], add_intercept=False, method="none")
+    assert np.isfinite(result.statistic[0]) and np.isfinite(result.pvalue[0])
+    assert np.isnan(result.statistic[1:]).all() and np.isnan(result.pvalue[1:]).all()
+
+
+def test_the_default_terms_need_naming_when_the_intercept_is_only_implied():
+    """Testing every column would test the implied intercept with them: refused, in words."""
+    rng = np.random.default_rng(41)
+    n = 60
+    scores, implied, _ = _three_levels(n, rng)
+    with pytest.raises(ValueError, match="combine into one") as error:
+        local_test(scores, implied, add_intercept=False)
+    assert "terms=" in str(error.value) and "reference level" in str(error.value)
+    assert local_test(scores, implied, terms=[3], add_intercept=False).terms == (3,)
+    # Columns that do not reproduce a constant keep the old default.
+    plain = local_test(scores, implied[:, [0, 3]], add_intercept=False)
+    assert plain.terms == (0, 1)

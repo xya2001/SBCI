@@ -90,6 +90,23 @@ def _constant_columns(matrix) -> np.ndarray:
     return np.all(matrix == matrix[:1], axis=0) & (matrix[0] != 0)
 
 
+def _spans_constant(matrix, rank: int | None = None) -> bool:
+    """Whether the columns can reproduce a constant, and so absorb a shift of the response.
+
+    A constant column can; so can columns that only combine into one, as dummy
+    codes for every level of a factor sum to one. Judged by the numerical rank
+    the degrees of freedom are counted with: a constant adds nothing to it.
+    ``rank`` is the matrix's own rank, when already known.
+    """
+    matrix = np.asarray(matrix, dtype=np.float64)
+    if matrix.ndim != 2 or 0 in matrix.shape:
+        return False
+    if rank is None:
+        rank = int(np.linalg.matrix_rank(matrix))
+    with_constant = np.column_stack([matrix, np.ones(matrix.shape[0])])
+    return int(np.linalg.matrix_rank(with_constant)) == rank
+
+
 def _missing_labels(labels: np.ndarray) -> np.ndarray:
     """Which group labels are missing: ``NaN``, ``None``, or an empty or blank string.
 
@@ -240,8 +257,11 @@ def local_test(
     terms
         Which design columns to test, as integer indices into the final design
         matrix, each at most once. Defaults to every non-constant column except
-        the intercept. A boolean array is refused: it would be read as the
-        indices 0 and 1.
+        the intercept. A design with no constant column whose columns still
+        combine into one -- dummy codes for every level of a factor, with
+        ``add_intercept=False`` -- has no intercept column to leave out, and
+        needs ``terms`` named. A boolean array is refused: it would be read as
+        the indices 0 and 1.
     method
         Multiplicity correction, one of :data:`METHODS`.
     add_intercept
@@ -249,7 +269,9 @@ def local_test(
         yourself, as a constant column of ``design``; the columns are then
         numbered as given. A design carrying its own constant column needs
         ``add_intercept=False``: until October 2026 such a column was taken
-        as the intercept.
+        as the intercept. Dummy codes for every level of a factor carry an
+        intercept too, implicitly, and are tested exactly as the same factor
+        coded against a reference level with the intercept prepended.
     permutations
         If positive, p-values come from a permutation test with this many
         draws rather than from the F distribution. The scheme is
@@ -297,6 +319,13 @@ def local_test(
         tested = [i for i in range(n_terms) if i not in intercept]
         if not tested:
             raise ValueError("no terms to test; the design is an intercept alone")
+        if not intercept and _spans_constant(matrix):
+            raise ValueError(
+                "the design has no constant column, but its columns combine into one (dummy "
+                "codes for every level of a factor do), so the default of testing every column "
+                "would test the intercept with them: name the columns to test with terms=, or "
+                "code the factor against a reference level and let the intercept be prepended"
+            )
     else:
         requested = np.atleast_1d(np.asarray(terms))
         if requested.size == 0:
@@ -361,12 +390,15 @@ def local_test(
         return coefficients, (residual * residual).sum(axis=0)
 
     # The scale a residual is judged against is the variation the reduced
-    # model has to explain. With an intercept among its columns the mean is
-    # absorbed, so that is the centred sum of squares: scores sitting at 1e6
-    # with unit spread are as testable as scores at zero. Without one it is
-    # the plain sum of squares.
+    # model has to explain. When its columns can reproduce a constant -- an
+    # intercept column, or dummy codes for every level of a factor, which sum
+    # to one -- the mean is absorbed, so that is the centred sum of squares:
+    # scores sitting at 1e6 with unit spread are as testable as scores at
+    # zero. Otherwise it is the plain sum of squares. (Until 6 October 2026
+    # only an intercept column counted, and a shift of 1e6 turned every
+    # component of a dummy-coded design NaN.)
     magnitude = (scores * scores).sum(axis=0)
-    if reduced.shape[1] and _constant_columns(reduced).any():
+    if reduced.shape[1] and _spans_constant(reduced, rank_reduced):
         centred = scores - scores.mean(axis=0)
         scale = (centred * centred).sum(axis=0)
     else:

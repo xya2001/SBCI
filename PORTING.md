@@ -1669,7 +1669,7 @@ response written for the reviewer; this item is the record.
 | 5 | the transported square-root density is not of unit norm | normalized before its diagonal is zeroed (`Concon.m`, **reference**) | zero first; `reference=True` keeps the order | 0.02% to 0.2% on ico4; 5% on a coarse, very local toy |
 | 6 | the areas do not weight the first component | the Gram enters only the deflation (**reference**) | documented; the method decision stays with WP1 | twice the area-weighted residual on a four-vertex toy |
 | 7 | `seed(region=)` divides by masked area | weights over every selected vertex | intersect with the mask; refuse an all-masked region | 0.8327 of the cortical-only profile on sub-100307's PALS left limbic lobe |
-| 8 | an intercept-adjusted F test changes when the response is shifted | the untestable rule judged on the uncentred scale | the centred scale when the design has an intercept | F = 10.9 became NaN after adding 1e6 |
+| 8 | an intercept-adjusted F test changes when the response is shifted | the untestable rule judged on the uncentred scale | the centred scale when the reduced model can reproduce a constant: an intercept column, and since 6 October dummy codes for every level (below) | F = 10.9 became NaN after adding 1e6 |
 | 9 | the within-region mean counts each vertex paired with itself | denominator A_k^2 | mean over distinct pairs; a one-vertex region gets NaN | 0.8(1 - 1/n): 4% low for Schaefer-sized regions |
 | 10 | GIFTI arrays read by position | `darrays[0]`, `darrays[1]` | by intent | a triangles-first file gave zero faces |
 | 11 | the FC exchange sidecar says density | one string for both modalities | by modality | provenance only |
@@ -1725,6 +1725,27 @@ cluster's Intel and AMD nodes round differently, VERIFICATION.md Tier 3):
   density units and the Schaefer-200 FC diagonal rises by up to 0.042 in
   correlation; neither atlas has a one-vertex region, so neither matrix
   gains a NaN.
+
+### Finding 8, for an intercept the columns only imply (6 October 2026)
+
+The fix recognized an intercept only as a constant column. Dummy codes for
+every level of a factor, passed with `add_intercept=False`, sum to one and
+absorb a shift just as well, but the untestable rule still judged them on the
+uncentred scale: on three components of a three-level probe, a shift of 1e6
+turned every component NaN where the same model coded against a reference
+level gave F = 12.8, 11.5 and 15.9. The rule now asks whether the reduced
+model's columns can reproduce a constant, by the numerical rank the degrees of
+freedom are counted with. The dummy-coded design then agrees with the
+reference-level coding to 2e-15 unshifted and 6e-11 at 1e6, 1e-9 with
+families as clusters, and its permutation p-values are equal. With the
+intercept only implied, the default `terms` -- every column but the intercept
+-- has no column to leave out and would test the intercept with the rest, so
+it is refused and the message names `terms=`. With the intercept prepended,
+the default, nothing changes: the reduced model holds the intercept column
+whenever the old rule applied, and 300 random designs (a third with a factor
+coded at every level), each tested twelve ways -- four choices of terms,
+plain, with families and with permutations -- give identical results, all
+3,600 bit for bit.
 
 ## 9. The second list, 5 October 2026 -- NINE FINDINGS AND A DOZEN SMALL ONES, ALL BUT ONE CONFIRMED
 

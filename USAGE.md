@@ -820,7 +820,11 @@ needs `add_intercept=False`, and a covariate that does not vary in the
 subjects at hand -- sex within a single-sex subset -- has to be dropped. Both
 are refused in words rather than guessed at; until October 2026 a constant
 column was taken as the intercept, which renumbered the columns of a subset
-whose covariate happened to be constant. `groups=` makes the
+whose covariate happened to be constant. Dummy codes for every level of a
+factor carry an intercept too, implicitly: with `add_intercept=False` they are
+tested exactly as the same factor coded against a reference level, but need
+`terms=` named, since testing every column would test the intercept with
+them. `groups=` makes the
 families the units of the test (*Testing scores against a covariate*, below).
 On the 943 with a score, no component of the twenty tracks fluid intelligence once the families
 are clusters: the closest, component 13, has r = 0.11 and adjusted p 0.064.
