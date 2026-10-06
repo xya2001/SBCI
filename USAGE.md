@@ -218,7 +218,7 @@ case, spaces, hyphens and underscores. `list_atlases()` gives the full set,
 which also includes Gordon, Yeo, the PALS-B12 family and CoCoNest at 22 scales.
 The grid sets the resolution: Schaefer-900 and Schaefer-1000 come out with 899
 and 999 regions, because one parcel of each has no ico4 vertex, and 68 of the
-11,825 bundled regions have a single cortical vertex (PORTING.md item 3).
+11,822 bundled regions have a single cortical vertex (PORTING.md item 3).
 
 Label `0` means "no region" — the medial wall, plus anything outside a
 partial-coverage atlas. Regions are numbered `1..K` with no gaps, and
@@ -933,7 +933,9 @@ needs `add_intercept=False`, and a covariate that does not vary in the
 subjects at hand -- sex within a single-sex subset -- has to be dropped. Both
 are refused in words rather than guessed at; until October 2026 a constant
 column was taken as the intercept, which renumbered the columns of a subset
-whose covariate happened to be constant. Dummy codes for every level of a
+whose covariate happened to be constant. A column of zeros can be neither, so
+it is kept and fits as nothing: a dummy for a site or level absent from a
+stratum needs no change between strata, though it cannot itself be tested. Dummy codes for every level of a
 factor carry an intercept too, implicitly: with `add_intercept=False` they are
 tested exactly as the same factor coded against a reference level, but need
 `terms=` named, since testing every column would test the intercept with

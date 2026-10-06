@@ -150,11 +150,12 @@ def _keep(mask) -> np.ndarray | None:
 
 
 def _form(path: Path, suffixes) -> str:
-    """Which of ``suffixes`` the file name ends in; refused before anything is computed."""
+    """Which of ``suffixes`` the name ends in, in any case; refused before anything is computed."""
+    name = path.name.lower()
     for suffix in suffixes:
-        if path.name.endswith(suffix):
+        if name.endswith(suffix):
             return suffix
-    if path.name.endswith((".dscalar.nii.gz", ".func.gii.gz")):
+    if name.endswith((".dscalar.nii.gz", ".func.gii.gz")):
         raise ValueError(f"{path.name!r}: CIFTI and GIFTI are written uncompressed; drop the .gz")
     raise ValueError(f"{path.name!r} does not say what to write; end the name in one of {suffixes}")
 

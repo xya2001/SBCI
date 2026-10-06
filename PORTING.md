@@ -237,7 +237,7 @@ difference rather than a rounding detail:
   region, having no pair, gets NaN. Until the review of 5 October 2026 (item
   8) the denominator was the squared region area, which counted the
   self-pairs and ran the diagonal low by `1 - sum_i a_i^2 / A^2`: half with
-  two vertices, about 4% for Schaefer-sized regions on ico4. Of the 11,825
+  two vertices, about 4% for Schaefer-sized regions on ico4. Of the 11,822
   regions in the 44 bundled atlases, 68 have a single cortical vertex on
   ico4 (21 of them in Schaefer-1000, 15 in Schaefer-900) and 45 have none
   (six in Gordon, one to four in each CoCoNest scale); those read NaN under
@@ -1758,7 +1758,7 @@ item 2 below) holds for a different reason than the one given.
 | --- | --- | --- | --- | --- |
 | 1 | ConSEAL's Karcher median collapses onto its starting subject | **confirmed**: the square-root densities are not renormalized, float32 barycentric weights put a subject's squared norm 1e-10 off 1, and when the starting subject's is below 1 the `1e-14` snap misses it, that subject's Weiszfeld weight is about 7e4 and the first step is already shorter than 0.005 (**the reference's arithmetic**, item 7 docstring item 15) | unit-norm densities and a 1e-6 radian coincidence guard; `strict_upstream=True` keeps the reference's | on the eleven released subjects the median started from sub-212116, whose squared norm rounds 1.7e-10 below 1, and stopped 0.001 degrees from it and 24-27 from the rest; it now sits 0.43 degrees from their mean and 16.6-20.2 from every subject. The synthetic cohort that collapsed at three degrees of spread had its starting subject 1.4e-10 below 1, the one that did not at two degrees 5.1e-10 above |
 | 2 | ConSEAL's default grids have four vertices on the poles | **partly**: the vertex at the north pole moves 2.0 degrees of a 4-degree shift of the endpoints around it, but the endpoints, carried by their triangles, land within 0.09 degrees of the truth either way; the cause is the 5% velocity smoothing, which averages the two frame components as scalars across neighbours whose frames turn 72 degrees around a pole -- after a 20-degree `rotate()`, ten zero-size steps move the two most polar vertices 8.8 degrees and one 11.3, on the unrotated grid and on one rotated off the poles alike (7.5 and 9.9); the reference smooths the same way (docstring item 16) | the velocity field is smoothed as vectors: first as ambient 3-vectors projected back onto the tangent planes, and since the third list (item 10) with the connection Laplacian, which parallel-transports each neighbour's vector to the vertex; `strict_upstream=True` keeps the component-wise smoothing; the grids stay in the file's frame, since a grid rotated off the poles moves the same vertex 3.7 degrees and lands its endpoints worse (0.10 against 0.035) | the ten-step drift at the poles falls to 0.09 degrees with the ambient smoothing and 0.046 with the connection Laplacian (the 5% smoothing of a degree-1 field, as everywhere else); the pole vertex follows 3.45 of the 4 degrees and the endpoints around it land 0.035 degrees from the truth (0.085 before); within 10 degrees of the coordinate equator the connection Laplacian agrees with the reference's smoothing to 1e-4 of the field |
-| 3 | `local_test(terms=...)` tests a different column when a covariate is constant | **confirmed** in the code: the intercept was not prepended when any column was constant, so the indices shifted | the intercept is always column 0, so a constant covariate is collinear with it and testing it is refused as such (and `groups=`, which needs full column rank, now refuses such a design instead of running on the shifted one); boolean, duplicate and empty `terms` are refused | an all-female stratum's `terms=[1]` tested the intercept |
+| 3 | `local_test(terms=...)` tests a different column when a covariate is constant | **confirmed** in the code: the intercept was not prepended when any column was constant, so the indices shifted | the intercept is always column 0, so a constant covariate is collinear with it and testing it is refused as such (and `groups=`, which needs full column rank, now refuses such a design instead of running on the shifted one); boolean, duplicate and empty `terms` are refused. *Superseded*: since the third list a constant column is refused outright (item 10, row 2), and since the fourth a column of zeros is kept (item 11) | an all-female stratum's `terms=[1]` tested the intercept |
 | 4 | the FC exchange file has zeros next to its diagonal | **confirmed** by construction: the zero ico4 FC diagonal spreads to every pair of fsLR vertices in one cell | the FC diagonal is set to the self-correlation 1 before resampling, on cortex only since the third list (the medial wall, for which FC has no data, keeps its 0); the sidecar says so | 12.7 fsLR vertices to an ico4 cell, so most pairs of neighbours share one and read 0 |
 | 5 | sidecar files overwrite each other | **confirmed**: the name was cut at the first dot | only the `.dconn.nii` suffix is stripped | `sub-01.ses-1_sc` and `sub-01.ses-2_fc` both wrote `sub-01.json` |
 | 6 | three PALS atlases keep the medial wall as two regions | **confirmed**: `MEDIAL.WALL`, with a dot, slipped past the background pattern | pattern widened in `tools/convert_atlases.py`, the three atlases rebuilt from the toolkit's files | Lobes 12 -> 10 regions (394 wall vertices now unassigned), Brodmann 82 -> 80, Visuotopic 25 -> 23; 11,825 bundled regions |
@@ -1857,7 +1857,7 @@ before anything changed; all hold, one in part.
 | 4 | a ConSEAL subject with no streamlines makes the cohort NaN; ENCORE likewise for a density whose mass is all on its diagonal | **confirmed** | refused in words, by index | -- |
 | 5 | ConSEAL's template held two copies of the cohort | **confirmed** | each density normalized in place | peak 2.0 cohorts' worth to 1.2 to 1.4 (about 12 GB for 50 ico4 subjects) |
 | 6 | the FC export set the diagonal to 1 on the medial wall | **confirmed** | cortex only | 14,871 pairs of medial-wall fsLR vertices had read exactly 1 |
-| 7 | the Jacobian calibration beside the axis | **confirmed, smaller than reported**: `align()` let through a vertex 1e-5 rad off the axis, where the calibrated Jacobian of a 0.5-degree rotation read 1.27 (the reviewer saw 920 closer still) | `align()` refuses vertices within the 1e-3 that `rotate_off_poles` clears, and the calibration ignores an identity value below 0.5 | 1.0001 at 1e-3 |
+| 7 | the Jacobian calibration beside the axis | **confirmed, smaller than reported**: `align()` let through a vertex 1e-5 rad off the axis, where the calibrated Jacobian of a 0.5-degree rotation read 1.27 (the reviewer saw 920 closer still) | `align()` refuses vertices within the 1e-3 that `rotate_off_poles` clears, and the calibration ignores an identity value below 0.5 (*superseded* by item 11: it left coarse grids uncalibrated, and the axis alone now decides) | 1.0001 at 1e-3 |
 | 8 | the vector smoothing shrinks rotations twice as fast as the reference | **partly**: twice as fast only about the coordinate axis -- 95.2% of a rotation field left after 100 smoothings against the reference's 98.9% -- while about a tilted axis the reference shrinks it faster (90.5%), its rate depending on the frame (item 16 of the ConSEAL docstring). The ambient smoothing's own rate came from a curvature term: projecting a neighbour's vector instead of transporting it adds the sphere's Ricci curvature, doubling the damping of rotation fields | the connection Laplacian, which parallel-transports each neighbour's vector | 97.6% left for every axis, exp(-5 * 4 pi / 2562); within 10 degrees of the coordinate equator it agrees with the reference's smoothing to 1e-4 of the field, 3 to 20 times closer than the ambient one |
 | 9 | stale documents | **confirmed** | `atlas.py` (PALS_B12_Lobes is ten lobes, 394 vertices unlabelled), and the 0.7% of item 9, which is lost once, when the final warp is applied, not at every step | -- |
 
@@ -1889,10 +1889,51 @@ fractions and the projections, nowhere else.
   reference basis, which isolates the connection-Laplacian smoothing, moves
   them 0.00006 degrees on average and 0.002 at most.
 
+## 11. The fourth list, 6 October 2026 -- A RE-CHECK OF THE THIRD, AND OF ITS FIXES
+
+A fourth list re-ran the open items against 1af5e32 and audited the third
+round's changes. Each item was checked first, with a probe or against the
+code; `tests/reference/fourth_list_probe.py` records the measurements
+(`fourth-probe.sbatch` on Longleaf). All hold.
+
+Reported as still present:
+
+| Finding | Verdict | Fixed by | Size |
+| --- | --- | --- | --- |
+| finding 8's shift invariance, with one-hot coding and `add_intercept=False` | **confirmed**, and fixed by 41635ad the same day (item 8, *Finding 8, for an intercept the columns only imply*) | -- | a four-level one-hot probe gives F = 3.12 and 12.08 before and after adding 1e6 |
+| three PALS atlases keep an unassigned `RH_GYRUS` region | **confirmed**: the PALS files name the right hemisphere's unassigned cortex `RH_GYRUS` where the left's is `LH_???` -- in OrbitoFrontal 2,347 vertices against 2,359 | the background pattern of `tools/convert_atlases.py` takes `[LR]H_GYRUS`; the three atlases rebuilt from the toolkit's files, the other 41 unchanged; the coverage floor lowered to 5% so that OrbitoFrontal, at 8.2%, stays | Brodmann 80 -> 79 regions, OrbitoFrontal 48 -> 47, Visuotopic 23 -> 22; OrbitoFrontal labels 203 vertices on the left and 215 on the right, where it labelled the whole right hemisphere; 11,822 bundled regions |
+| ConSEAL's docstrings say `viscosity=0` and `step_clamp=inf` "recover the fork's update rule" | **confirmed**: item 8 of the same docstring lists the fork's other differences, its central-difference gradient and its direct composition | reworded: the two settings remove the regularizations the fork does without, and nothing else | -- |
+| findings 1, 3 and 6 | open, as item 8's *Still open* records: the scores the fit records one step early, the re-registration drift of 0.001 degrees, the area weighting | unchanged | -- |
+
+New in the third round's commits, and from the audit:
+
+| # | Finding | Verdict | Fixed by | Size |
+| --- | --- | --- | --- | --- |
+| 1 | a missing family label in a plain list is not refused | **confirmed**: NumPy turns `np.nan` in a list of strings into the string `'nan'`, one more family | the labels are judged as given, on an object view, before NumPy converts them | 21 groups instead of 20 in the review's case; now refused |
+| 2 | the constant-column error numbers the caller's column, not `terms=`'s; refusing a column of zeros breaks stratified runs | **confirmed** | the message gives both numberings; a column of zeros is kept, fits as nothing and is set aside by the clustered test, and testing one is refused in words | -- |
+| 3 | global coupling keeps an empty one-vertex region | **confirmed**: its NaN diagonal made a constant profile look varying | constancy judged on the entries present, NaN aside; bit for bit on matrices without NaN | on sub-100307 in Schaefer-1000, the other regions moved by up to 0.005; now not at all |
+| 4 | the 0.5 cutoff of the Jacobian calibration skips coarse grids | **confirmed**: the 12-vertex icosahedron reads 0.463 for the identity at every vertex | the calibration skips only vertices within `AXIS_CLEARANCE` of the axis, and refuses a vertex clear of it where the scheme reads nothing positive | the identity's Jacobian 0.463 -> 1 exactly; the bundled grids unchanged |
+| 5 | HDF5: triangle indices split at 5,120 faces a hemisphere; an area of the wrong length reported as an endpoints error | **confirmed** | triangles split at `2 V - 4`, a closed spherical mesh's faces (5,120 at ico4's 2,562 vertices); endpoints split at the connectivity's own count, the area left to `load` and `sbci validate`, which name it | -- |
+| 6 | `StationaryWarp.invert()` with a rotation is not exactly reversible; assigning `warp.rigid` changes nothing | **confirmed**: the inverse carried the field to the rotated frame by interpolation, and `rigid` was a plain attribute | the warp records which of its two parts comes first, so the inverse -- the flow of `-v`, then `R'` -- is computed, not interpolated; `rigid` is a property that checks the rotation and re-flows | a double inversion changed the field by 1.0e-3 on ico4 and 4.3e-3 on ico3 (2.8% in the review's case); now 0, bit for bit |
+| 7 | documents: item 16's "1e-4"; a passage on the superseded `local_test` rule; `write_cifti` refusing `.DCONN.NII` | **confirmed** | item 16 restated by axis, with the cotangent layout's share; item 9's row marked superseded; file endings compared without case by the exchange file, its companions and `save_map` | 1.7e-4 about the coordinate axis, 1.3e-3 to 1.5e-3 about others, nearly all the layout's |
+
+One more, found while fixing: 41635ad's check of the default `terms` counted a
+column of zeros as an intercept column, so a dummy-coded design beside one
+would have tested its implied intercept. Zeros no longer count.
+
+None of these touch the recorded paths on the released subjects: the
+registration never inverts a warp and holds its rotation first, as before;
+coupling at the vertex level has no NaN; every vertex of the bundled grids
+is clear of the axis and read above one half for the identity; and the
+designs of docs/RESULTS.md carry no column of zeros. Recorded on the released
+subjects with `tests/reference/record_outputs.py` before and after, on the
+same AMD EPYC 7702 nodes, all 32 arrays are identical, bit for bit
+(`outputs-base4.npz` against `outputs-review4.npz`).
+
 ## Status
 
-All seven ports are done and verified, and the three reviews of 5 and 6
-October 2026 (items 8 to 10) have been answered in full; what is left is
+All seven ports are done and verified, and the four reviews of 5 and 6
+October 2026 (items 8 to 11) have been answered in full; what is left is
 under each item's *Still open*. They were done in the order 3, 1, 2, 5, 4, 6, 7: parcellation
 unblocked the first notebook, kernel smoothing the WP3 speed target, and the
 two alignments came last because nothing else depends on them.

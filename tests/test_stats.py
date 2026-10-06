@@ -220,16 +220,27 @@ def test_a_constant_covariate_is_refused_beside_the_prepended_intercept():
     scores = np.column_stack([0.5 * covariate + rng.standard_normal(n), rng.standard_normal(n)])
     stratum = np.column_stack([np.full(n, 2.0), covariate])  # every subject the same sex, coded 2
     for terms in ([2], None):
-        with pytest.raises(ValueError, match="design column 0 is constant") as refused:
+        with pytest.raises(
+            ValueError, match=r"column 0 of the design \(column 1 of the"
+        ) as refused:
             local_test(scores, stratum, terms=terms)
     message = str(refused.value)
-    assert "duplicates the intercept prepended as column 0" in message
+    assert "as terms= counts with the intercept as column 0" in message
+    assert "duplicates the intercept" in message
     assert "pass add_intercept=False" in message and "drop it" in message
-    with pytest.raises(ValueError, match="design column 1 is constant"):
+    with pytest.raises(ValueError, match=r"column 1 of the design \(column 2 of the"):
         local_test(scores, np.column_stack([covariate, np.ones(n)]), groups=np.arange(n) // 2)
-    # the same sex coded 0 is refused as well, rather than passing where coded 1 would not
-    with pytest.raises(ValueError, match="design column 0 is all zeros.*drop it"):
-        local_test(scores, np.column_stack([np.zeros(n), covariate]), terms=[2])
+    # The same sex coded 0 cannot be an intercept, so it is kept and changes nothing,
+    # as a stratified run needs of a dummy for a level absent from the stratum; it
+    # cannot itself be tested.
+    zeros = np.column_stack([np.zeros(n), covariate])
+    np.testing.assert_allclose(
+        local_test(scores, zeros, terms=[2]).statistic,
+        local_test(scores, covariate).statistic,
+        rtol=1e-12,
+    )
+    with pytest.raises(ValueError, match="column 1 of the design matrix is all zeros"):
+        local_test(scores, zeros, terms=[1])
     # dropped, the covariate is column 1 whatever the data, as in a mixed cohort
     np.testing.assert_array_equal(_design_matrix(covariate, add_intercept=True)[:, 0], 1.0)
     assert local_test(scores, covariate).terms == (1,)
@@ -268,7 +279,7 @@ def test_a_design_with_its_own_intercept_matches_statsmodels_with_add_intercept_
     assert ours.statistic[0] == pytest.approx(theirs.tvalues[2] ** 2, rel=1e-9)
     assert ours.pvalue[0] == pytest.approx(theirs.pvalues[2], rel=1e-9)
     assert ours.pvalue[0] != pytest.approx(theirs.pvalues[1], rel=1e-3)  # not age's
-    with pytest.raises(ValueError, match="design column 0 is constant"):
+    with pytest.raises(ValueError, match=r"column 0 of the design \(column 1 of the"):
         local_test(scores, design, terms=[2], method="none")
 
 
@@ -491,17 +502,20 @@ def test_missing_family_labels_are_refused_rather_than_made_one_family():
 def test_a_column_of_zeros_is_not_mistaken_for_an_intercept():
     """Only a constant, nonzero column serves as the intercept; zeros carry no mean.
 
-    Beside the prepended intercept a column of zeros is refused, as no test
-    can use it; in a design that brings its own intercept it changes nothing,
-    and in one without it does not make one.
+    Beside the prepended intercept a column of zeros is kept and changes
+    nothing, but cannot be tested; in a design that brings its own intercept
+    it changes nothing either, and in one without it does not make one.
     """
     rng = np.random.default_rng(31)
     n = 40
     x = rng.standard_normal(n)
     scores = 0.5 * x[:, None] + rng.standard_normal((n, 3)) + 2.0  # a mean to absorb
-    with pytest.raises(ValueError, match="design column 1 is all zeros"):
-        local_test(scores, np.column_stack([x, np.zeros(n)]), terms=[1])
+    with pytest.raises(ValueError, match="column 2 of the design matrix is all zeros"):
+        local_test(scores, np.column_stack([x, np.zeros(n)]), terms=[2])
+    kept = local_test(scores, np.column_stack([x, np.zeros(n)]), terms=[1])
     plain = local_test(scores, x)
+    np.testing.assert_allclose(kept.statistic, plain.statistic, rtol=1e-12)
+    assert kept.residual_dof == plain.residual_dof and kept.coefficients[0, 2] == 0
     own = np.column_stack([np.ones(n), x, np.zeros(n)])
     with_zeros = local_test(scores, own, terms=[1], add_intercept=False)
     np.testing.assert_allclose(with_zeros.statistic, plain.statistic)
@@ -654,3 +668,53 @@ def test_the_default_terms_need_naming_when_the_intercept_is_only_implied():
     # Columns that do not reproduce a constant keep the old default.
     plain = local_test(scores, implied[:, [0, 3]], add_intercept=False)
     assert plain.terms == (0, 1)
+
+
+def test_a_missing_family_inside_a_plain_list_is_refused():
+    """NumPy makes np.nan in a list of strings the string 'nan'; the label is judged before that.
+
+    Until 6 October 2026 the list form slipped through and made the subjects
+    without a family one more family, 21 instead of 20, while the same labels
+    as an object array were refused.
+    """
+    rng = np.random.default_rng(42)
+    n = 80
+    covariate = rng.standard_normal(n)
+    scores = rng.standard_normal((n, 2))
+    labels = [f"family-{i // 4}" for i in range(n)]
+    labels[5] = np.nan
+    labels[9] = np.nan
+    assert np.asarray(labels).dtype.kind == "U"  # what NumPy alone would see: 'nan', a label
+    with pytest.raises(ValueError, match="groups= has 2 missing labels"):
+        local_test(scores, covariate, groups=labels)
+    one = list(labels)
+    one[5], one[9] = "family-1", None
+    with pytest.raises(ValueError, match="groups= has 1 missing label;"):
+        local_test(scores, covariate, groups=one)
+    labels[5], labels[9] = "family-alone-1", "family-alone-2"
+    assert local_test(scores, covariate, groups=labels).groups == 22
+
+
+def test_a_column_of_zeros_is_set_aside_by_the_clustered_test():
+    """With families as clusters too, a column of zeros changes nothing."""
+    rng = np.random.default_rng(43)
+    n = 90
+    covariate = rng.standard_normal(n)
+    scores = 0.3 * covariate[:, None] + rng.standard_normal((n, 2))
+    families = np.arange(n) // 3
+    plain = local_test(scores, covariate, groups=families)
+    zeros = local_test(
+        scores, np.column_stack([np.zeros(n), covariate]), terms=[2], groups=families
+    )
+    np.testing.assert_allclose(zeros.statistic, plain.statistic, rtol=1e-10)
+    np.testing.assert_allclose(zeros.pvalue, plain.pvalue, rtol=1e-10)
+
+
+def test_a_column_of_zeros_does_not_hide_an_implied_intercept():
+    """Zeros are constant but no intercept: the default terms still need naming."""
+    rng = np.random.default_rng(44)
+    n = 60
+    scores, implied, _ = _three_levels(n, rng)
+    with_zeros = np.column_stack([implied, np.zeros(n)])
+    with pytest.raises(ValueError, match="combine into one"):
+        local_test(scores, with_zeros, add_intercept=False)

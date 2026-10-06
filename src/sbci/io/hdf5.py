@@ -53,26 +53,30 @@ ENDPOINTS = spec.ENDPOINTS_GROUP
 def _vertices_per_hemisphere(handle) -> int:
     """Half the file's grid, where its whole-grid vertex indices change hemisphere.
 
-    Counted from the file's own arrays rather than taken from the ico4 grid,
-    so the connectivity and the area have to agree on the count, and it has
-    to be even.
+    Counted from the file's own connectivity rather than taken from the ico4
+    grid. The area and mask are held to the same count where a file is
+    loaded or validated, which names a mismatch for what it is; judged here,
+    an area of the wrong length was reported as a fault of the endpoints.
     """
-    n_area = int(handle[AREA].size)
     try:
         n = grid.n_from_condensed(int(handle[CONNECTIVITY].size))
     except ValueError as exc:
         raise InvalidFileError(f"/{CONNECTIVITY}: {exc}") from exc
-    if n != n_area:
-        raise InvalidFileError(
-            f"/{ENDPOINTS} cannot be split into hemispheres: the connectivity is for {n} "
-            f"vertices but the area for {n_area}"
-        )
     if n % 2:
         raise InvalidFileError(
             f"/{ENDPOINTS} cannot be split into hemispheres: the grid has {n} vertices, "
             "an odd number"
         )
     return n // 2
+
+
+def faces_per_hemisphere(n_per_hemi: int) -> int:
+    """Triangles in one hemisphere's closed spherical mesh: ``2 V - 4``, 5120 for ico4's 2562.
+
+    Euler's formula for a closed triangulated sphere. The global triangle
+    indices are split here, so a file on another grid reads back as written.
+    """
+    return 2 * int(n_per_hemi) - 4
 
 
 def _read_endpoints(handle) -> Any:
@@ -109,7 +113,7 @@ def _read_endpoints(handle) -> Any:
             vertex_in=np.asarray(group["vertex_in"][()]),
             vertex_out=np.asarray(group["vertex_out"][()]),
             n_per_hemi=n_per_hemi,
-            n_faces_per_hemi=spec.N_FACES_PER_HEMI,
+            n_faces_per_hemi=faces_per_hemisphere(n_per_hemi),
             **optional,
         )
     except ValueError as exc:
@@ -135,7 +139,7 @@ def _write_endpoints(handle, endpoints, opts, n_vertices: int) -> None:
     if not endpoints.has_positions:
         return
 
-    faces = spec.N_FACES_PER_HEMI
+    faces = faces_per_hemisphere(endpoints.n_per_hemi)
     offset = type(endpoints).global_hemisphere_offset
     group.create_dataset(
         "triangle_in",

@@ -44,14 +44,21 @@ two short vectors agree by chance.
 
 
 def _nonconstant(matrix: np.ndarray) -> np.ndarray:
-    """Columns that are not constant down their length.
+    """Columns that are not constant down their length, ``NaN`` entries aside.
 
-    Mirrors the reference's ``~all(~diff(x))``: an exact equality test, not a
-    tolerance.
+    Mirrors the reference's ``~all(~diff(x))``, an exact equality test, on a
+    column without ``NaN``. A ``NaN`` is left out of the comparison rather than
+    taken for a change: the undefined diagonal of a one-vertex region, as
+    ``to_atlas(how="mean")`` gives it, made a region with no SC look varying,
+    and global coupling, which keeps the diagonal, then kept it in every other
+    region's comparison.
     """
     if matrix.shape[0] < 2:
         return np.zeros(matrix.shape[1], dtype=bool)
-    return ~np.all(np.diff(matrix, axis=0) == 0, axis=0)
+    present = ~np.isnan(matrix)
+    high = np.where(present, matrix, -np.inf).max(axis=0)
+    low = np.where(present, matrix, np.inf).min(axis=0)
+    return high > low
 
 
 def _nan_throughout(matrix: np.ndarray) -> np.ndarray:

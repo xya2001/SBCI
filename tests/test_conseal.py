@@ -1063,6 +1063,54 @@ def test_inverting_a_rotated_warp_inverts_its_rigid_part(bundled_left):
     assert degrees_off(inverse.apply(warp.vertices), grid.vertices).max() < 0.02
 
 
+def test_inverting_twice_gives_back_the_warp_bit_for_bit(bundled_left):
+    """The inverse holds the same parts in the other order, so nothing is interpolated.
+
+    Until 6 October 2026 the field was carried to the rotated frame by
+    interpolation, which changed it by 0.1% over a double inversion on ico4
+    and 0.4% on ico3 (2.8% in the fourth review's case).
+    """
+    from scipy.spatial.transform import Rotation
+
+    grid = bundled_left
+    warp = StationaryWarp(grid, viscosity=0.0).rotate(rotation_about_x(150.0))
+    small = Rotation.from_rotvec(np.radians(5.0) * np.array([0.0, 0.6, 0.8])).as_matrix()
+    assert warp.compose(rotational_velocity(warp, small))
+    twice = warp.copy().invert().invert()
+    np.testing.assert_array_equal(twice.velocity, warp.velocity)
+    np.testing.assert_array_equal(twice.rigid, warp.rigid)
+    np.testing.assert_array_equal(twice.vertices, warp.vertices)
+    once = warp.copy().invert()  # the flow of -v, then R': computed, not interpolated
+    expected = warp.exponential(-warp.velocity) @ warp.rigid
+    np.testing.assert_allclose(once.vertices, expected / np.linalg.norm(expected, axis=1)[:, None])
+
+
+def test_assigning_a_rotation_to_rigid_moves_the_warp(bundled_left):
+    """``warp.rigid = R`` keeps the field and re-flows; it used to change nothing."""
+    from scipy.spatial.transform import Rotation
+
+    grid = bundled_left
+    turn = rotation_about_x(30.0)
+    assigned = StationaryWarp(grid, viscosity=0.0)
+    assigned.rigid = turn
+    np.testing.assert_allclose(
+        assigned.vertices, StationaryWarp(grid, viscosity=0.0).rotate(turn).vertices, atol=1e-12
+    )
+    small = Rotation.from_rotvec(np.radians(3.0) * np.array([0.0, 1.0, 0.0])).as_matrix()
+    deformed = StationaryWarp(grid, viscosity=0.0)
+    assert deformed.compose(rotational_velocity(deformed, small))
+    field = deformed.velocity.copy()
+    deformed.rigid = turn
+    np.testing.assert_array_equal(deformed.velocity, field)  # kept, unlike rotate()
+    assert degrees_off(deformed.vertices, grid.vertices @ (small @ turn).T).max() < 0.02
+    with pytest.raises(ValueError, match="3 x 3 rotation"):
+        deformed.rigid = 2 * np.eye(3)
+    with pytest.raises(ValueError, match="3 x 3 rotation"):
+        deformed.rigid = np.diag([1.0, 1.0, -1.0])  # a reflection
+    with pytest.raises(ValueError):
+        deformed.rigid[0, 0] = 2.0  # read-only: an edit in place would change nothing
+
+
 def test_the_rigid_search_leaves_its_rotation_out_of_the_field(grid, connectome, kernel):
     k, dk = kernel
     rotation = rotation_about_x(14.0)

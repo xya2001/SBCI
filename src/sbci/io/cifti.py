@@ -206,8 +206,9 @@ def companion_stem(name: str) -> str:
     >>> companion_stem("sub-01_fc.dconn.nii.gz")
     'sub-01_fc'
     """
+    lowered = name.lower()  # as nibabel writes them, whatever the case
     for suffix in _SUFFIXES:
-        if name.endswith(suffix):
+        if lowered.endswith(suffix):
             return name[: -len(suffix)]
     return name
 
@@ -234,7 +235,7 @@ def write_cifti(path: str | Path, connectome: Any, block: int = 8192) -> Path:
     from nibabel import cifti2
 
     path = Path(path)
-    if not path.name.endswith(".dconn.nii"):
+    if not path.name.lower().endswith(".dconn.nii"):
         raise ValueError(
             f"{path.name!r} does not end in .dconn.nii, the name of a CIFTI dense connectome; "
             "CIFTI is written uncompressed, so not .dconn.nii.gz either"

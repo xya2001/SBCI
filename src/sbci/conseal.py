@@ -74,8 +74,10 @@ measurements.
    step of 0.1 and a threshold of 1e-6 as the paper states, differentiates
    ``Q`` by ENCORE's central differences instead of the analytic kernel
    derivative, and composes warps directly rather than through a stationary
-   velocity field. This module ports the public code; ``viscosity=0`` and
-   ``step_clamp=inf`` recover the fork's update rule.
+   velocity field. This module ports the public code. ``viscosity=0`` and
+   ``step_clamp=inf`` remove the two regularizations the fork does without,
+   but not its other differences: the gradient stays the analytic one and
+   the warp a stationary velocity field.
 9. ``get_template`` sizes the cohort with ``size(Fs, 1)``, so a row cell
    array silently registers one subject, and it takes ``acos`` of an inner
    product that rounding can push past one, which MATLAB returns complex.
@@ -129,8 +131,14 @@ measurements.
     transport before the cotangent weights combine them: it does not depend
     on the frame, keeps 97.6% of a rotation about any axis, and within 10
     degrees of the coordinate equator, where the frame is nearly parallel,
-    agrees with the reference's smoothing of a rotation to 1e-4 of the field
-    (the projected 3-vectors below differed there by 3e-4). Smoothing the
+    differs from the reference's smoothing of a rotation, after one
+    smoothing, by at most 1.7e-4 of the field for a rotation about the
+    coordinate axis and 1.3e-3 to 1.5e-3 about others (2.8e-3 to 2.2e-2
+    after 100). Nearly all of that is the reference's cotangent layout (item
+    12): smoothing the frame components with the corrected weights differs
+    from the connection Laplacian there by 1.3e-5 to 8.3e-5
+    (``tests/reference/fourth_list_probe.py``; until 6 October 2026 this
+    said 1e-4, which holds about the coordinate axis only). Smoothing the
     3-vectors per Cartesian component, the port's first correction, projects
     the neighbours' vectors onto the tangent plane instead, which drops a
     curvature term: on the unit sphere it adds the field itself to the
@@ -149,9 +157,11 @@ measurements.
     smoothing; 142.6 with the projected 3-vectors it replaced), which the
     gradient has to keep restoring. By default the rotation is held exactly,
     outside the field, and the warp is the field's flow after it; the field
-    carries only the deformation. ``strict_upstream=True`` keeps the
-    reference's. Found by the second review of 5 October 2026, which measured
-    the first effect.
+    carries only the deformation. Its inverse is the same two parts in the
+    other order -- the flow of the negated field, then the inverse rotation --
+    so ``invert`` is exact: inverting twice gives back the warp, bit for bit.
+    ``strict_upstream=True`` keeps the reference's. Found by the second review
+    of 5 October 2026, which measured the first effect.
 """
 
 from __future__ import annotations
@@ -795,7 +805,8 @@ class StationaryWarp:
         assumes; an inward mesh would refuse every step.
         """
         self.strict_upstream = bool(strict_upstream)
-        self.rigid = np.eye(3)
+        self._rigid = np.eye(3)
+        self._rigid_last = False  # the rotation acts before the flow, or after it once inverted
         self._rigid_query = None  # weights, indices and the rotated vertices, once rigid is set
         self.grid = grid
         self.e1, self.e2 = grid.e1, grid.e2
@@ -840,7 +851,7 @@ class StationaryWarp:
         clone.__dict__.update(self.__dict__)
         clone.velocity = self.velocity.copy()
         clone.vertices = self.vertices.copy()
-        clone.rigid = self.rigid.copy()
+        clone._rigid = self._rigid.copy()
         return clone
 
     def exponential(self, velocity=None) -> np.ndarray:
@@ -872,6 +883,8 @@ class StationaryWarp:
         """
         if self._rigid_query is None:
             return self.exponential(velocity)
+        if self._rigid_last:  # an inverted warp: the flow first, then the rotation, exactly
+            return normalize_rows(self.exponential(velocity) @ self._rigid.T)
         weights, indices, rotated = self._rigid_query
         velocity = self.velocity if velocity is None else np.asarray(velocity, dtype=np.float64)
         if not np.any(velocity):
@@ -885,13 +898,38 @@ class StationaryWarp:
         step = (weights[:, :, None] * moved).sum(axis=1)
         return normalize_rows(sphere_exp_map(rotated, step))
 
+    @property
+    def rigid(self) -> np.ndarray:
+        """The warp's rigid rotation, the identity when it has none.
+
+        Read-only as an array. Assigning a rotation to it keeps the velocity
+        field and moves the vertices to match, where :meth:`rotate` starts the
+        warp afresh at the rotation. (Until 6 October 2026 it was a plain
+        attribute, and assigning to it changed nothing.)
+        """
+        view = self._rigid.view()
+        view.setflags(write=False)
+        return view
+
+    @rigid.setter
+    def rigid(self, rotation) -> None:
+        rotation = np.asarray(rotation, dtype=np.float64)
+        if (
+            rotation.shape != (3, 3)
+            or not np.allclose(rotation @ rotation.T, np.eye(3), atol=1e-9)
+            or np.linalg.det(rotation) <= 0
+        ):
+            raise ValueError("rigid takes a 3 x 3 rotation: orthonormal, with determinant +1")
+        self._set_rigid(rotation)
+        self.vertices = self._images()
+
     def _set_rigid(self, rotation) -> None:
         """Hold ``rotation`` as the rigid part, and where it sends the base vertices."""
-        self.rigid = np.asarray(rotation, dtype=np.float64).copy()
-        if np.array_equal(self.rigid, np.eye(3)):
+        self._rigid = np.asarray(rotation, dtype=np.float64).copy()
+        if np.array_equal(self._rigid, np.eye(3)):
             self._rigid_query = None
             return
-        rotated = normalize_rows(self.base @ self.rigid.T)
+        rotated = normalize_rows(self.base @ self._rigid.T)
         weights, indices, _ = self._query.query_faces(rotated)
         self._rigid_query = (weights, indices, rotated)
 
@@ -943,27 +981,21 @@ class StationaryWarp:
         return np.stack([(ambient * self.e1).sum(1), (ambient * self.e2).sum(1)], axis=1)
 
     def invert(self) -> StationaryWarp:
-        """Invert the warp in place: negate the velocity field and re-flow (``invert``).
+        """Invert the warp in place, exactly: negate the velocity field and re-flow (``invert``).
 
-        A rigid part ``R`` inverts too. The inverse of the flow of ``v`` after
-        ``R`` is ``R'`` followed by the flow of ``-R' v(R y)``, the field
-        carried to the rotated frame; it is read at the rotated vertices by the
-        same transported interpolation as :meth:`_images`.
+        A rigid part ``R`` inverts too. The warp is the flow of ``v`` after
+        ``R``; its inverse is ``R'`` after the flow of ``-v``, the same parts
+        in the other order, which the warp records, so nothing is
+        interpolated and inverting twice gives back the warp, bit for bit.
+        (Until 6 October 2026 the field was carried to the rotated frame by
+        interpolation instead, which changed it over a double inversion by
+        0.1% of its size on ico4 and 0.4% on ico3 in
+        ``tests/reference/fourth_list_probe.py``, 2.8% in the review's case.)
         """
-        if self._rigid_query is None:
-            self.velocity = -self.velocity
-            self.vertices = self.exponential()
-            return self
-        weights, indices, rotated = self._rigid_query
-        ambient = self.e1 * self.velocity[:, :1] + self.e2 * self.velocity[:, 1:]
-        moved = _transport(
-            ambient[indices].reshape(-1, 3),
-            self.base[indices].reshape(-1, 3),
-            np.repeat(rotated, 3, axis=0),
-        ).reshape(self.n_vertices, 3, 3)
-        pulled = -((weights[:, :, None] * moved).sum(axis=1) @ self.rigid)  # -R' v(R y), as rows
-        self._set_rigid(self.rigid.T)
-        self.velocity = np.stack([(pulled * self.e1).sum(1), (pulled * self.e2).sum(1)], axis=1)
+        self.velocity = -self.velocity
+        if self._rigid_query is not None:
+            self._rigid_last = not self._rigid_last
+            self._set_rigid(self._rigid.T)
         self.vertices = self._images()
         return self
 
@@ -982,6 +1014,7 @@ class StationaryWarp:
 
         # The nearest proper rotation, whatever rounding the caller's matrix carries.
         rotation = Rotation.from_matrix(np.asarray(rotation, dtype=np.float64))
+        self._rigid_last = False
         if not self.strict_upstream:
             self._set_rigid(rotation.as_matrix())
             self.velocity = np.zeros_like(self.velocity)
@@ -1275,7 +1308,9 @@ class ConSEAL:
         Gradient step, iteration cap, stopping change in cost, largest
         per-vertex displacement per step, and Laplacian smoothing of the
         velocity field. The defaults are the public code's; ``step_clamp=inf``
-        and ``viscosity=0`` give the author's fork's update.
+        and ``viscosity=0`` drop its two regularizations, which the author's
+        fork does without (its other differences remain; module docstring,
+        item 8).
     area_weighted
         Weight the cost and its gradient with the Voronoi areas, as the
         paper's integral does. Off by default to match the reference (item 5).
@@ -1782,8 +1817,8 @@ def endpoints_align(
                 rh_vertices=rh_warp.vertices,
                 rh_velocity=rh_warp.velocity,
                 rh_jacobian=rh_warp.jacobian,
-                lh_rigid=lh_warp.rigid,
-                rh_rigid=rh_warp.rigid,
+                lh_rigid=lh_warp.rigid.copy(),
+                rh_rigid=rh_warp.rigid.copy(),
             )
         )
         result.connectomes.append(warped)

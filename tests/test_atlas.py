@@ -189,3 +189,24 @@ def test_an_atlas_does_not_freeze_the_callers_label_array():
     Atlas(name="mine", labels=labels, names=())
     labels[0] = 0  # still writable
     assert labels.flags.writeable
+
+
+def test_no_hemisphere_keeps_its_unassigned_cortex_as_a_region():
+    """The PALS files call the right hemisphere's unassigned cortex RH_GYRUS, the left's LH_???.
+
+    Kept as a region, it labelled the whole right hemisphere in OrbitoFrontal
+    against 8% of the left (fourth review); it is background now, as LH_??? is.
+    """
+    import re
+
+    import numpy as np
+
+    from sbci.atlas import list_atlases, load_atlas
+
+    for name in list_atlases():
+        assert not any(
+            re.fullmatch(r"[LR]H_GYRUS", n, re.IGNORECASE) for n in load_atlas(name).names
+        )
+    labels = np.asarray(load_atlas("PALS_B12_OrbitoFrontal").labels)
+    left, right = int((labels[:2562] != 0).sum()), int((labels[2562:] != 0).sum())
+    assert 0.5 < left / right < 2 and left + right < 0.1 * labels.size

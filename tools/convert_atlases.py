@@ -56,8 +56,13 @@ N_VERTICES = 5124
 
 # Names meaning "this vertex belongs to no region". Matched case-insensitively
 # against the region name; every match is folded into label 0. The PALS-B12
-# atlases spell the wall ``MEDIAL.WALL``, with a dot.
-BACKGROUND = re.compile(r"(missing|unknown|background|medial[_ .]?wall|\?\?\?)", re.IGNORECASE)
+# atlases spell the wall ``MEDIAL.WALL``, with a dot, and the rest of the
+# unassigned cortex ``LH_???`` on the left but ``RH_GYRUS`` on the right -- in
+# OrbitoFrontal the same remainder, 2,359 vertices on the left and 2,347 on
+# the right, which as a region labelled the whole right hemisphere.
+BACKGROUND = re.compile(
+    r"(missing|unknown|background|medial[_ .]?wall|\?\?\?|^[LR]H_GYRUS$)", re.IGNORECASE
+)
 
 
 def _decode(names) -> list[str]:
@@ -122,8 +127,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--min-coverage",
         type=float,
-        default=0.10,
-        help="skip atlases covering less of the surface than this",
+        default=0.05,
+        help="skip atlases covering less of the surface than this (PALS_B12_OrbitoFrontal "
+        "covers 8.2%%, oasis.chubs 1.3%%)",
     )
     args = parser.parse_args(argv)
 

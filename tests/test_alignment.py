@@ -1240,3 +1240,18 @@ def test_a_density_with_nothing_off_its_diagonal_is_refused(pair):
     root = encore.root(one_pair)
     assert np.isfinite(root).all()
     assert (root**2 * encore.area_product).sum() == pytest.approx(1.0)
+
+
+def test_a_coarse_grid_is_calibrated_however_far_its_identity_is_from_one():
+    """On the 12-vertex icosahedron the scheme reads 0.46 for the identity: the mesh's chord error.
+
+    Clear of the axis it is divided out like any other value, so the identity
+    reads exactly 1. Until 6 October 2026 a value below one half was left
+    alone (fourth review), and this grid's identity Jacobian read 0.46.
+    """
+    vertices, faces = icosphere(0)
+    grid = SphericalGrid(vertices, faces, order=1)
+    assert grid.n_vertices == 12 and np.sin(grid.theta).min() > AXIS_CLEARANCE
+    warp = SphericalWarp(grid)
+    assert warp._raw_jacobian().min() < 0.5
+    np.testing.assert_allclose(warp._compute_jacobian(), 1.0, rtol=1e-12)

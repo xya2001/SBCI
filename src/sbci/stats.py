@@ -143,21 +143,17 @@ def _design_matrix(design, add_intercept):
     # the covariates hold. A constant column beside it is either the caller's
     # own intercept or a covariate that does not vary in these subjects (one
     # sex), and taking it silently for either misnumbers the columns of whoever
-    # meant the other: it is refused, and with it a column of zeros, the other
-    # coding of one sex.
+    # meant the other: it is refused. A column of zeros can be neither, and is
+    # kept: it fits as nothing and counts for nothing in the degrees of
+    # freedom, which is what a dummy for a level absent from a stratum should do.
     if design.shape[0]:
-        zeros = ~design.any(axis=0)
-        constant = np.flatnonzero(_constant_columns(design) | zeros)
+        constant = np.flatnonzero(_constant_columns(design))
         if constant.size:
             j = int(constant[0])
-            if zeros[j]:
-                raise ValueError(
-                    f"design column {j} is all zeros, which no test can use: if it is a "
-                    "covariate that does not vary in these subjects (one sex, say), drop it"
-                )
             raise ValueError(
-                f"design column {j} is constant, so it duplicates the intercept prepended as "
-                "column 0: if it is your own intercept, pass add_intercept=False; if it is a "
+                f"column {j} of the design (column {j + 1} of the design matrix, as terms= "
+                "counts with the intercept as column 0) is constant, so it duplicates the "
+                "intercept: if it is your own intercept, pass add_intercept=False; if it is a "
                 "covariate that does not vary in these subjects (one sex, say), drop it"
             )
     return np.column_stack([np.ones(design.shape[0]), design])
@@ -288,8 +284,9 @@ def local_test(
         of your own, as statsmodels' ``add_constant`` makes one, or a
         covariate that does not vary in these subjects (sex in a single-sex
         subset), and taking it for either would misnumber the columns of
-        whoever meant the other. A column of zeros, which no test can use, is
-        refused with it.
+        whoever meant the other. A column of zeros is kept -- it fits as
+        nothing, as a dummy for a level absent from a stratum should -- but
+        cannot be tested.
     terms
         Which design columns to test, as integer indices into the final design
         matrix, each at most once. Defaults to every non-constant column except
@@ -351,8 +348,9 @@ def local_test(
         raise ValueError(f"{scores.shape[0]} subjects in scores but {n_subjects} in the design")
 
     if terms is None:
-        intercept = [i for i in range(n_terms) if np.all(matrix[:, i] == matrix[0, i])]
-        tested = [i for i in range(n_terms) if i not in intercept]
+        constant = [i for i in range(n_terms) if np.all(matrix[:, i] == matrix[0, i])]
+        intercept = [i for i in constant if matrix[0, i] != 0]  # zeros are no intercept
+        tested = [i for i in range(n_terms) if i not in constant]
         if not tested:
             raise ValueError("no terms to test; the design is an intercept alone")
         if not intercept and _spans_constant(matrix):
@@ -380,13 +378,22 @@ def local_test(
                 f"terms {outside} are outside the design's {n_terms} columns (column 0 is "
                 "the intercept when one is added)"
             )
+        empty = [t for t in tested if not matrix[:, t].any()]
+        if empty:
+            raise ValueError(
+                f"column {empty[0]} of the design matrix is all zeros in these subjects, so "
+                "there is nothing in it to test"
+            )
 
     codes = None
     if groups is not None:
+        # Judged on the labels as given: NumPy would turn a NaN in a list of
+        # strings into the string "nan", one more family, before it could be seen.
+        given = np.asarray(groups, dtype=object).ravel()
         labels = np.asarray(groups).ravel()
         if labels.size != n_subjects:
             raise ValueError(f"{labels.size} group labels for {n_subjects} subjects")
-        missing = int(_missing_labels(labels).sum())
+        missing = int(_missing_labels(given).sum())
         if missing:
             raise ValueError(
                 f"groups= has {missing} missing label{'s' if missing > 1 else ''}; give every "
@@ -472,13 +479,22 @@ def local_test(
     denominator_dof = residual_dof
     if codes is not None:
         n_groups = int(codes.max()) + 1
-        if rank_full < n_terms:
+        # A column of zeros fits as nothing; the sandwich is formed without it.
+        present = matrix.any(axis=0)
+        if rank_full < int(present.sum()):
             raise ValueError(
                 "groups= needs a design of full column rank; a constant covariate duplicates "
                 "the intercept, and dummy codes for every level of a factor do too"
             )
+        position = np.cumsum(present) - 1
         statistic = _clustered_wald(
-            matrix, scores, full_beta, codes, n_groups, tested, np.isfinite(statistic)
+            matrix[:, present],
+            scores,
+            full_beta[present],
+            codes,
+            n_groups,
+            [int(position[t]) for t in tested],
+            np.isfinite(statistic),
         )
         denominator_dof = n_groups - 1
 

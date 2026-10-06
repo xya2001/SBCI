@@ -298,3 +298,9 @@ def test_shapes_and_names_are_checked(tmp_path):
     # One map a column, as Reduction.basis holds its components.
     (path,) = save_map(np.zeros((N, 2)), tmp_path / "basis.csv", mask=None)
     assert _read_table(path)[0][-2:] == ["value_1", "value_2"]
+
+
+def test_an_uppercase_ending_names_the_form_too(tmp_path):
+    (path,) = save_map(np.ones(N), tmp_path / "ONES.CSV", mask=None)
+    header, rows = _read_table(path)
+    assert header[-1] == "value" and len(rows) == N

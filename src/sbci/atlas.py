@@ -121,8 +121,9 @@ class Atlas:
         """Fraction of vertices assigned to some region.
 
         Well under 1.0 even for whole-cortex atlases, because the medial wall
-        carries no region. Around 0.55 for a partial atlas such as
-        ``PALS_B12_OrbitoFrontal``.
+        carries no region. About 0.08 for a partial atlas such as
+        ``PALS_B12_OrbitoFrontal``, which labels the orbital and medial
+        prefrontal cortex alone.
         """
         return float((np.asarray(self.labels) != 0).mean())
 

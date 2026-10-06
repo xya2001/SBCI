@@ -422,3 +422,45 @@ def test_connectomes_on_different_grids_are_refused(connectome):
     )
     with pytest.raises(ValueError, match="different grids"):
         connectome.coupling(smaller)
+
+
+def test_an_empty_one_vertex_region_changes_no_other_region():
+    """Its undefined diagonal is no variation: a region with no SC is dropped, NaN and all.
+
+    ``to_atlas(how="mean")`` leaves the diagonal of a one-vertex region NaN.
+    Global coupling keeps the diagonal, and the constancy test took the NaN
+    for a change, so a region with no SC stayed in every other region's
+    comparison (fourth review). Discrete coupling, which clears the diagonal,
+    never did.
+    """
+    import numpy as np
+
+    from sbci.coupling import discrete_coupling, global_coupling
+
+    rng = np.random.default_rng(12)
+    k = 7
+    sc = rng.random((10, 10))
+    sc = sc + sc.T
+    fc = np.tanh(rng.standard_normal((10, 10)))
+    fc = (fc + fc.T) / 2
+    sc[k, :] = sc[:, k] = 0.0
+    sc[k, k] = fc[k, k] = np.nan
+    keep = np.arange(10) != k
+    block = np.ix_(keep, keep)
+    for form in (global_coupling, discrete_coupling):
+        with_it = form(sc, fc)
+        np.testing.assert_allclose(with_it[keep], form(sc[block], fc[block]), rtol=1e-12)
+        assert np.isnan(with_it[k])
+
+
+def test_the_constancy_test_is_the_references_on_a_matrix_without_nan():
+    """``~all(~diff(x))`` and the NaN-aware test agree wherever there is no NaN."""
+    import numpy as np
+
+    from sbci.coupling import _nonconstant
+
+    rng = np.random.default_rng(13)
+    matrix = rng.integers(0, 3, size=(6, 40)).astype(float)
+    matrix[:, :8] = matrix[0, :8]  # constant columns
+    reference = ~np.all(np.diff(matrix, axis=0) == 0, axis=0)
+    np.testing.assert_array_equal(_nonconstant(matrix), reference)

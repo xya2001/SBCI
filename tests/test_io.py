@@ -68,7 +68,7 @@ def test_reader_reports_a_missing_dataset(tmp_path, connectome):
 
 @pytest.fixture
 def paired(sc_metadata):
-    """A six-vertex SC connectome, three vertices per hemisphere, for the endpoints below.
+    """A twelve-vertex SC connectome, six vertices per hemisphere, for the endpoints below.
 
     The file stores whole-grid indices and the reader splits them at half the
     file's own grid, so endpoints need a connectome with twice their vertices
@@ -78,25 +78,26 @@ def paired(sc_metadata):
     from sbci.grid import to_condensed
 
     rng = np.random.default_rng(1)
-    matrix = rng.random((6, 6))
+    matrix = rng.random((12, 12))
     matrix = matrix + matrix.T
     np.fill_diagonal(matrix, 0.0)
-    area = np.full(6, 2.0)
+    area = np.full(12, 2.0)
     matrix /= area @ matrix @ area
     return ContinuousConnectome(
         data=to_condensed(matrix).astype(np.float32),
         area=area,
-        mask=np.ones(6, dtype=bool),
+        mask=np.ones(12, dtype=bool),
         metadata=sc_metadata,
     )
 
 
 @pytest.fixture
 def endpoints():
-    """Four streamlines with continuous positions, on a toy grid of three vertices a hemisphere.
+    """Four streamlines with continuous positions, on an octahedron a hemisphere.
 
-    Triangles are split at the format's 5120 faces per hemisphere, the ico4
-    grid's, so their indices are any below that.
+    Six vertices and eight triangles a hemisphere: the file splits triangle
+    indices at ``2 V - 4``, the faces of a closed spherical mesh, as it splits
+    vertex indices at half the file's grid.
     """
     from sbci.smoothing import Endpoints
 
@@ -105,8 +106,8 @@ def endpoints():
         surf_out=np.array([0, 1, 1, 0], dtype=np.int8),
         vtx_in=np.array([0, 2, 1, 2]),
         vtx_out=np.array([1, 0, 2, 1]),
-        n_per_hemi=3,
-        tri_in=np.array([0, 5, 9, 2]),
+        n_per_hemi=6,
+        tri_in=np.array([0, 5, 7, 2]),
         tri_out=np.array([1, 3, 7, 4]),
         bary_in=np.array([[1.0, 0.0, 0.0], [0.2, 0.3, 0.5], [0.1, 0.1, 0.8], [0.4, 0.4, 0.2]]),
         bary_out=np.array([[0.0, 1.0, 0.0], [0.5, 0.25, 0.25], [0.3, 0.3, 0.4], [0.6, 0.2, 0.2]]),
@@ -221,23 +222,38 @@ def test_the_hemisphere_comes_from_the_index(tmp_path, paired, endpoints):
 
 
 def test_endpoints_are_split_at_half_the_files_own_grid(tmp_path, paired, endpoints):
-    """Not at the ico4 grid's 2562: three vertices a hemisphere come back as three.
+    """Not at the ico4 grid's 2562 and 5120: six vertices a hemisphere come back as six.
 
-    Split at 2562, every endpoint of the six-vertex file read as the left
-    hemisphere's.
+    Split at 2562, every endpoint of the twelve-vertex file read as the left
+    hemisphere's; split at 5120 faces, every triangle did, and a right-hemisphere
+    triangle was out of range on reading.
     """
-    back = read_hdf5(_write(tmp_path, paired, endpoints=endpoints))["endpoints"]
-    assert back.n_per_hemi == 3
+    import h5py
+
+    path = _write(tmp_path, paired, endpoints=endpoints)
+    back = read_hdf5(path)["endpoints"]
+    assert back.n_per_hemi == 6
     np.testing.assert_array_equal(back.surf_in, endpoints.surf_in)
     np.testing.assert_array_equal(back.vtx_out, endpoints.vtx_out)
     np.testing.assert_array_equal(back.tri_in, endpoints.tri_in)
+    np.testing.assert_array_equal(back.tri_out, endpoints.tri_out)
+    with h5py.File(path, "r") as handle:
+        stored = np.asarray(handle["endpoints"]["triangle_in"][()])
+    np.testing.assert_array_equal(stored, endpoints.tri_in + 8 * endpoints.surf_in)
 
 
 def test_endpoints_on_a_grid_that_cannot_be_halved_are_refused(tmp_path, connectome, paired):
-    """An odd vertex count, or connectivity and area that disagree on it, is refused plainly."""
+    """An odd vertex count is refused plainly; an area of the wrong length is named as such.
+
+    The endpoints are split at the connectivity's own count, so an area that
+    disagrees is reported as the area's fault by ``load`` and ``sbci validate``,
+    not as one of the endpoints.
+    """
     import h5py
 
+    from sbci.connectome import ContinuousConnectome
     from sbci.errors import InvalidFileError
+    from sbci.validate import validate_file
 
     odd = connectome.save(tmp_path / "sub-odd_sc.h5")  # five vertices
     with h5py.File(odd, "a") as handle:
@@ -250,12 +266,16 @@ def test_endpoints_on_a_grid_that_cannot_be_halved_are_refused(tmp_path, connect
     disagreeing = paired.save(tmp_path / "sub-pair_sc.h5")
     with h5py.File(disagreeing, "a") as handle:
         group = handle.create_group("endpoints")
-        group.create_dataset("vertex_in", data=np.array([0, 4], dtype=np.int32))
-        group.create_dataset("vertex_out", data=np.array([1, 5], dtype=np.int32))
+        group.create_dataset("vertex_in", data=np.array([0, 7], dtype=np.int32))
+        group.create_dataset("vertex_out", data=np.array([1, 11], dtype=np.int32))
         del handle["area"]
         handle.create_dataset("area", data=np.full(8, 2.0))
-    with pytest.raises(InvalidFileError, match="connectivity is for 6 vertices but the area for 8"):
-        read_hdf5(disagreeing)
+    assert read_hdf5(disagreeing)["endpoints"].n_per_hemi == 6
+    failed = [str(check) for check in validate_file(disagreeing) if not check.passed]
+    assert any("area has 8" in line for line in failed)
+    assert not any("endpoints" in line for line in failed)
+    with pytest.raises(InvalidFileError, match="area has 8"):
+        ContinuousConnectome.load(disagreeing)
 
 
 def test_endpoints_beyond_the_files_grid_are_refused(tmp_path, paired, endpoints):
@@ -265,8 +285,8 @@ def test_endpoints_beyond_the_files_grid_are_refused(tmp_path, paired, endpoints
 
     path = _write(tmp_path, paired, endpoints=endpoints)
     with h5py.File(path, "a") as handle:
-        handle["endpoints"]["vertex_in"][0] = 6
-    with pytest.raises(InvalidFileError, match="out of range for a 6-vertex grid"):
+        handle["endpoints"]["vertex_in"][0] = 12
+    with pytest.raises(InvalidFileError, match="out of range for a 12-vertex grid"):
         read_hdf5(path)
 
 
@@ -274,7 +294,7 @@ def test_endpoints_on_another_grid_are_not_written(tmp_path, connectome, paired,
     """The writer refuses what the reader would split elsewhere, or refuse."""
     from sbci.smoothing import Endpoints
 
-    with pytest.raises(ValueError, match="grid of 6 vertices but the connectome on one of 5"):
+    with pytest.raises(ValueError, match="grid of 12 vertices but the connectome on one of 5"):
         _write(tmp_path, connectome, endpoints=endpoints)
     ico4 = Endpoints(
         surf_in=endpoints.surf_in,
@@ -282,7 +302,7 @@ def test_endpoints_on_another_grid_are_not_written(tmp_path, connectome, paired,
         vtx_in=endpoints.vtx_in,
         vtx_out=endpoints.vtx_out,
     )
-    with pytest.raises(ValueError, match="grid of 5124 vertices but the connectome on one of 6"):
+    with pytest.raises(ValueError, match="grid of 5124 vertices but the connectome on one of 12"):
         _write(tmp_path, paired, endpoints=ico4)
     assert not list(tmp_path.iterdir())
 

@@ -396,3 +396,19 @@ def test_the_sidecar_serializes_numpy_scalars_and_carries_the_exchange_keys():
     assert fields["streamline_count"] == 803_741
     assert fields["exchange_space"] == "fsLR" and fields["exchange_density"] == "32k"
     assert fields["exchange_vertex_areas"] == "sub-x_vertexarea.dscalar.nii"
+
+
+def test_an_uppercase_name_is_a_dense_connectome_name(tmp_path):
+    """The writer takes ``X.DCONN.NII`` as nibabel does, as it takes ``x.dconn.nii``.
+
+    It reaches the next check, the directory, rather than being refused for
+    its suffix (fourth review); its companions take the name without it.
+    """
+    import pytest
+
+    import sbci
+    from sbci.io.cifti import companion_stem, write_cifti
+
+    assert companion_stem("sub-01_SC.DCONN.NII") == "sub-01_SC"
+    with pytest.raises(OSError, match="cannot write to"):
+        write_cifti(tmp_path / "missing" / "SUB-01_SC.DCONN.NII", sbci.example())

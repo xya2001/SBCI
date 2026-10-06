@@ -736,14 +736,19 @@ class SphericalWarp:
     identity is computed once, at construction, and every Jacobian is
     divided by it: the identity gives exactly 1 and a small warp 1 plus its
     divergence. ``reference=True`` leaves the Jacobian uncalibrated, as the
-    reference computes it, for the MATLAB comparison. A vertex where the
-    identity's value is below one half is left as it is: on the coordinate
-    axis it is zero, and closer to the axis than about a step the central
-    difference straddles it, so the value measures the parametrization
-    rather than the mesh -- divided out, it would turn a rigid rotation's
-    Jacobian of 1 into 38 at 3e-6 rad from the axis. Nearer than
-    :data:`AXIS_CLEARANCE` the Jacobian is unreliable either way, which is
-    why :func:`align` refuses such a grid (:meth:`SphericalGrid.pole_vertices`).
+    reference computes it, for the MATLAB comparison. A vertex within
+    :data:`AXIS_CLEARANCE` of the coordinate axis is left as it is: on the
+    axis the value is zero, and closer to the axis than about a step the
+    central difference straddles it, so the value measures the
+    parametrization rather than the mesh -- divided out, it would turn a rigid
+    rotation's Jacobian of 1 into 38 at 3e-6 rad from the axis. That is why
+    :func:`align` refuses such a grid (:meth:`SphericalGrid.pole_vertices`).
+    Everywhere else the identity's value is divided out however far from one
+    it lies, since it is the mesh's chord error: 0.46 on the 12-vertex
+    icosahedron. (Until 6 October 2026 a value below one half was left alone,
+    which left so coarse a grid uncalibrated.) A vertex clear of the axis
+    where the scheme reads nothing positive for the identity is a degenerate
+    mesh, and is refused.
     """
 
     def __init__(self, grid: SphericalGrid, delta: float = DEFAULT_DELTA, reference: bool = False):
@@ -775,9 +780,17 @@ class SphericalWarp:
             )
         }
         # The scheme's own value on the identity, divided out of every Jacobian
-        # (class docstring); below one half, on or next to the axis, it is left alone.
+        # (class docstring) except within AXIS_CLEARANCE of the coordinate axis.
         identity = self._raw_jacobian()
-        self._calibration = np.where(identity >= 0.5, identity, 1.0)
+        clear = np.sin(grid.theta) >= AXIS_CLEARANCE
+        unmeasured = clear & ~(np.isfinite(identity) & (identity > 0))
+        if unmeasured.any():
+            j = int(np.flatnonzero(unmeasured)[0])
+            raise ValueError(
+                f"the Jacobian's central difference reads {identity[j]:.3g} for the identity "
+                f"at vertex {j}, so it cannot measure the mesh there: the grid is degenerate"
+            )
+        self._calibration = np.where(clear, identity, 1.0)
 
     def compose(self, displacement) -> SphericalWarp:
         """Compose with a further displacement given in the tangent basis."""

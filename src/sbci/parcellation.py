@@ -84,7 +84,7 @@ def parcellate(
     ``r`` at ``r (1 - sum_i a_i^2 / A_k^2)``, about 4% low for a
     Schaefer200-sized region on ico4. A region with a single vertex has no
     distinct pair, and its diagonal entry is ``NaN``; a region with no vertex
-    at this resolution (none carrying area: 45 of the 11,825 bundled regions
+    at this resolution (none carrying area: 45 of the 11,822 bundled regions
     have no cortical vertex on ico4) has no pair with anyone, and is ``NaN``
     along its whole row and column. Under ``"mass"`` both stay at zero. The
     legacy MATLAB routine loops only over ``i < j`` and leaves the region
