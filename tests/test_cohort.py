@@ -320,6 +320,40 @@ def test_sc_and_fc_from_different_visits_are_not_paired_silently(folder):
     assert crossed.report[1]["sc_session"] == "1" and crossed.report[1]["fc_session"] == "2"
 
 
+def test_a_session_mapping_names_every_modality(folder):
+    """{"sc": "1"} alone left FC free to come from any session, and sub-B's visits paired."""
+    root, add = folder
+    for name in (
+        "sub-A_ses-1_sc.h5",
+        "sub-A_ses-1_fc.h5",
+        "sub-B_ses-1_sc.h5",
+        "sub-B_ses-2_fc.h5",
+    ):
+        add(name)
+    with pytest.raises(ValueError, match="session= names sc but not fc: a modality left out"):
+        load_cohort(root, modalities=("sc", "fc"), session={"sc": "1"})
+    both = load_cohort(root, modalities=("sc", "fc"), session={"sc": "1", "fc": "1"})
+    assert both.subjects == ["sub-A"] and both.excluded == {"sub-B": "no fc file"}
+
+
+def test_none_in_a_session_mapping_takes_the_files_without_a_label(folder):
+    """The HCP's SC has no session and its FC one a day: {"sc": None, "fc": "REST1"} pairs them."""
+    root, add = folder
+    for name in (
+        "sub-A_sc.h5",
+        "sub-A_ses-REST1_fc.h5",
+        "sub-A_ses-REST2_fc.h5",
+        "sub-B_ses-1_sc.h5",
+        "sub-B_ses-REST1_fc.h5",
+    ):
+        add(name)
+    cohort = load_cohort(root, modalities=("sc", "fc"), session={"sc": None, "fc": "REST1"})
+    assert cohort.subjects == ["sub-A"] and cohort.excluded == {"sub-B": "no sc file"}
+    assert cohort.report[0]["sc_session"] is None and cohort.report[0]["fc_session"] == "REST1"
+    with pytest.raises(ValueError, match="session= names fc but not sc"):
+        load_cohort(root, modalities=("sc", "fc"), session={"fc": "REST1"})
+
+
 def test_a_session_label_matches_with_or_without_leading_zeros(folder):
     root, add = folder
     add("sub-01_ses-01_sc.h5")

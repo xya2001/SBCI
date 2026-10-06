@@ -1979,10 +1979,24 @@ for the 946: the endpoint groups are checked by their structure, as `load`
 checks it, since reading their values as well, which `validate=True` does,
 took six minutes.
 
+## 13. The sixth list, 6 October 2026 -- ERRORS IN A COVARIATE'S UNITS, AND A PARTIAL SESSION MAPPING
+
+Two findings, both high; each was checked with a probe first, and both hold.
+
+| # | Finding | Verdict | Fixed by |
+| --- | --- | --- | --- |
+| 1 | (high) `local_test`'s standard errors and intervals are wrong when a covariate is in large units | **confirmed**. The review's case, a raw streamline count near 1e7: a standard error of 9.2e-9 against statsmodels' 1.3e-7, and a 95% interval excluding zero at p = 0.24. In a probe with age and a count of 8.6e6 on average beside the intercept, the count's error was 6.0e-8 against 8.2e-8 and the intercept's 3.6e-4 against 1.10, and the count's interval excluded zero at p = 0.070; with a date in seconds the intercept's and age's errors were missing and the date's 2,400 times too small. The estimates and p-values were right. The covariance was `pinv(X'X)`, whose condition is the square of the design's, and its cutoff dropped the small direction; the estimability check built its projector from `pinv(X)`, accurate only to the design's conditioning, against a tolerance of 1e-8, and so refused contrasts; the cluster-robust bread inverted `X'X` as well | the rank, the fit, the covariance -- classical, and the sandwich's bread -- and estimability are computed from the design with its columns scaled to unit length, through its singular value decomposition, so a covariate's units change none of them. Errors, intervals and a contrast's error agree with statsmodels' to 1e-7 with the count and with a month of dates in seconds, cluster-robust ones too, and dates in seconds within one day, worse conditioned than statsmodels can be checked against, test exactly as the same dates in days |
+| 2 | (high) a partial `session=` mapping pairs two visits again | **confirmed**: `session={"sc": "1"}` chose SC's session and switched off the one-visit check, so sub-02's SC from session 1 was paired with its FC from session 2 | a mapping names every modality asked for, and one left out is refused with what to write instead; `None` in a mapping takes the files without a session label, which is how the HCP's unlabelled SC is paired with one day's FC, `{"sc": None, "fc": "REST1"}` |
+
+On the 943 young adults the numbers USAGE quotes from
+`tests/reference/inference_probe.py` -- the estimates, the cluster-robust
+intervals and the counts -- come out as before at the precision quoted: at
+that cohort's streamline counts the inverted `X'X` was still accurate enough.
+
 ## Status
 
-All seven ports are done and verified, and the five reviews of 5 and 6
-October 2026 (items 8 to 12) have been answered in full; what is left is
+All seven ports are done and verified, and the six reviews of 5 and 6
+October 2026 (items 8 to 13) have been answered in full; what is left is
 under each item's *Still open*. They were done in the order 3, 1, 2, 5, 4, 6, 7: parcellation
 unblocked the first notebook, kernel smoothing the WP3 speed target, and the
 two alignments came last because nothing else depends on them.

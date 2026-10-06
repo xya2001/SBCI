@@ -109,6 +109,44 @@ def _constant_columns(matrix) -> np.ndarray:
     return np.all(matrix == matrix[:1], axis=0) & (matrix[0] != 0)
 
 
+def _scaled_svd(matrix):
+    """The design with unit-norm columns: its singular values above rounding, and their directions.
+
+    Judged on unit-norm columns, a design's rank and inverse do not depend on
+    the units its covariates are in. Beside an intercept, a raw streamline
+    count (about 1e7) or a date in seconds (1e9) leaves ``X'X`` too
+    ill-conditioned to invert in float64 -- its condition is the square of
+    ``X``'s -- and leaves ``X`` itself one whose small singular direction a
+    tolerance relative to its largest drops. Returns the column norms (1 for a
+    column of zeros), and the singular values kept with their right singular
+    vectors, by NumPy's ``matrix_rank`` rule.
+    """
+    matrix = np.asarray(matrix, dtype=np.float64)
+    norms = np.linalg.norm(matrix, axis=0)
+    norms = np.where(norms > 0, norms, 1.0)
+    if 0 in matrix.shape:
+        return norms, np.zeros(0), np.zeros((0, matrix.shape[1]))
+    _, singular, right = np.linalg.svd(matrix / norms, full_matrices=False)
+    keep = singular > singular.max() * max(matrix.shape) * np.finfo(float).eps
+    return norms, singular[keep], right[keep]
+
+
+def _rank(matrix) -> int:
+    """The design's rank, judged on unit-norm columns."""
+    return int(_scaled_svd(matrix)[1].size)
+
+
+def _gram_inverse(matrix) -> np.ndarray:
+    """A generalized inverse of ``X'X``, formed from ``X`` with unit-norm columns, not from ``X'X``.
+
+    ``D^-1 (X_s'X_s)^+ D^-1`` for ``X_s = X D^-1``: the inverse when ``X`` has
+    full column rank, and otherwise a generalized inverse, which gives every
+    estimable combination of the coefficients its variance.
+    """
+    norms, singular, right = _scaled_svd(matrix)
+    return ((right.T / singular**2) @ right) / np.outer(norms, norms)
+
+
 def _spans_constant(matrix, rank: int | None = None) -> bool:
     """Whether the columns can reproduce a constant, and so absorb a shift of the response.
 
@@ -121,9 +159,9 @@ def _spans_constant(matrix, rank: int | None = None) -> bool:
     if matrix.ndim != 2 or 0 in matrix.shape:
         return False
     if rank is None:
-        rank = int(np.linalg.matrix_rank(matrix))
+        rank = _rank(matrix)
     with_constant = np.column_stack([matrix, np.ones(matrix.shape[0])])
-    return int(np.linalg.matrix_rank(with_constant)) == rank
+    return _rank(with_constant) == rank
 
 
 def _missing_labels(labels: np.ndarray) -> np.ndarray:
@@ -308,11 +346,19 @@ def design(covariates, intercept: bool = True, reference=None, categorical=()) -
 
 
 def _estimable(matrix, rows) -> np.ndarray:
-    """Which rows ``c`` make ``c @ beta`` estimable: ``c`` lies in the design's row space."""
+    """Which rows ``c`` make ``c @ beta`` estimable: ``c`` lies in the design's row space.
+
+    Judged on unit-norm columns, where ``c @ beta`` is ``(c / norms) @ (norms *
+    beta)``, against orthonormal directions: a projector built from the
+    design's own pseudo-inverse is only as accurate as the design is well
+    conditioned, and a covariate in large units made it refuse estimable
+    contrasts.
+    """
     rows = np.atleast_2d(np.asarray(rows, dtype=np.float64))
-    projector = np.linalg.pinv(matrix) @ matrix
-    gap = np.linalg.norm(rows @ projector - rows, axis=1)
-    return gap <= 1e-8 * np.maximum(np.linalg.norm(rows, axis=1), 1e-300)
+    norms, _, right = _scaled_svd(matrix)
+    scaled = rows / norms
+    gap = np.linalg.norm(scaled - (scaled @ right.T) @ right, axis=1)
+    return gap <= 1e-8 * np.maximum(np.linalg.norm(scaled, axis=1), 1e-300)
 
 
 def _contrast_matrix(contrast, named, n_terms) -> np.ndarray:
@@ -756,9 +802,11 @@ def local_test(
 
     # Degrees of freedom follow the rank, not the column count: a collinear
     # design (dummy codes for every level plus an intercept) still fits by
-    # least squares, but has fewer independent terms than columns.
-    rank_full = int(np.linalg.matrix_rank(matrix))
-    rank_reduced = int(np.linalg.matrix_rank(reduced)) if reduced.shape[1] else 0
+    # least squares, but has fewer independent terms than columns. The rank,
+    # the fit and the coefficients' covariance are all judged on unit-norm
+    # columns, so that a covariate's units change none of them.
+    rank_full = _rank(matrix)
+    rank_reduced = _rank(reduced) if reduced.shape[1] else 0
     residual_dof = n_subjects - rank_full
     numerator_dof = rank_full - rank_reduced
     if numerator_dof == 0:
@@ -771,7 +819,10 @@ def local_test(
 
     def fit(responses, full):
         """Coefficients and residual sums of squares, every column at once."""
-        coefficients, *_ = np.linalg.lstsq(full, responses, rcond=None)
+        norms = np.linalg.norm(full, axis=0)
+        norms = np.where(norms > 0, norms, 1.0)
+        scaled, *_ = np.linalg.lstsq(full / norms, responses, rcond=None)
+        coefficients = scaled / norms[:, None]
         residual = responses - full @ coefficients
         return coefficients, (residual * residual).sum(axis=0)
 
@@ -819,10 +870,13 @@ def local_test(
         fitted = np.zeros_like(scores)
     statistic = f_statistic(reduced_ss, full_ss)
 
-    # The coefficients' covariance: classical, sigma^2 (X'X)^+ ...
+    # The coefficients' covariance: classical, sigma^2 (X'X)^-, formed from X
+    # rather than from X'X, which squares its conditioning (until 6 October
+    # 2026 a raw streamline count beside the intercept gave errors 14 times
+    # too small, and a date in seconds none) ...
     with np.errstate(divide="ignore", invalid="ignore"):
         sigma2 = full_ss / residual_dof
-    covariance = sigma2[:, None, None] * np.linalg.pinv(matrix.T @ matrix)[None, :, :]
+    covariance = sigma2[:, None, None] * _gram_inverse(matrix)[None, :, :]
     n_groups = 0
     denominator_dof = residual_dof
     if codes is not None:
@@ -932,7 +986,7 @@ def _clustered_wald(matrix, scores, beta, codes, n_groups, tested, testable):
     contributions = np.zeros((n_groups, n_terms, scores.shape[1]))
     np.add.at(contributions, codes, matrix[:, :, None] * residual[:, None, :])
     meat = np.einsum("gik,gjk->kij", contributions, contributions)
-    bread = np.linalg.inv(matrix.T @ matrix)
+    bread = _gram_inverse(matrix)  # of full column rank here, so the inverse itself
     correction = n_groups / (n_groups - 1) * (n_subjects - 1) / (n_subjects - n_terms)
     covariance = correction * np.einsum("ij,kjl,lm->kim", bread, meat, bread)
     if isinstance(tested, np.ndarray) and tested.ndim == 2:

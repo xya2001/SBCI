@@ -40,7 +40,9 @@ and ``mismatch="report"`` keeps everyone and lists the differences.
 
 A subject's files have to come from one visit: SC from one session and FC
 from another would compare different visits, and is refused unless
-``session=`` says which, for every modality or for each.
+``session=`` says which, one label for every modality or a label for each. A
+mapping names every modality asked for, ``None`` taking the files without a
+session label: one left out could take its files from any session.
 
 The report also carries what is worth a look before an analysis: each SC
 file's streamline count and whether it stores its endpoints (needed to
@@ -512,9 +514,12 @@ def load_cohort(
     session
         Use the files of this ``ses-`` label only (``1`` matches ``ses-01``),
         or ``{modality: label}`` to pair, say, SC from one visit with FC from
-        another on purpose. Without it a subject's files have to come from one
-        session, whichever it is: several for one modality, or SC from one and
-        FC from another, are refused.
+        another on purpose. A mapping names every modality asked for, and
+        ``None`` there takes the files without a ``ses-`` label: the HCP's SC,
+        which has none, beside its FC from the first day is ``{"sc": None,
+        "fc": "REST1"}``. Without ``session=`` a subject's files have to come
+        from one session, whichever it is: several for one modality, or SC
+        from one and FC from another, are refused.
     require
         Table columns every subject needs a value in; a subject with a missing
         cell is left out.
@@ -554,13 +559,24 @@ def load_cohort(
     if mismatch not in MISMATCH:
         raise ValueError(f"mismatch must be one of {MISMATCH}, got {mismatch!r}")
     if isinstance(session, Mapping):
-        unknown = sorted(set(map(str, session)) - set(modalities))
+        given = {str(key): label for key, label in session.items()}
+        unknown = sorted(set(given) - set(modalities))
         if unknown:
             raise ValueError(f"session= names modalities not asked for: {unknown}")
-        wanted = {m: session.get(m) for m in modalities}
+        left_out = [m for m in modalities if m not in given]
+        if left_out:
+            named = ", ".join(m for m in modalities if m in given)
+            raise ValueError(
+                f"session= names {named} but not {', '.join(left_out)}: a modality left out "
+                "would take its files from any session, and pair two visits unasked. Name "
+                "every modality -- None takes the files without a session label -- or give "
+                "one label for all"
+            )
+        wanted = {m: given[m] for m in modalities}
+        chosen = True
     else:
         wanted = {m: session for m in modalities}
-    chosen = any(label is not None for label in wanted.values())
+        chosen = session is not None
     missing = frozenset(missing)
     required = (require,) if isinstance(require, str) else tuple(require)
     reserved = {"subject", "included", "reason"}
@@ -581,7 +597,7 @@ def load_cohort(
         subject, ses, modality = parse_name(path.name)
         if modality not in modalities:
             continue
-        if chosen and wanted[modality] is not None and not _same_label(ses, wanted[modality]):
+        if chosen and not _same_label(ses, wanted[modality]):
             continue
         found.setdefault(subject, {}).setdefault(modality, []).append((path, ses))
     if not chosen:

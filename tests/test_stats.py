@@ -718,3 +718,84 @@ def test_a_column_of_zeros_does_not_hide_an_implied_intercept():
     with_zeros = np.column_stack([implied, np.zeros(n)])
     with pytest.raises(ValueError, match="combine into one"):
         local_test(scores, with_zeros, add_intercept=False)
+
+
+# --- the sixth review -------------------------------------------------------------
+
+
+def _covariates_in_large_units(n=120, seed=0):
+    """Age in years, a raw streamline count (about 1e7), a date in seconds (1.7e9)."""
+    rng = np.random.default_rng(seed)
+    age = rng.normal(28.0, 3.5, n)
+    count = rng.normal(8.6e6, 1.1e6, n)
+    date = 1.70e9 + rng.uniform(0, 30 * 86400, n)  # a month of scans
+    scores = rng.standard_normal((n, 2)) + 0.02 * (age - 28.0)[:, None]
+    return np.column_stack([age, count, date]), scores, rng.integers(0, 40, n)
+
+
+def test_standard_errors_do_not_depend_on_a_covariates_units():
+    """A raw count or a date in seconds beside the intercept: the errors statsmodels gives.
+
+    X'X squares the design's conditioning, and its pseudo-inverse dropped a
+    direction: errors 14 times too small, or none.
+    """
+    sm = pytest.importorskip("statsmodels.api")
+    covariates, scores, _ = _covariates_in_large_units()
+    for term in (2, 3):
+        result = local_test(scores, covariates, terms=[term])
+        low, high = result.interval()
+        for k in range(scores.shape[1]):
+            reference = sm.OLS(scores[:, k], sm.add_constant(covariates)).fit()
+            np.testing.assert_allclose(result.standard_errors[k], reference.bse, rtol=1e-7)
+            np.testing.assert_allclose(result.pvalue[k], reference.pvalues[term], rtol=1e-7)
+            np.testing.assert_allclose(
+                [low[k, 0], high[k, 0]], reference.conf_int()[term], rtol=1e-7
+            )
+            # An interval excludes zero exactly when the test rejects at 0.05.
+            assert (low[k, 0] > 0 or high[k, 0] < 0) == (result.pvalue[k] < 0.05)
+
+
+def test_clustered_errors_do_not_depend_on_a_covariates_units():
+    sm = pytest.importorskip("statsmodels.api")
+    covariates, scores, families = _covariates_in_large_units()
+    result = local_test(scores, covariates, terms=[3], groups=families)
+    for k in range(scores.shape[1]):
+        reference = sm.OLS(scores[:, k], sm.add_constant(covariates)).fit(
+            cov_type="cluster", cov_kwds={"groups": families}
+        )
+        np.testing.assert_allclose(result.standard_errors[k], reference.bse, rtol=1e-7)
+
+
+def test_a_contrast_with_a_date_in_seconds_is_estimable_and_has_its_error():
+    sm = pytest.importorskip("statsmodels.api")
+    covariates, scores, _ = _covariates_in_large_units()
+    contrast = np.array([[0.0, 1.0, 0.0, -1.0]])  # age less date: odd, but estimable
+    result = local_test(scores, covariates, contrast=contrast)
+    reference = sm.OLS(scores[:, 0], sm.add_constant(covariates)).fit().t_test(contrast)
+    np.testing.assert_allclose(result.estimate[0, 0], np.ravel(reference.effect)[0], rtol=1e-7)
+    np.testing.assert_allclose(result.estimate_errors[0, 0], np.ravel(reference.sd)[0], rtol=1e-7)
+
+
+def test_a_date_in_seconds_tests_as_the_same_date_in_days():
+    """Scans within one day, in seconds since 1970, test as the same scans in days.
+
+    That is worse conditioned than statsmodels can be checked against, so the
+    check is that two units of one model give one answer.
+    """
+    _, scores, families = _covariates_in_large_units()
+    rng = np.random.default_rng(3)
+    age = rng.normal(28.0, 3.5, scores.shape[0])
+    seconds = 1.70e9 + rng.uniform(0, 86400, scores.shape[0])
+    days = (seconds - 1.70e9) / 86400
+    for groups in (None, families):
+        in_seconds = local_test(scores, np.column_stack([age, seconds]), terms=[2], groups=groups)
+        in_days = local_test(scores, np.column_stack([age, days]), terms=[2], groups=groups)
+        np.testing.assert_allclose(in_seconds.pvalue, in_days.pvalue, rtol=1e-6)
+        np.testing.assert_allclose(
+            in_seconds.standard_errors[:, 2] * 86400, in_days.standard_errors[:, 2], rtol=1e-6
+        )
+        np.testing.assert_allclose(
+            in_seconds.standard_errors[:, 1], in_days.standard_errors[:, 1], rtol=1e-6
+        )
+        aged = local_test(scores, np.column_stack([age, seconds]), contrast={1: 1.0}, groups=groups)
+        assert np.isfinite(aged.estimate_errors).all()

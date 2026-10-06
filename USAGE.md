@@ -164,7 +164,9 @@ leaves the rest out, and `mismatch="report"` keeps everyone. A subject's files
 have to come from one session: several for one modality, or SC from one visit
 and FC from another, are refused until `session=` chooses (`1` matches
 `ses-01`), one label for every modality or `{"sc": "1", "fc": "2"}` to pair two
-visits on purpose. `exclude={"sub-01": "motion"}` leaves out subjects on
+visits on purpose. A mapping names every modality, `None` for the files without
+a session label: the HCP's SC has none, and `{"sc": None, "fc": "REST1"}` pairs
+it with the first day's FC. `exclude={"sub-01": "motion"}` leaves out subjects on
 grounds decided upstream, and the reason stands in the report. A refusal is a
 `sbci.cohort.CohortError` that carries the report as far as it was built,
 which `sbci cohort --report` writes all the same.
@@ -671,7 +673,10 @@ individual vertices.
 design from named covariates, text coded as factors against a reference
 level, so that a hypothesis can be written by name; every result carries the
 tested estimates with standard errors, confidence intervals and an effect
-size.
+size. Covariates can stay in their own units, a raw streamline count among
+them: the fit, the errors and the test are computed from the design with its
+columns scaled to unit length, so rescaling a covariate rescales its own
+coefficient and error and changes nothing else.
 
 ```python
 import numpy as np
