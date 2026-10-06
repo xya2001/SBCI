@@ -1786,10 +1786,11 @@ and set against the first review's recording on the same CPU type with
   synthetic cohorts of item 7): the reference's arithmetic stops on
   sub-212116, 0.001 degrees from it and 16.9 from the mean; the corrected
   median sits 0.43 degrees from the mean and 16.6 to 20.2 from every
-  subject. The cohort figure of docs/RESULTS.md registered ConSEAL onto the
-  mean of the square-root densities because of the collapse; its ENCORE half
-  was measured again with the corrected code and holds (mean pairwise
-  correlation 0.7163 to 0.7606).
+  subject. The cohort figure of docs/RESULTS.md, which registered ConSEAL
+  onto the mean of the square-root densities because of the collapse, now
+  registers it onto this median: the subjects' mean pairwise correlation
+  rises from 0.716 to 0.784 (0.785 onto the mean, before the corrections),
+  and ENCORE's half holds at 0.761.
 
 ## Status
 

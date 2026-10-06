@@ -239,19 +239,16 @@ and ConSEAL keeps it with its default regularization or a mean template.
 **Aligning the eleven subjects.** Registered onto a template estimated from
 the cohort, with every density from the package's smoother, the subjects grow
 more alike: the mean correlation between two subjects' connectomes rises from
-0.716 to 0.761 after ten ENCORE iterations and to 0.785 after thirty ConSEAL
-iterations, and the cost falls for every subject. ENCORE registers onto its
-Karcher median. ConSEAL registers onto the mean of the square-root densities
-instead, because its median stopped on one subject: on these eleven it came
-within 0.001 degrees of sub-212116 and sat 24 to 27 degrees from the others,
-which would have registered everyone onto that subject's connectome. These
-notes first put that down to the subjects' geometry; it was a rounding defect
-the port shared with the reference, and the corrected median sits 0.4 degrees
-from the mean and 17 to 20 degrees from every subject (PORTING.md item 9).
-ENCORE's numbers were measured again after the corrections of October 2026
-and hold; ConSEAL's predate them. Eleven subjects with 734,039 to 988,788
-streamlines each take nine minutes with ENCORE and two hours with ConSEAL on
-eight cores.
+0.716 to 0.761 after ten ENCORE iterations and to 0.784 after thirty ConSEAL
+iterations, and the cost falls for every subject. Each method registers onto
+its own Karcher median; ConSEAL's sits 17 to 20 degrees from every subject
+and 0.4 from the mean of their square-root densities. Until October 2026 it
+stopped on sub-212116 instead, 0.001 degrees from it and 24 to 27 from the
+others, which these notes first put down to the subjects' geometry; it was a
+rounding defect the port shared with the reference (PORTING.md item 9), and
+this figure registered ConSEAL onto that mean instead, reaching 0.785. Eleven
+subjects with 734,039 to 988,788 streamlines each take nine minutes with
+ENCORE and two hours with ConSEAL on eight cores.
 
 ![Aligning the eleven subjects](figures/cohort_alignment.png)
 

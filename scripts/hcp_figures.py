@@ -631,34 +631,30 @@ def cohort_figures(out: Path, subjects, conseal: bool = True) -> None:
     after_conseal = None
     conseal_costs = None
     if conseal:
-        # ConSEAL's Karcher median stopped on sub-212116 (0.001 degrees from it), a
-        # rounding defect shared with the reference and since corrected (PORTING.md
-        # item 9); register onto the mean of the square-root densities instead so
-        # that every subject moves, as with ENCORE's template.
-        from sbci.conseal import (
-            DEFAULT_KERNEL_DEGREE,
-            DEFAULT_SIGMA,
-            EndpointConnectome,
-            HeatKernelBuilder,
-            default_grids,
-        )
+        # ConSEAL onto its own Karcher median, as ENCORE is. Until October 2026 the
+        # median stopped on the subject it started from, through rounding rather
+        # than geometry (PORTING.md item 9), and this figure registered onto the
+        # mean of the square-root densities instead.
+        from sbci.conseal import EndpointConnectome, default_grids
 
         lh, rh = default_grids()
-        kernel = HeatKernelBuilder(lh, rh, DEFAULT_KERNEL_DEGREE).compute(
-            DEFAULT_SIGMA, derivative=True
-        )[0]
         carriers = [EndpointConnectome.from_endpoints(s.endpoints, lh, rh) for s in subjects]
-        mean_template = sum(c.q_transform(kernel) for c in carriers) / len(carriers)
-        mean_template /= np.sqrt((mean_template**2).sum())
         t = time.time()
         registration = sbci.endpoints_align(
             carriers,
-            template=mean_template,
             max_iterations=30,
             threshold=1e-7,
             delta=0.1,
             step_clamp=float("inf"),
             viscosity=0.0,
+        )
+        # The plain-sum cost of two unit square-root densities is 2 - 2 cos(angle).
+        start = np.array([trace[0] for trace in registration.costs])
+        angles = np.degrees(np.arccos(np.clip(1 - start / 2, -1.0, 1.0)))
+        print(
+            f"  ConSEAL's median lies {angles.min():.2f} to {angles.max():.2f} degrees "
+            "from the subjects",
+            flush=True,
         )
         aligned = [
             resmoothed(subject, registration.aligned_endpoints(i)).data
