@@ -780,7 +780,9 @@ def test_a_date_in_seconds_tests_as_the_same_date_in_days():
     """Scans within one day, in seconds since 1970, test as the same scans in days.
 
     That is worse conditioned than statsmodels can be checked against, so the
-    check is that two units of one model give one answer.
+    check is that two units of one model give one answer. Forming the
+    cluster-robust sandwich from the inverse of X'X put 1.4e-6 between the
+    two p-values; formed from the decomposition's factors they agree to 1e-11.
     """
     _, scores, families = _covariates_in_large_units()
     rng = np.random.default_rng(3)
@@ -790,12 +792,12 @@ def test_a_date_in_seconds_tests_as_the_same_date_in_days():
     for groups in (None, families):
         in_seconds = local_test(scores, np.column_stack([age, seconds]), terms=[2], groups=groups)
         in_days = local_test(scores, np.column_stack([age, days]), terms=[2], groups=groups)
-        np.testing.assert_allclose(in_seconds.pvalue, in_days.pvalue, rtol=1e-6)
+        np.testing.assert_allclose(in_seconds.pvalue, in_days.pvalue, rtol=1e-9)
         np.testing.assert_allclose(
-            in_seconds.standard_errors[:, 2] * 86400, in_days.standard_errors[:, 2], rtol=1e-6
+            in_seconds.standard_errors[:, 2] * 86400, in_days.standard_errors[:, 2], rtol=1e-9
         )
         np.testing.assert_allclose(
-            in_seconds.standard_errors[:, 1], in_days.standard_errors[:, 1], rtol=1e-6
+            in_seconds.standard_errors[:, 1], in_days.standard_errors[:, 1], rtol=1e-9
         )
         aged = local_test(scores, np.column_stack([age, seconds]), contrast={1: 1.0}, groups=groups)
         assert np.isfinite(aged.estimate_errors).all()

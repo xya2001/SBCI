@@ -118,33 +118,35 @@ def _scaled_svd(matrix):
     ill-conditioned to invert in float64 -- its condition is the square of
     ``X``'s -- and leaves ``X`` itself one whose small singular direction a
     tolerance relative to its largest drops. Returns the column norms (1 for a
-    column of zeros), and the singular values kept with their right singular
-    vectors, by NumPy's ``matrix_rank`` rule.
+    column of zeros), and the singular values kept with their left and right
+    singular vectors, by NumPy's ``matrix_rank`` rule.
     """
     matrix = np.asarray(matrix, dtype=np.float64)
     norms = np.linalg.norm(matrix, axis=0)
     norms = np.where(norms > 0, norms, 1.0)
     if 0 in matrix.shape:
-        return norms, np.zeros(0), np.zeros((0, matrix.shape[1]))
-    _, singular, right = np.linalg.svd(matrix / norms, full_matrices=False)
+        return norms, np.zeros((matrix.shape[0], 0)), np.zeros(0), np.zeros((0, matrix.shape[1]))
+    left, singular, right = np.linalg.svd(matrix / norms, full_matrices=False)
     keep = singular > singular.max() * max(matrix.shape) * np.finfo(float).eps
-    return norms, singular[keep], right[keep]
+    return norms, left[:, keep], singular[keep], right[keep]
 
 
 def _rank(matrix) -> int:
     """The design's rank, judged on unit-norm columns."""
-    return int(_scaled_svd(matrix)[1].size)
+    return int(_scaled_svd(matrix)[2].size)
 
 
-def _gram_inverse(matrix) -> np.ndarray:
-    """A generalized inverse of ``X'X``, formed from ``X`` with unit-norm columns, not from ``X'X``.
+def _gram_factor(matrix) -> np.ndarray:
+    """``A`` such that ``A A'`` is a generalized inverse of ``X'X``, from ``X`` itself.
 
-    ``D^-1 (X_s'X_s)^+ D^-1`` for ``X_s = X D^-1``: the inverse when ``X`` has
-    full column rank, and otherwise a generalized inverse, which gives every
-    estimable combination of the coefficients its variance.
+    ``A = D^-1 V S^-1`` for ``X D^-1 = U S V'``: ``A A'`` is the inverse when
+    ``X`` has full column rank, and otherwise a generalized inverse, which
+    gives every estimable combination of the coefficients its variance. A
+    variance is then the sum of squares of ``w @ A``, rather than the small
+    difference of the large entries an ill-conditioned inverse holds.
     """
-    norms, singular, right = _scaled_svd(matrix)
-    return ((right.T / singular**2) @ right) / np.outer(norms, norms)
+    norms, _, singular, right = _scaled_svd(matrix)
+    return (right.T / singular) / norms[:, None]
 
 
 def _spans_constant(matrix, rank: int | None = None) -> bool:
@@ -355,7 +357,7 @@ def _estimable(matrix, rows) -> np.ndarray:
     contrasts.
     """
     rows = np.atleast_2d(np.asarray(rows, dtype=np.float64))
-    norms, _, right = _scaled_svd(matrix)
+    norms, _, _, right = _scaled_svd(matrix)
     scaled = rows / norms
     gap = np.linalg.norm(scaled - (scaled @ right.T) @ right, axis=1)
     return gap <= 1e-8 * np.maximum(np.linalg.norm(scaled, axis=1), 1e-300)
@@ -870,17 +872,20 @@ def local_test(
         fitted = np.zeros_like(scores)
     statistic = f_statistic(reduced_ss, full_ss)
 
-    # The coefficients' covariance: classical, sigma^2 (X'X)^-, formed from X
-    # rather than from X'X, which squares its conditioning (until 6 October
-    # 2026 a raw streamline count beside the intercept gave errors 14 times
-    # too small, and a date in seconds none) ...
+    # The coefficients' covariance, held as a factor from the design's singular
+    # value decomposition rather than formed from X'X, which squares the
+    # design's conditioning (until 6 October 2026 a raw streamline count
+    # beside the intercept gave errors 14 times too small, and a date in
+    # seconds none): classical, sigma^2 A A' ...
     with np.errstate(divide="ignore", invalid="ignore"):
         sigma2 = full_ss / residual_dof
-    covariance = sigma2[:, None, None] * _gram_inverse(matrix)[None, :, :]
+    factor = _gram_factor(matrix)
+    present = np.ones(n_terms, dtype=bool)
+    meat = None
     n_groups = 0
     denominator_dof = residual_dof
     if codes is not None:
-        # ... or the cluster-robust sandwich. A column of zeros fits as
+        # ... or the cluster-robust sandwich, A M A'. A column of zeros fits as
         # nothing, and the sandwich is formed without it.
         n_groups = int(codes.max()) + 1
         present = matrix.any(axis=0)
@@ -889,27 +894,29 @@ def local_test(
                 "groups= needs a design of full column rank; a constant covariate duplicates "
                 "the intercept, and dummy codes for every level of a factor do too"
             )
-        position = np.cumsum(present) - 1
-        statistic, robust = _clustered_wald(
+        statistic, factor, meat = _clustered_wald(
             matrix[:, present],
             scores,
             full_beta[present],
             codes,
             n_groups,
-            [int(position[t]) for t in tested] if hypothesis is None else rows[:, present],
+            rows[:, present],
             np.isfinite(statistic),
         )
-        covariance = np.full((n_columns, n_terms, n_terms), np.nan)
-        kept = np.flatnonzero(present)
-        covariance[:, kept[:, None], kept[None, :]] = robust
         denominator_dof = n_groups - 1
 
+    def spread(weights):
+        """Each column's covariance of ``weights @ beta``, ``(columns, q, q)``."""
+        reach = weights[:, present] @ factor
+        if meat is None:
+            return sigma2[:, None, None] * (reach @ reach.T)[None, :, :]
+        return np.einsum("qi,kij,rj->kqr", reach, meat, reach)
+
     estimable = _estimable(matrix, np.eye(n_terms))
-    standard_errors = np.sqrt(np.einsum("kjj->kj", covariance))
+    standard_errors = np.sqrt(np.einsum("kjj->kj", spread(np.eye(n_terms))))
     standard_errors[:, ~estimable] = np.nan
     estimate = coefficients @ rows.T
-    spread = np.einsum("qi,kij,rj->kqr", rows, np.nan_to_num(covariance), rows)
-    estimate_errors = np.sqrt(np.einsum("kqq->kq", spread))
+    estimate_errors = np.sqrt(np.einsum("kqq->kq", spread(rows)))
     estimate_errors[:, ~_estimable(matrix, rows)] = np.nan
     if codes is not None:
         # Rows touching a column of zeros are not estimable; the rest read the sandwich.
@@ -970,34 +977,33 @@ def local_test(
     )
 
 
-def _clustered_wald(matrix, scores, beta, codes, n_groups, tested, testable):
-    """Wald F statistics with cluster-robust standard errors, and the covariance they come from.
+def _clustered_wald(matrix, scores, beta, codes, n_groups, weights, testable):
+    """Wald F statistics with cluster-robust standard errors, and the sandwich's factors.
 
     For each column, the coefficients' covariance is the sandwich
     ``c * B @ M @ B`` with ``B = (X'X)^-1`` and ``M`` the sum over groups of
     ``(X_g' e_g)(X_g' e_g)'``, where ``e_g`` is the group's residuals and
     ``c = G / (G - 1) * (n - 1) / (n - p)``; the statistic is
-    ``b' V^-1 b / q`` over the ``q`` tested estimates ``b``. ``tested`` is
-    the tested columns' indices, or a ``(q, p)`` contrast.
+    ``b' V^-1 b / q`` over the ``q`` tested combinations ``b = weights @
+    beta``. With ``X D^-1 = U S V'`` and ``A = D^-1 V S^-1``, ``B X_g' = A
+    U_g'``, so the sandwich is ``A (c M_U) A'``, ``M_U`` summing ``(U_g' e_g)
+    (U_g' e_g)'``: products of orthonormal columns, where forming ``B M B``
+    itself loses the square of the design's conditioning. Returns the
+    statistics, ``A``, and ``c M_U`` for every column.
     """
     n_subjects, n_terms = matrix.shape
     residual = scores - matrix @ beta
-    # Each group's score X_g' e_g, for every column: (groups, terms, columns).
-    contributions = np.zeros((n_groups, n_terms, scores.shape[1]))
-    np.add.at(contributions, codes, matrix[:, :, None] * residual[:, None, :])
-    meat = np.einsum("gik,gjk->kij", contributions, contributions)
-    bread = _gram_inverse(matrix)  # of full column rank here, so the inverse itself
+    norms, left, singular, right = _scaled_svd(matrix)  # of full column rank here
+    factor = (right.T / singular) / norms[:, None]
+    # Each group's U_g' e_g, for every column: (groups, terms, columns).
+    contributions = np.zeros((n_groups, singular.size, scores.shape[1]))
+    np.add.at(contributions, codes, left[:, :, None] * residual[:, None, :])
     correction = n_groups / (n_groups - 1) * (n_subjects - 1) / (n_subjects - n_terms)
-    covariance = correction * np.einsum("ij,kjl,lm->kim", bread, meat, bread)
-    if isinstance(tested, np.ndarray) and tested.ndim == 2:
-        tested_beta = beta.T @ tested.T  # (columns, q)
-        block = np.einsum("qi,kij,rj->kqr", tested, covariance, tested)
-        q = tested.shape[0]
-    else:
-        index = np.asarray(tested)
-        tested_beta = beta[index].T  # (columns, q)
-        block = covariance[:, index][:, :, index]  # (columns, q, q)
-        q = index.size
+    meat = correction * np.einsum("gik,gjk->kij", contributions, contributions)
+    reach = weights @ factor  # (q, terms)
+    block = np.einsum("qi,kij,rj->kqr", reach, meat, reach)
+    tested_beta = beta.T @ weights.T  # (columns, q)
+    q = weights.shape[0]
     statistic = np.full(scores.shape[1], np.nan)
     for k in np.flatnonzero(testable):
         try:
@@ -1005,7 +1011,7 @@ def _clustered_wald(matrix, scores, beta, codes, n_groups, tested, testable):
         except np.linalg.LinAlgError:
             continue
         statistic[k] = float(tested_beta[k] @ solved) / q
-    return statistic, covariance
+    return statistic, factor, meat
 
 
 # --- test-retest -------------------------------------------------------------------
