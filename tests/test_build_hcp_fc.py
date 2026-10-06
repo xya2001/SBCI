@@ -112,3 +112,14 @@ def test_regression_removes_the_global_signal_only_when_asked():
     signal = data.mean(axis=1)
     assert max(abs(np.corrcoef(removed[:, j], signal)[0, 1]) for j in range(40)) < 1e-8
     assert np.abs(removed.mean(axis=1)).max() < 1e-10
+
+
+def test_runs_can_be_chosen_for_one_day(tmp_path):
+    """--runs REST1_LR REST1_RL builds the first day's FC alone."""
+    folder = tmp_path / "HCP_fMRI100307"
+    folder.mkdir()
+    for run in build.RUNS:
+        (folder / f"rfMRI_{run}_Atlas_hp2000_clean.dtseries.nii").write_bytes(b"x")
+    assert sorted(build.run_paths("sub-100307", [str(tmp_path)])) == sorted(build.RUNS)
+    first = build.run_paths("sub-100307", [str(tmp_path)], ("REST1_LR", "REST1_RL"))
+    assert sorted(first) == ["REST1_LR", "REST1_RL"]

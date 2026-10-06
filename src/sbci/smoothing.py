@@ -827,6 +827,39 @@ class Endpoints:
         """How many streamlines these endpoints describe."""
         return int(np.asarray(self.vtx_in).size)
 
+    def take(self, indices) -> Endpoints:
+        """The streamlines at ``indices``: a subset, as two halves for split-half reliability.
+
+        Examples
+        --------
+        >>> both = Endpoints([0, 1, 1], [1, 0, 1], [3, 5, 7], [2, 4, 6], n_per_hemi=10)
+        >>> both.take([0, 2]).vtx_in.tolist(), both.take([0, 2]).n_streamlines
+        ([3, 7], 2)
+        """
+        index = np.asarray(indices)
+        if index.dtype == bool:
+            if index.shape != (self.n_streamlines,):
+                raise ValueError(f"a mask over {self.n_streamlines} streamlines, got {index.shape}")
+        elif index.size and (
+            index.min() < -self.n_streamlines or index.max() >= self.n_streamlines
+        ):
+            raise IndexError(f"streamline indices outside 0..{self.n_streamlines - 1}")
+
+        def pick(values):
+            return None if values is None else np.asarray(values)[index]
+
+        return Endpoints(
+            surf_in=self.surf_in[index],
+            surf_out=self.surf_out[index],
+            vtx_in=self.vtx_in[index],
+            vtx_out=self.vtx_out[index],
+            n_per_hemi=self.n_per_hemi,
+            tri_in=pick(self.tri_in),
+            tri_out=pick(self.tri_out),
+            bary_in=pick(self.bary_in),
+            bary_out=pick(self.bary_out),
+        )
+
     @classmethod
     def from_matlab(cls, path, n_per_hemi: int = spec.N_VERTICES_PER_HEMI) -> Endpoints:
         """Read ``mesh_intersections_*.mat`` from the legacy pipeline.

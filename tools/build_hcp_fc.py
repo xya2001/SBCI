@@ -69,11 +69,11 @@ NUISANCE = (
 )
 
 
-def run_paths(subject: str, roots: list[str]) -> dict[str, str]:
-    """The resting-state runs available for a subject, first found under the roots."""
+def run_paths(subject: str, roots: list[str], runs=RUNS) -> dict[str, str]:
+    """The resting-state runs available for a subject, of ``runs``, first found under the roots."""
     bare = subject.removeprefix("sub-")
     found = {}
-    for run in RUNS:
+    for run in runs:
         name = f"rfMRI_{run}_Atlas_hp2000_clean.dtseries.nii"
         for root in roots:
             for folder in (f"HCP_fMRI{bare}", bare):
@@ -284,6 +284,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--fsaverage", default=None, help="fsaverage surf/ (default: FreeSurfer's)")
     parser.add_argument("--out", required=True, help="destination directory")
     parser.add_argument("--min-runs", type=int, default=1, help="skip subjects with fewer runs")
+    parser.add_argument(
+        "--runs",
+        nargs="+",
+        choices=RUNS,
+        default=list(RUNS),
+        help="the runs to use, as REST1_LR REST1_RL for the first day's alone (default: all four)",
+    )
+    parser.add_argument(
+        "--session",
+        default=None,
+        help="name the files sub-<id>_ses-<SESSION>_fc.h5, as REST1 for the first day's runs",
+    )
     parser.add_argument("--no-gsr", action="store_true", help="keep the global signal")
     parser.add_argument(
         "--bandpass",
@@ -333,7 +345,7 @@ def main(argv: list[str] | None = None) -> int:
     written, failed, invalid = [], [], 0
     for subject in subjects:
         t = time.time()
-        runs = run_paths(subject, args.fmri)
+        runs = run_paths(subject, args.fmri, args.runs)
         if len(runs) < args.min_runs:
             print(f"{subject}: {len(runs)} resting-state runs, fewer than {args.min_runs}; skipped")
             continue
@@ -365,7 +377,8 @@ def main(argv: list[str] | None = None) -> int:
             f"subject's MSMSulc and FreeSurfer spheres ({' and '.join(sorted(routes))} route); "
             "built by tools/build_hcp_fc.py",
         )
-        path = os.path.join(args.out, f"{subject}_fc.h5")
+        session = f"_ses-{args.session}" if args.session else ""
+        path = os.path.join(args.out, f"{subject}{session}_fc.h5")
         write_hdf5(
             path, data=to_condensed(fc).astype(np.float32), area=areas, mask=mask, metadata=metadata
         )

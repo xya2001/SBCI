@@ -952,3 +952,145 @@ def _clustered_wald(matrix, scores, beta, codes, n_groups, tested, testable):
             continue
         statistic[k] = float(tested_beta[k] @ solved) / q
     return statistic, covariance
+
+
+# --- test-retest -------------------------------------------------------------------
+
+ICC_KINDS = ("agreement", "consistency")
+"""What :func:`icc` measures: absolute agreement, ICC(2,1), or consistency, ICC(3,1)."""
+
+
+def icc(sessions, kind: str = "agreement") -> np.ndarray:
+    """Test-retest reliability of every feature: the intraclass correlation across sessions.
+
+    Parameters
+    ----------
+    sessions
+        ``(k, n_subjects, n_features)``, or a list of ``k`` arrays of
+        ``(n_subjects, n_features)``: the same features measured ``k >= 2``
+        times on the same subjects, in one subject order -- two days' FC, or
+        two halves of the same streamlines.
+    kind
+        ``"agreement"``, Shrout and Fleiss's ICC(2,1) (McGraw and Wong's
+        ICC(A,1)): two-way random effects, absolute agreement, so a shift
+        between sessions counts against it; or ``"consistency"``, ICC(3,1)
+        (ICC(C,1)): a shift between sessions forgiven.
+
+    Returns
+    -------
+    ``(n_features,)``, from each feature's two-way ANOVA mean squares between
+    subjects (``MSR``), between sessions (``MSC``) and residual (``MSE``)::
+
+        agreement    (MSR - MSE) / (MSR + (k - 1) MSE + k (MSC - MSE) / n)
+        consistency  (MSR - MSE) / (MSR + (k - 1) MSE)
+
+    ``NaN`` where a feature has a missing value or no variance.
+
+    Examples
+    --------
+    >>> ratings = np.array([[9, 2, 5, 8], [6, 1, 3, 2], [8, 4, 6, 8],
+    ...                     [7, 1, 2, 6], [10, 5, 6, 9], [6, 2, 4, 7]], dtype=float)
+    >>> sessions = ratings.T[:, :, None]          # Shrout and Fleiss (1979), Table 2
+    >>> round(float(icc(sessions)[0]), 2), round(float(icc(sessions, "consistency")[0]), 2)
+    (0.29, 0.71)
+    """
+    if kind not in ICC_KINDS:
+        raise ValueError(f"kind must be one of {ICC_KINDS}, got {kind!r}")
+    data = np.asarray(sessions, dtype=np.float64)
+    if data.ndim == 2:
+        data = data[:, :, None]
+    if data.ndim != 3:
+        raise ValueError(
+            f"sessions are (k, n_subjects, n_features), or a list of (n_subjects, n_features) "
+            f"arrays; got shape {data.shape}"
+        )
+    k, n, _ = data.shape
+    if k < 2 or n < 2:
+        raise ValueError(f"an ICC needs two sessions and two subjects at least; got {k} and {n}")
+    grand = data.mean(axis=(0, 1))
+    between_subjects = k * ((data.mean(axis=0) - grand) ** 2).sum(axis=0)
+    between_sessions = n * ((data.mean(axis=1) - grand) ** 2).sum(axis=0)
+    residual = ((data - grand) ** 2).sum(axis=(0, 1)) - between_subjects - between_sessions
+    msr = between_subjects / (n - 1)
+    msc = between_sessions / (k - 1)
+    mse = residual / ((n - 1) * (k - 1))
+    if kind == "agreement":
+        denominator = msr + (k - 1) * mse + k * (msc - mse) / n
+    else:
+        denominator = msr + (k - 1) * mse
+    with np.errstate(invalid="ignore", divide="ignore"):
+        value = (msr - mse) / denominator
+    usable = np.isfinite(data).all(axis=(0, 1)) & (denominator > 0)
+    return np.where(usable, value, np.nan)
+
+
+@dataclass
+class Identification:
+    """What :func:`identification` returns: how well each subject's two sessions pick each other."""
+
+    similarity: np.ndarray
+    """``(n, n)``: Pearson's r of subject ``i``'s first session with subject ``j``'s second."""
+    accuracy: tuple
+    """``(first to second, second to first)``: the share of subjects whose own other session
+    is the most similar of all subjects'."""
+    within: float
+    """Mean similarity of a subject's two sessions: the diagonal."""
+    between: float
+    """Mean similarity of two subjects' sessions: off the diagonal. ``within - between`` is
+    Amico and Goni's differential identifiability."""
+    features: int
+    """How many features entered: those present in every subject's two sessions."""
+
+
+def identification(first, second) -> Identification:
+    """Whether each subject's second session is most like its own first: connectome fingerprinting.
+
+    Finn et al. (Nature Neuroscience, 2015) identified subjects from their
+    functional connectomes across days. ``first`` and ``second`` are
+    ``(n_subjects, n_features)`` in one subject order -- whole connectomes'
+    upper triangles, region matrices, maps; float32 is kept as float32, so a
+    hundred whole ico4 connectomes fit. A feature missing in any subject is left
+    out of every comparison. The similarity is Pearson's r across features.
+
+    Examples
+    --------
+    >>> rng = np.random.default_rng(0)
+    >>> trait = rng.standard_normal((5, 40))
+    >>> result = identification(trait + 0.3 * rng.standard_normal((5, 40)),
+    ...                         trait + 0.3 * rng.standard_normal((5, 40)))
+    >>> result.accuracy
+    (1.0, 1.0)
+    """
+    one, two = np.asarray(first), np.asarray(second)
+    if one.ndim != 2 or one.shape != two.shape:
+        raise ValueError(
+            f"first and second are (n_subjects, n_features) alike; got {one.shape} and {two.shape}"
+        )
+    n = one.shape[0]
+    if n < 2:
+        raise ValueError("identification needs two subjects at least")
+    kind = np.float32 if one.dtype == np.float32 and two.dtype == np.float32 else np.float64
+    present = np.isfinite(one).all(axis=0) & np.isfinite(two).all(axis=0)
+    if not present.any():
+        raise ValueError("no feature is present in every subject")
+
+    def unit_rows(block):
+        rows = np.asarray(block[:, present], dtype=kind)
+        rows = rows - rows.mean(axis=1, keepdims=True)
+        norms = np.linalg.norm(rows, axis=1, keepdims=True)
+        if not (norms > 0).all():
+            raise ValueError("a subject's features do not vary, so it has no correlation with any")
+        return rows / norms
+
+    similarity = np.asarray(unit_rows(one) @ unit_rows(two).T, dtype=np.float64)
+    own = np.arange(n)
+    forward = float((similarity.argmax(axis=1) == own).mean())
+    backward = float((similarity.argmax(axis=0) == own).mean())
+    off = ~np.eye(n, dtype=bool)
+    return Identification(
+        similarity=similarity,
+        accuracy=(forward, backward),
+        within=float(np.diag(similarity).mean()),
+        between=float(similarity[off].mean()),
+        features=int(present.sum()),
+    )

@@ -21,3 +21,4 @@ batch job, not on a login node.
 | `make_figures.py` | draws synthetic counterparts of the documentation figures from `sbci.example()` and `example_cohort()` into a directory you name: a smoke test of the figure code on a machine without the data, and the module `hcp_figures.py` imports its colours, rendering and data-free figures from; no document uses its output |
 | `verify_all.sh` | runs every verification tier available in the environment and summarises (VERIFICATION.md) |
 | `show_build.sh` | walks the whole build, printing what each stage produces |
+| `reliability_data.py` | the structural half of `notebooks/reliability.ipynb`: splits thirty subjects' streamlines in two, re-smooths each half at three bandwidths, and aligns each subject's halves onto each other and the next subject onto it (an array job, one subject a task), then fits the components the notebook scores (a batch job) |
