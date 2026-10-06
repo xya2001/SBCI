@@ -603,8 +603,10 @@ result.reconstruct(0)   # subject 1 rebuilt from its 20 numbers
 ```
 
 Score new subjects against an existing basis with
-`sbci.reduction.project(result, matrices)`, which is how a test-retest or
-held-out set is handled. It scores a subject exactly as the fit scored the
+`sbci.project(result, held_out)`, which is how a test-retest or held-out set
+is handled. It takes what `reduce` takes -- connectomes, their `.h5` files or
+their dense matrices -- and reads one subject at a time. It scores a subject
+exactly as the fit scored the
 training subjects, so projecting the training cohort returns `result.scores`
 to the fit's own tolerance: the fit records each score one alternating step
 before its final component, as the reference does, which is 1e-3 at the

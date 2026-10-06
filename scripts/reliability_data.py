@@ -17,8 +17,9 @@ are split here. For each, ``split``:
    samples of one brain, whose warp is alignment's noise -- and the next
    subject's first half onto this subject's, the warp between two brains.
 
-``components`` fits a rank-20 reduction to the first halves and projects the
-second halves onto it.
+``components`` fits a rank-20 reduction to the thirty subjects' whole
+connectomes and scores both halves against it with ``project``, so that
+neither half is the one the basis was fitted to.
 """
 
 from __future__ import annotations
@@ -110,8 +111,8 @@ def split(index: int) -> None:
             flush=True,
         )
     within = sbci.align([kept["B"]], template=kept["A"])
-    _, other, _ = halves(following)
-    between = sbci.align([smoothed(connectome, other, 0.005)], template=kept["A"])
+    neighbour, other, _ = halves(following)
+    between = sbci.align([smoothed(neighbour, other, 0.005)], template=kept["A"])
     np.savez_compressed(
         out / "alignment.npz",
         within=displacement(within.warps[0]),
@@ -122,17 +123,26 @@ def split(index: int) -> None:
 
 def components() -> None:
     subjects = sample()
-    first = [OUT / s / f"{s}_split-A_sc.h5" for s in subjects]
-    second = [OUT / s / f"{s}_split-B_sc.h5" for s in subjects]
-    reduction = sbci.reduce(first, rank=20)
-    projected = sbci.project(reduction, second)
+    start = time.time()
+    reduction = sbci.reduce([SC / f"{s}_sc.h5" for s in subjects], rank=20)
+    print(
+        f"rank 20 on {len(subjects)} whole connectomes: {reduction.explained[-1]:.1%} explained "
+        f"({time.time() - start:.0f}s)",
+        flush=True,
+    )
+    scores = {}
+    for name in "AB":
+        paths = [OUT / s / f"{s}_split-{name}_sc.h5" for s in subjects]
+        scores[name] = np.vstack(
+            [sbci.project(reduction, sbci.load(path).dense(np.float64)) for path in paths]
+        )
     np.savez_compressed(
         OUT / "components.npz",
-        first=reduction.scores,
-        second=projected,
+        first=scores["A"],
+        second=scores["B"],
         explained=reduction.explained,
     )
-    print(f"rank 20 on {len(subjects)} first halves: {reduction.explained[-1]:.1%} explained")
+    print(f"both halves scored ({time.time() - start:.0f}s)")
 
 
 if __name__ == "__main__":

@@ -1042,15 +1042,23 @@ class Identification:
     """How many features entered: those present in every subject's two sessions."""
 
 
+#: Values, subjects times features, that :func:`identification` holds in float64 at a time.
+_BLOCK_ELEMENTS = 1 << 24
+
+
 def identification(first, second) -> Identification:
     """Whether each subject's second session is most like its own first: connectome fingerprinting.
 
     Finn et al. (Nature Neuroscience, 2015) identified subjects from their
     functional connectomes across days. ``first`` and ``second`` are
     ``(n_subjects, n_features)`` in one subject order -- whole connectomes'
-    upper triangles, region matrices, maps; float32 is kept as float32, so a
-    hundred whole ico4 connectomes fit. A feature missing in any subject is left
-    out of every comparison. The similarity is Pearson's r across features.
+    upper triangles, region matrices, maps. A feature missing in any subject
+    is left out of every comparison. The similarity is Pearson's r across
+    features, summed in float64 a block of features at a time: float32 input
+    is not copied whole, so a hundred whole ico4 connectomes fit, and the sums
+    keep float64's precision, which they need. Smoothed SC is mostly near zero
+    with a few large values, and float32 sums over its millions of pairs drift
+    by more than a percent, to correlations above one.
 
     Examples
     --------
@@ -1069,20 +1077,32 @@ def identification(first, second) -> Identification:
     n = one.shape[0]
     if n < 2:
         raise ValueError("identification needs two subjects at least")
-    kind = np.float32 if one.dtype == np.float32 and two.dtype == np.float32 else np.float64
     present = np.isfinite(one).all(axis=0) & np.isfinite(two).all(axis=0)
     if not present.any():
         raise ValueError("no feature is present in every subject")
+    columns = np.flatnonzero(present)
+    step = max(1, _BLOCK_ELEMENTS // n)
+    if columns.size == present.size:
+        blocks = [slice(start, start + step) for start in range(0, columns.size, step)]
+    else:
+        blocks = [columns[start : start + step] for start in range(0, columns.size, step)]
 
-    def unit_rows(block):
-        rows = np.asarray(block[:, present], dtype=kind)
-        rows = rows - rows.mean(axis=1, keepdims=True)
-        norms = np.linalg.norm(rows, axis=1, keepdims=True)
-        if not (norms > 0).all():
-            raise ValueError("a subject's features do not vary, so it has no correlation with any")
-        return rows / norms
-
-    similarity = np.asarray(unit_rows(one) @ unit_rows(two).T, dtype=np.float64)
+    means = [
+        sum(rows[:, block].sum(axis=1, dtype=np.float64) for block in blocks) / columns.size
+        for rows in (one, two)
+    ]
+    squares = np.zeros((2, n))
+    cross = np.zeros((n, n))
+    for block in blocks:
+        a = np.asarray(one[:, block], dtype=np.float64) - means[0][:, None]
+        b = np.asarray(two[:, block], dtype=np.float64) - means[1][:, None]
+        squares[0] += np.einsum("ij,ij->i", a, a)
+        squares[1] += np.einsum("ij,ij->i", b, b)
+        cross += a @ b.T
+    norms = np.sqrt(squares)
+    if not (norms > 0).all():
+        raise ValueError("a subject's features do not vary, so it has no correlation with any")
+    similarity = cross / np.outer(norms[0], norms[1])
     own = np.arange(n)
     forward = float((similarity.argmax(axis=1) == own).mean())
     backward = float((similarity.argmax(axis=0) == own).mean())

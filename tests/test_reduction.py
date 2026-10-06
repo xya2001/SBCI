@@ -361,6 +361,37 @@ def test_the_gram_operator_is_the_unfolded_product():
     np.testing.assert_allclose(_mode1_gram(residual)(vector), explicit @ vector, rtol=1e-12)
 
 
+def test_project_takes_what_reduce_takes(tmp_path, sc_metadata):
+    """Connectomes, their files or their dense matrices, one or a sequence: the same scores."""
+    from sbci.connectome import ContinuousConnectome
+    from sbci.grid import to_condensed
+
+    rng = np.random.default_rng(5)
+    connectomes, paths = [], []
+    for i in range(5):
+        matrix = rng.random((12, 12))
+        matrix = matrix + matrix.T
+        np.fill_diagonal(matrix, 0.0)
+        area = np.full(12, 2.0)
+        matrix /= area @ matrix @ area
+        connectome = ContinuousConnectome(
+            data=to_condensed(matrix).astype(np.float32),
+            area=area,
+            mask=np.ones(12, dtype=bool),
+            metadata=sc_metadata,
+        )
+        connectomes.append(connectome)
+        paths.append(connectome.save(tmp_path / f"sub-{i}_sc.h5"))
+    result = reduce(paths[:4], rank=2, seed=0)
+    expected = project(result, np.stack([c.dense(np.float64) for c in connectomes]))
+    for given in (paths, connectomes, [str(p) for p in paths], (p for p in paths)):
+        np.testing.assert_allclose(project(result, given), expected, rtol=0, atol=1e-12)
+    np.testing.assert_allclose(project(result, paths[4]), expected[4:], rtol=0, atol=1e-12)
+    np.testing.assert_allclose(project(result, connectomes[4]), expected[4:], rtol=0, atol=1e-12)
+    with pytest.raises(ValueError, match="the basis is on 12 vertices"):
+        project(result, [np.zeros((5, 5))])
+
+
 def test_projecting_the_training_cohort_recovers_its_own_scores(cohort):
     """reduce() centres and remembers the mean, so raw subjects project correctly."""
     matrices, _ = cohort

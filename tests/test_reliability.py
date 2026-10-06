@@ -10,6 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from sbci import stats
 from sbci.smoothing import Endpoints
 from sbci.stats import icc, identification
 
@@ -52,11 +53,40 @@ def test_identification_finds_each_subject_and_says_how_sure():
     assert result.similarity.shape == (30, 30) and result.features == 500
     shuffled = identification(first, second[rng.permutation(30)])
     assert max(shuffled.accuracy) < 0.3
-    # Float32 stays float32 and agrees; a feature missing anywhere is left out.
+    # Float32 input agrees; a feature missing anywhere is left out.
     single = identification(first.astype(np.float32), second.astype(np.float32))
     np.testing.assert_allclose(single.similarity, result.similarity, atol=1e-5)
     first[0, :10] = np.nan
     assert identification(first, second).features == 490
+
+
+def test_identification_keeps_float64_precision_where_float32_sums_drift():
+    # Like smoothed SC: mostly near zero, a few large values. Once each row's mean is
+    # removed, a float32 sum adds a great many nearly equal terms and drifts upward
+    # (to r = 1.016 on two halves of one subject's streamlines); float64 does not.
+    rng = np.random.default_rng(0)
+    base = rng.uniform(0.0, 1e-3, size=(4, 500_000))
+    hot = rng.random(base.shape) < 0.01
+    base[hot] = rng.lognormal(0.0, 1.5, size=hot.sum())
+    first = (base * rng.lognormal(0.0, 0.05, size=base.shape)).astype(np.float32)
+    second = (base * rng.lognormal(0.0, 0.05, size=base.shape)).astype(np.float32)
+    exact = np.corrcoef(first.astype(np.float64), second.astype(np.float64))[:4, 4:]
+    result = identification(first, second)
+    np.testing.assert_allclose(result.similarity, exact, rtol=0, atol=1e-9)
+    assert (np.diag(result.similarity) < 1).all()
+
+
+def test_identification_by_blocks_matches_one_pass(monkeypatch):
+    rng = np.random.default_rng(3)
+    first, second = rng.standard_normal((2, 6, 1000))
+    first[2, 17] = np.nan
+    whole = identification(first, second)
+    monkeypatch.setattr(stats, "_BLOCK_ELEMENTS", 6 * 64)  # 64 features a block
+    blocked = identification(first, second)
+    np.testing.assert_allclose(blocked.similarity, whole.similarity, rtol=0, atol=1e-12)
+    assert blocked.features == whole.features == 999
+    full = np.delete(first, 17, axis=1), np.delete(second, 17, axis=1)
+    np.testing.assert_allclose(identification(*full).similarity, whole.similarity, atol=1e-12)
 
 
 def test_take_keeps_the_streamlines_asked_for_and_their_positions():

@@ -580,6 +580,30 @@ def fit_basis(
     )
 
 
+def _subjects(cc_list) -> list:
+    """The subjects in what :func:`reduce` and :func:`project` take: one, or a sequence."""
+    single = (
+        hasattr(cc_list, "dense")
+        or isinstance(cc_list, (str, os.PathLike))
+        or (isinstance(cc_list, np.ndarray) and cc_list.ndim == 2)
+    )
+    items = [cc_list] if single else cc_list
+    if not hasattr(items, "__len__"):
+        items = list(items)  # a generator: the stack's size is needed before it is filled
+    return items
+
+
+def _dense(item):
+    """One subject's dense float64 matrix, and its vertex areas when it is a connectome or file."""
+    if isinstance(item, (str, os.PathLike)):
+        from .connectome import ContinuousConnectome
+
+        item = ContinuousConnectome.load(item)  # released once its matrix is returned
+    if hasattr(item, "dense"):
+        return np.asarray(item.dense(), dtype=np.float64), np.asarray(item.area, dtype=np.float64)
+    return np.asarray(item, dtype=np.float64), None
+
+
 def project(reduction: Reduction, matrices, reference: bool = False) -> np.ndarray:
     """Score new connectomes against an existing basis.
 
@@ -609,15 +633,20 @@ def project(reduction: Reduction, matrices, reference: bool = False) -> np.ndarr
     psi_k + sum_i psi_k(i)^2 Y_ii) / 2``, which is what is solved.
 
     Either way the cost is ``O(n^2 K)`` per subject, and no
-    thirteen-million-row design is formed.
+    thirteen-million-row design is formed. ``matrices`` takes what
+    :func:`reduce` takes -- one connectome, the path of its ``.h5`` file or
+    its dense matrix, or a sequence of them -- and reads each subject when its
+    turn comes, so held-out files are never all in memory at once.
+
+    Examples
+    --------
+    >>> fitted = sbci.reduce(training_files, rank=15)     # doctest: +SKIP
+    >>> sbci.project(fitted, held_out_files).shape        # doctest: +SKIP
+    (60, 15)
     """
-    matrices = np.asarray(matrices, dtype=np.float64)
-    if matrices.ndim == 2:
-        matrices = matrices[None]
+    items = _subjects(matrices)
     basis = np.asarray(reduction.basis, dtype=np.float64)
     n = basis.shape[0]
-    if matrices.shape[1:] != (n, n):
-        raise ValueError(f"matrices are {matrices.shape[1:]}, the basis is on {n} vertices")
 
     overlap = (basis.T @ basis) ** 2
     if reference:
@@ -631,8 +660,11 @@ def project(reduction: Reduction, matrices, reference: bool = False) -> np.ndarr
         from scipy.linalg import solve_triangular
 
         lower = np.tril(overlap, -1) + np.eye(reduction.rank)
-    out = np.empty((matrices.shape[0], reduction.rank))
-    for i, matrix in enumerate(matrices):
+    out = np.empty((len(items), reduction.rank))
+    for i, item in enumerate(items):
+        matrix, _ = _dense(item)
+        if matrix.shape != (n, n):
+            raise ValueError(f"matrices are {matrix.shape}, the basis is on {n} vertices")
         centred = matrix if reduction.mean is None else matrix - reduction.mean
         quadratic = (basis * (centred @ basis)).sum(axis=0)  # psi_k' Y psi_k for every k
         if reference:
@@ -711,14 +743,7 @@ def reduce(cc_list, rank: int = 10, **kwargs) -> Reduction:
     (40, 20)
     >>> result = sbci.reduce(sorted(Path("cohort").glob("*_sc.h5")), rank=20)  # doctest: +SKIP
     """
-    single = (
-        hasattr(cc_list, "dense")
-        or isinstance(cc_list, (str, os.PathLike))
-        or (isinstance(cc_list, np.ndarray) and cc_list.ndim == 2)
-    )
-    items = [cc_list] if single else cc_list
-    if not hasattr(items, "__len__"):
-        items = list(items)  # a generator: the stack's size is needed before it is filled
+    items = _subjects(cc_list)
     if len(items) == 0:
         raise ValueError("reduce needs at least one connectome")
 
@@ -729,16 +754,9 @@ def reduce(cc_list, rank: int = 10, **kwargs) -> Reduction:
     matrices = None
     area = None
     for index, item in enumerate(items):
-        if isinstance(item, (str, os.PathLike)):
-            from .connectome import ContinuousConnectome
-
-            item = ContinuousConnectome.load(item)  # released once its matrix is copied in
-        if hasattr(item, "dense"):
-            density = np.asarray(item.dense(), dtype=np.float64)
-            if area is None:
-                area = np.asarray(item.area, dtype=np.float64)
-        else:
-            density = np.asarray(item, dtype=np.float64)
+        density, areas = _dense(item)  # a file is read here and released once copied in
+        if area is None:
+            area = areas
         if matrices is None:
             matrices = np.empty((len(items),) + density.shape)
         elif density.shape != matrices.shape[1:]:
