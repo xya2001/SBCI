@@ -3,9 +3,10 @@
     SBCI_HCP_DIR=hcp-ya python tests/reference/record_outputs.py OUT.npz
 
 The arrays the recording of 2 October 2026 held, under the same keys (the package's defaults,
-now the corrected mathematics), plus the reference-arithmetic runs under ``*ref_*`` keys:
-ENCORE with reference=True and ConSEAL on grids built with reference=True, which must
-reproduce the earlier recordings bit for bit on the same CPU type. Also what the review
+now the corrected mathematics), plus runs under ``*ref_*`` keys: ENCORE with reference=True,
+which reproduces that recording bit for bit on the same CPU type, and ConSEAL on grids built
+with reference=True, which did so until the second review of 5 October 2026 changed its
+default template estimate and velocity smoothing (PORTING.md item 9). Also what the reviews
 changed elsewhere: the projection of the training cohort (default and reference objective),
 and a region seed profile over a region that overlaps the medial wall.
 """

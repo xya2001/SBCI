@@ -320,6 +320,54 @@ def test_a_cohort_without_demographics_gets_a_subject_only_manifest(tmp_path, mo
     assert (tmp_path / "manifest.csv").read_text().splitlines() == ["subject", "sub-100206"]
 
 
+def test_a_short_https_download_keeps_its_partial_and_resumes(tmp_path, monkeypatch):
+    """A connection closing early must not leave a short final file.
+
+    Renamed short, the digest check removed it and the partial was gone, so the
+    download started from nothing every time. The ``.part`` stays, the error
+    says so, and the next call sends a Range request for the rest.
+    """
+    import io
+    import urllib.request
+
+    body = bytes(range(256)) * 40  # 10,240 bytes
+    served = []
+
+    class Response:
+        def __init__(self, start, stop, status):
+            self.status = status
+            # the server's promise, not what it delivers
+            self.headers = {"Content-Length": str(len(body) - start)}
+            self._stream = io.BytesIO(body[start:stop])
+
+        def read(self, size=-1):
+            return self._stream.read(size)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake_urlopen(request, timeout=None):
+        header = request.get_header("Range")
+        served.append(header)
+        if header is None:
+            return Response(0, 4000, 200)  # closes after 4,000 of 10,240 bytes
+        return Response(int(header.split("=")[1].rstrip("-")), len(body), 206)
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    url = "https://zenodo.example/bundle.zip"
+    destination = tmp_path / "bundle.zip"
+    partial = tmp_path / "bundle.zip.part"
+    with pytest.raises(OSError, match="the next call resumes it"):
+        download._fetch_https(url, destination, lambda _: None)
+    assert not destination.exists() and partial.read_bytes() == body[:4000]
+    download._fetch_https(url, destination, lambda _: None)
+    assert served == [None, "bytes=4000-"]
+    assert destination.read_bytes() == body and not partial.exists()
+
+
 def test_https_fetch_resumes_a_partial_download(tmp_path):
     """A local server that honours Range, a partial file, and the fetch completing it."""
     import threading

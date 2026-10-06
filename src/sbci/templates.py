@@ -40,7 +40,7 @@ from pathlib import Path
 import numpy as np
 
 from . import spec
-from .alignment import MeshQuery, normalize_rows, voronoi_areas
+from .alignment import MeshQuery, _npz_path, normalize_rows, voronoi_areas
 from .surface import load_surface
 
 #: Templates a warp can be carried to.
@@ -241,14 +241,17 @@ class TemplateWarp:
     faces: tuple
 
     def apply(self, points, hemisphere: str) -> np.ndarray:
-        """Where template-sphere ``points`` on one hemisphere land under the warp."""
-        base, faces = template_mesh(self.template)[0 if hemisphere == "L" else 1]
-        images = self.lh_vertices if hemisphere == "L" else self.rh_vertices
+        """Where template-sphere ``points`` on hemisphere ``"L"`` or ``"R"`` land under the warp."""
+        if hemisphere not in ("L", "R"):
+            raise ValueError(f"hemisphere must be 'L' or 'R', got {hemisphere!r}")
+        side = 0 if hemisphere == "L" else 1
+        base, faces = template_mesh(self.template)[side]
+        images = (self.lh_vertices, self.rh_vertices)[side]
         return _interpolate(points, base, images, faces)
 
     def save(self, path) -> Path:
-        """Write the warp to ``.npz``."""
-        path = Path(path)
+        """Write the warp to ``.npz``; the path returned is the file written, suffix included."""
+        path = _npz_path(path)
         np.savez_compressed(
             path,
             template=self.template,
@@ -321,9 +324,14 @@ def migrate_warp(warp, to: str = "fs_LR_32k", grid_rotations=None) -> TemplateWa
         ``"fsaverage"`` (FreeSurfer's standard sphere at full resolution,
         fetched by nilearn on first use).
     grid_rotations
-        For an ENCORE warp, ``Alignment.grid_rotations``: ENCORE works on a
-        rotated copy of the grid and its warps are in that frame. ConSEAL's
-        are in the grid's own frame and need none.
+        The rotations of the grid the warp was estimated on, as
+        ``Alignment.grid_rotations``: ENCORE works on a copy of the grid
+        rotated off the coordinate poles, and its warps are in that frame.
+        ``None``, the default, takes them from the warp itself -- an ENCORE
+        :class:`~sbci.alignment.Warp` carries them as ``lh_rotation`` and
+        ``rh_rotation``, through :meth:`~sbci.alignment.Warp.save` and back
+        -- and a warp without them, such as ConSEAL's, which works in the
+        grid's own frame, gets identities. Passing them overrides the warp's.
 
     Returns
     -------
@@ -332,7 +340,9 @@ def migrate_warp(warp, to: str = "fs_LR_32k", grid_rotations=None) -> TemplateWa
     sphere = load_surface("sphere")
     chains = chain_to(to)
     meshes = template_mesh(to)
-    rotations = (np.eye(3), np.eye(3)) if grid_rotations is None else grid_rotations
+    if grid_rotations is None:
+        grid_rotations = tuple(getattr(warp, f"{letter}h_rotation", None) for letter in "lr")
+    rotations = tuple(np.eye(3) if r is None else r for r in grid_rotations)
     out = {}
     for side, letter in enumerate("LR"):
         hemisphere = sphere.hemisphere(letter)

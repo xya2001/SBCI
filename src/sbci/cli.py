@@ -88,7 +88,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         from .examples import example as _example
 
         connectome = _example(args.modality, seed=args.seed)
-        path = connectome.save(args.out or f"sub-example_{args.modality}.h5")
+        try:
+            path = connectome.save(args.out or f"sub-example_{args.modality}.h5")
+        except (ValueError, OSError) as error:  # a name load() would refuse, or no such directory
+            print(f"error: {error}", file=sys.stderr)
+            return 1
         print(f"wrote {path}")
         print("  synthetic connectivity on the real ico4 grid -- not measured data")
         if connectome.has_endpoints:

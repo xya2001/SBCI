@@ -95,7 +95,13 @@ def _fetch_drive(file_id: str, destination: Path, report: Callable[[str], None])
 
 
 def _fetch_https(url: str, destination: Path, report: Callable[[str], None]) -> None:
-    """Download ``url`` to ``destination``, resuming a partial file with a range request."""
+    """Download ``url`` to ``destination``, resuming a partial file with a range request.
+
+    A connection that closes before ``Content-Length`` is reached leaves the
+    ``.part`` file where it is and raises, so the next call resumes it; only a
+    complete download takes the final name. Renamed short, the file would be
+    found wrong by the digest check, removed, and the download started over.
+    """
     from urllib.error import HTTPError
     from urllib.request import Request, urlopen
 
@@ -126,6 +132,11 @@ def _fetch_https(url: str, destination: Path, report: Callable[[str], None]) -> 
                 if expected and done * 20 // expected != last:
                     last = done * 20 // expected
                     report(f"    {destination.name}: {done / 1e6:.0f} of {expected / 1e6:.0f} MB")
+    if expected is not None and done < expected:
+        raise OSError(
+            f"{destination.name}: the connection closed after {done / 1e6:.1f} of "
+            f"{expected / 1e6:.1f} MB; the partial file is kept and the next call resumes it"
+        )
     partial.replace(destination)
 
 

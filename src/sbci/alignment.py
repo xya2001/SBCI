@@ -18,7 +18,8 @@ Layers, each checked against a MATLAB run of the reference:
     directly.
 ``SphericalWarp``
     A diffeomorphism, stored as where it sends each vertex, with the
-    determinant of its differential by central differences.
+    determinant of its differential by central differences, calibrated so
+    that the identity's is exactly 1.
 ``Concon``
     The density on the product mesh: push it through a pair of warps, and
     differentiate it along the two frame fields.
@@ -674,14 +675,30 @@ def triangles_fold(vertices, faces) -> bool:
 
 
 class SphericalWarp:
-    """A diffeomorphism of the sphere, as the image of each vertex."""
+    """A diffeomorphism of the sphere, as the image of each vertex.
 
-    def __init__(self, grid: SphericalGrid, delta: float = DEFAULT_DELTA):
+    The Jacobian is the reference's central difference through four offset
+    points relocated on the planar mesh (:meth:`_raw_jacobian`). That scheme
+    carries the mesh's chord-versus-arc error: on the identity it returns not
+    1 but 0.9965 on the ico4 grid (0.805 on a 42-vertex icosphere), and since
+    :meth:`Concon.evaluate` transports a density with the product of two
+    Jacobians, every accepted step would take about 0.7% of its mass on ico4.
+    So the scheme's value on the identity is computed once, at construction,
+    and every Jacobian is divided by it: the identity gives exactly 1 and a
+    small warp 1 plus its divergence. ``reference=True`` leaves the Jacobian
+    uncalibrated, as the reference computes it, for the MATLAB comparison. A
+    vertex on the coordinate axis has an identity Jacobian of zero
+    (:meth:`SphericalGrid.pole_vertices`) and is left as it is: there is
+    nothing there to calibrate against.
+    """
+
+    def __init__(self, grid: SphericalGrid, delta: float = DEFAULT_DELTA, reference: bool = False):
         self.grid = grid
         self.faces = grid.faces
         self.base = grid.vertices
         self.vertices = grid.vertices.copy()
         self.jacobian = np.ones(grid.n_vertices)
+        self.reference = bool(reference)
         # The fold test wants outward faces. A mesh wound the other way is a
         # valid grid everywhere else (areas, queries and the Jacobian do not
         # care), so test it with its faces reversed rather than refuse it.
@@ -703,6 +720,11 @@ class SphericalWarp:
                 ("my", grid.e2, -1),
             )
         }
+        # The scheme's own value on the identity, divided out of every Jacobian
+        # (class docstring); a zero, at a vertex on the axis, is left alone.
+        identity = self._raw_jacobian()
+        self._calibration = np.where(identity > 0, identity, 1.0)
+        self._calibration[grid.pole_vertices()] = 1.0
 
     def compose(self, displacement) -> SphericalWarp:
         """Compose with a further displacement given in the tangent basis."""
@@ -732,8 +754,8 @@ class SphericalWarp:
         """
         return triangles_fold(self.vertices, self._fold_faces)
 
-    def _compute_jacobian(self):
-        """Determinant of the differential, by central differences."""
+    def _raw_jacobian(self):
+        """Determinant of the differential by central differences, as the reference forms it."""
         angles = {}
         for name, (weights, indices) in self._offsets.items():
             point = (weights[:, :, None] * self.vertices[indices]).sum(axis=1)
@@ -754,6 +776,11 @@ class SphericalWarp:
 
         theta, _ = cart_to_sphere(self.vertices)
         return np.abs(((d_tt * d_pp) - (d_tp * d_pt)) * np.sin(theta))
+
+    def _compute_jacobian(self):
+        """The Jacobian, divided by the scheme's value on the identity unless ``reference``."""
+        jacobian = self._raw_jacobian()
+        return jacobian if self.reference else jacobian / self._calibration
 
 
 class Concon:
@@ -890,36 +917,57 @@ class Concon:
 # --- the estimator ---------------------------------------------------------
 
 
+def _npz_path(path) -> Path:
+    """The file ``np.savez_compressed`` writes: it appends ``.npz`` when the name lacks it."""
+    path = Path(path)
+    return path if str(path).endswith(".npz") else Path(f"{path}.npz")
+
+
 @dataclass
 class Warp:
-    """One subject's diffeomorphism of both hemispheres."""
+    """One subject's diffeomorphism of both hemispheres.
+
+    The vertices are in the frame of the grid the warp was estimated on, which
+    for the bundled sphere is rotated off the coordinate poles
+    (:func:`rotate_off_poles`). ``lh_rotation`` and ``rh_rotation`` are those
+    rotations, identities for a grid that needed none; ``lh_vertices @
+    lh_rotation`` is back in the file's frame. They are saved with the warp,
+    and :func:`sbci.migrate_warp` reads them, so a warp reloaded from its file
+    still knows its frame.
+    """
 
     lh_vertices: np.ndarray
     lh_jacobian: np.ndarray
     rh_vertices: np.ndarray
     rh_jacobian: np.ndarray
+    lh_rotation: np.ndarray = field(default_factory=lambda: np.eye(3))
+    rh_rotation: np.ndarray = field(default_factory=lambda: np.eye(3))
 
     def save(self, path) -> Path:
-        """Write the warp to ``.npz``."""
-        path = Path(path)
+        """Write the warp to ``.npz``; the path returned is the file written, suffix included."""
+        path = _npz_path(path)
         np.savez_compressed(
             path,
             lh_vertices=self.lh_vertices,
             lh_jacobian=self.lh_jacobian,
             rh_vertices=self.rh_vertices,
             rh_jacobian=self.rh_jacobian,
+            lh_rotation=self.lh_rotation,
+            rh_rotation=self.rh_rotation,
         )
         return path
 
     @classmethod
     def load(cls, path) -> Warp:
-        """Read a warp written by :meth:`save`."""
+        """Read a warp written by :meth:`save`; a file without the rotations gets identities."""
         with np.load(Path(path)) as data:
             return cls(
                 lh_vertices=data["lh_vertices"],
                 lh_jacobian=data["lh_jacobian"],
                 rh_vertices=data["rh_vertices"],
                 rh_jacobian=data["rh_jacobian"],
+                lh_rotation=data["lh_rotation"] if "lh_rotation" in data.files else np.eye(3),
+                rh_rotation=data["rh_rotation"] if "rh_rotation" in data.files else np.eye(3),
             )
 
 
@@ -931,7 +979,9 @@ class Alignment:
     hemispheres of the bundled sphere before alignment (see
     :func:`rotate_off_poles`); the vertices in each :class:`Warp` live in that
     rotated frame, and ``warp.lh_vertices @ grid_rotations[0]`` maps them back
-    to the file's sphere. Both are identities when ``grids`` were supplied.
+    to the file's sphere. Each warp carries the same two rotations as its
+    ``lh_rotation`` and ``rh_rotation``, so a warp saved on its own keeps its
+    frame. Both are identities when ``grids`` were supplied.
     """
 
     template: np.ndarray
@@ -946,11 +996,20 @@ class Alignment:
         return f"<Alignment of {len(self.warps)} subjects on {self.template.shape[0]} vertices>"
 
 
+def _without_diagonal(density) -> np.ndarray:
+    """A float64 copy of ``density`` with its diagonal zeroed; the input is left alone."""
+    density = np.array(density, dtype=np.float64)
+    np.fill_diagonal(density, 0.0)
+    return density
+
+
 class Encore:
     """Template estimation and registration on a pair of spherical meshes.
 
     ``reference=True`` is handed to the :class:`Concon` underneath, whose
-    :meth:`Concon.evaluate_root` then loses unit norm as the reference's does;
+    :meth:`Concon.evaluate_root` then loses unit norm as the reference's does,
+    and to the :class:`SphericalWarp` pair of every registration, whose
+    Jacobian is then left uncalibrated (0.9965 on the identity instead of 1);
     the grids carry their own ``reference`` setting for the tangent basis. A
     step that folds a face is refused in both modes (:meth:`register`).
     """
@@ -981,8 +1040,17 @@ class Encore:
         self.backtracks = int(backtracks)
 
     def root(self, density):
-        """The square-root density, normalized to unit mass."""
-        density = np.asarray(density, dtype=np.float64)
+        """The square-root density, normalized to unit mass.
+
+        The diagonal of a connectivity density is not part of it: a
+        :class:`~sbci.ContinuousConnectome` carries none, and
+        :meth:`Concon.evaluate_root` zeroes it on every transported image. It
+        is zeroed here too, before the normalization, so that a raw array
+        with a nonzero diagonal starts :meth:`register` at the cost its trial
+        steps are measured by; left in, it sat in every residual and no step
+        could ever be accepted. The input is not modified.
+        """
+        density = _without_diagonal(density)
         return np.sqrt(density / (density * self.area_product).sum())
 
     def template(self, densities, iterations: int = 10):
@@ -1029,10 +1097,13 @@ class Encore:
         every attempt fails. ``callback(iteration, cost)`` is called after
         every accepted step.
         """
-        lh_warp = SphericalWarp(self.lh_grid, self.delta)
-        rh_warp = SphericalWarp(self.rh_grid, self.delta)
+        lh_warp = SphericalWarp(self.lh_grid, self.delta, reference=self.reference)
+        rh_warp = SphericalWarp(self.rh_grid, self.delta, reference=self.reference)
 
         fixed = np.asarray(target, dtype=np.float64) if target_is_root else self.root(target)
+        # Not part of the density (see root); the final evaluate must not see
+        # it either, or it would interpolate that mass off the diagonal.
+        moving = _without_diagonal(moving)
         source = self.root(moving)
 
         image = source
@@ -1227,21 +1298,26 @@ def align(
         which on a small deformation is the first step of all; ``0``
         reproduces that.
     reference
-        Reproduce two errors in the reference's arithmetic, for comparison
-        with its MATLAB output; ``False``, the default, corrects both. The
-        reference's Legendre recurrence treats the normalized functions as
-        unnormalized at ``m = 0``, so every zonal field's derivative in theta
-        is scaled by ``(1 + 1/(l(l+1))) / 2`` -- 0.75 at degree 1, 0.502 at
-        degree 15. The normalized basis fields come out the same, but their
-        divergence (:attr:`SphericalGrid.laplacian`) is 4/3 of the true one
-        at degree 1, and it enters every registration gradient. And
+        Reproduce the reference's arithmetic in the three places the port
+        departs from it, for comparison with its MATLAB output; ``False``,
+        the default, corrects all three. The reference's Legendre recurrence
+        treats the normalized functions as unnormalized at ``m = 0``, so
+        every zonal field's derivative in theta is scaled by
+        ``(1 + 1/(l(l+1))) / 2`` -- 0.75 at degree 1, 0.502 at degree 15. The
+        normalized basis fields come out the same, but their divergence
+        (:attr:`SphericalGrid.laplacian`) is 4/3 of the true one at degree 1,
+        and it enters every registration gradient.
         :meth:`Concon.evaluate_root` normalizes the transported density
         before zeroing its diagonal, so it falls short of unit norm by the
-        mass interpolation put there: 0.02 to 0.2% on ico4. Grids passed in
-        through ``grids`` keep the setting they were built with. A step that
-        folds a face is refused in both modes; the reference's Jacobian is an
-        absolute value and cannot see one, but it only ever folds at step
-        lengths far above the default.
+        mass interpolation put there: 0.02 to 0.2% on ico4. And the
+        finite-difference Jacobian is left as the scheme returns it, 0.9965
+        on the identity on ico4 rather than 1, so every accepted step takes
+        about 0.7% of a density's mass; the default divides that bias out
+        (:class:`SphericalWarp`). Grids passed in through ``grids`` keep the
+        setting they were built with. A step that folds a face is refused in
+        both modes; the reference's Jacobian is an absolute value and cannot
+        see one, but it only ever folds at step lengths far above the
+        default.
 
     Returns
     -------
@@ -1338,7 +1414,14 @@ def align(
             template, density, target_is_root=True, verbose=verbose, callback=record
         )
         result.warps.append(
-            Warp(lh_warp.vertices, lh_warp.jacobian, rh_warp.vertices, rh_warp.jacobian)
+            Warp(
+                lh_warp.vertices,
+                lh_warp.jacobian,
+                rh_warp.vertices,
+                rh_warp.jacobian,
+                lh_rotation=rotations[0],
+                rh_rotation=rotations[1],
+            )
         )
         result.aligned.append(aligned)
         result.costs.append(float(cost))

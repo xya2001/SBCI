@@ -12,6 +12,10 @@ from .atlas import Atlas, load_atlas
 from .errors import InvalidFileError
 from .metadata import Metadata
 
+COMPUTATIONAL_SUFFIXES = (".h5", ".hdf5")
+"""How a computational file may be named: what :meth:`ContinuousConnectome.load`
+reads and :meth:`ContinuousConnectome.save` agrees to write."""
+
 
 class ContinuousConnectome:
     """A continuous connectome on the ico4 surface grid.
@@ -75,7 +79,7 @@ class ContinuousConnectome:
         """
         path = Path(path)
         suffixes = "".join(path.suffixes)
-        if suffixes.endswith((".h5", ".hdf5")):
+        if suffixes.endswith(COMPUTATIONAL_SUFFIXES):
             # Checked here, after the kind of file is known, so that an
             # unrecognized name is reported as such whether or not it exists.
             if not path.exists():
@@ -157,7 +161,9 @@ class ContinuousConnectome:
             and has no mass -- asking for ``"mass"`` on FC is refused. Under
             ``"mean"`` a region's diagonal entry is the mean over its distinct
             vertex pairs, so a region with a single cortical vertex has none
-            and reads ``NaN``.
+            and reads ``NaN``; a region with no cortical vertex at this
+            resolution has no pair with anyone and is ``NaN`` along its whole
+            row and column (zero under ``"mass"``).
 
         Vertices outside the cortical mask contribute neither connectivity nor
         area, so an atlas that labels the medial wall (``PALS_B12_Lobes``) is
@@ -262,7 +268,18 @@ class ContinuousConnectome:
         return profile
 
     def save(self, path: str | Path) -> Path:
-        """Write the computational HDF5 file."""
+        """Write the computational HDF5 file.
+
+        The name has to end in ``.h5`` or ``.hdf5``, the names :meth:`load`
+        reads; anything else is refused before a byte is written, since the
+        file would come back unloadable.
+        """
+        path = Path(path)
+        if not path.name.endswith(COMPUTATIONAL_SUFFIXES):
+            raise ValueError(
+                f"{path.name!r} is not a name load() would read back; name the computational "
+                f"file with one of {COMPUTATIONAL_SUFFIXES}"
+            )
         return io.write_hdf5(
             path,
             data=self.data,
@@ -366,7 +383,8 @@ class ContinuousConnectome:
             :meth:`coupling`.
         surface
             Which bundled geometry to draw on: ``"inflated"``, ``"white"``,
-            ``"pial"`` or ``"sphere"``.
+            ``"pial"`` or ``"sphere"`` (turned into anatomical orientation for
+            display; see :func:`sbci.plotting.plot_surface`).
         """
         from .plotting import plot_surface
 

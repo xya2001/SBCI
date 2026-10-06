@@ -24,8 +24,11 @@ from where they now sit. Nothing is ever resampled.
 What was found in the reference while porting
 ---------------------------------------------
 The reference is research code, and this port reproduces its behaviour --
-including the shortcuts below -- when ``strict_upstream=True``. By default the
-first four are corrected. PORTING.md item 7 has the measurements.
+including the shortcuts below -- when ``strict_upstream=True``. By default
+items 1 to 4 and 12 to 16 are corrected; 5 and 8 are kept as the choices they
+are, 6, 9 and 11 are fixed in both modes, and 7 only reaches
+:meth:`HeatKernelBuilder.cross_validate`. PORTING.md item 7 has the
+measurements.
 
 1. **The gradient contains a term evaluated in the wrong tangent frame.**
    ``Concon.evaluate`` forms ``Dx = dK A K^T`` and then symmetrizes it,
@@ -100,6 +103,31 @@ first four are corrected. PORTING.md item 7 has the measurements.
     through ``grid.laplacian``, is too large by ``2 / (1 + 1/(l(l+1)))``.
     Found by the review of 5 October 2026; ``strict_upstream=True`` builds the
     default grids with the reference's recurrence.
+15. **The Karcher median can stop on its starting subject.** ``get_template``
+    starts from the subject nearest the mean and weights every subject by the
+    inverse of its distance to the estimate. For the starting subject that
+    distance is ``acos`` of its own squared norm, which is one only to the
+    rounding of the ``single`` barycentric weights: a norm 1e-10 short of one
+    reads as 1.4e-5 radians, a weight near 1e5 that makes the first Weiszfeld
+    step shorter than the 0.005 stopping length, and the template is that
+    subject (a norm past one clips to zero and does no harm). By default the
+    square-root densities are normalized to unit norm first and a subject
+    within 1e-6 radians of the estimate counts as coincident, contributing
+    neither a direction nor a weight; ``strict_upstream=True`` keeps the
+    reference's arithmetic. Found by the second review of 5 October 2026.
+16. **The velocity field is smoothed component by component.** The 5%
+    Laplacian smoothing of item 8 is applied to the ``(e1, e2)`` components as
+    two scalars. The frame turns with longitude -- by 72 degrees between
+    neighbours of a coordinate pole -- so the average over neighbours there
+    mixes vectors expressed in incompatible frames: ten smoothing passes move
+    the polar vertices of a 20-degree rotation by 9 degrees and the rest by
+    0.2, and the vertex at the pole follows only half of a 4-degree shift of
+    the endpoints around it (3.5 degrees once corrected). By default the field
+    is lifted to 3-vectors, smoothed per Cartesian component and projected
+    back onto the frames, which agrees with the reference's smoothing to 1e-3
+    of the field where the frame turns slowly (within 30 degrees of the
+    coordinate equator); ``strict_upstream=True`` keeps the reference's. Found
+    by the second review of 5 October 2026.
 """
 
 from __future__ import annotations
@@ -717,7 +745,8 @@ class StationaryWarp:
     of a tangent field ``velocity`` (``(P, 2)`` in the ``(e1, e2)`` frame),
     computed by scaling and squaring with barycentric interpolation and
     parallel transport. Composing is addition of velocity fields, followed by
-    the reference's 5% Laplacian smoothing (module docstring, item 8).
+    the reference's 5% Laplacian smoothing (module docstring, item 8), applied
+    to the field as 3-vectors rather than frame components (item 16).
     """
 
     def __init__(
@@ -792,12 +821,13 @@ class StationaryWarp:
 
         An update that would fold a triangle is refused. The reference keeps
         the refused displacement in the velocity field regardless (module
-        docstring, item 3), which ``strict_upstream=True`` reproduces.
+        docstring, item 3) and smooths the frame components as scalars (item
+        16); ``strict_upstream=True`` reproduces both.
         """
         displacement = np.asarray(displacement, dtype=np.float64)
         velocity = self.velocity + displacement
         if self.viscosity:
-            velocity = velocity - self.viscosity * (self._laplacian @ velocity)
+            velocity = self._smooth(velocity, strict_upstream)
         candidate = self.exponential(velocity)
         if triangles_fold(candidate, self.faces):
             self.rejected += 1
@@ -810,6 +840,21 @@ class StationaryWarp:
         self.velocity = velocity
         self.vertices = candidate
         return True
+
+    def _smooth(self, velocity, strict_upstream: bool = False) -> np.ndarray:
+        """Remove ``viscosity`` of the field's cotangent Laplacian from it.
+
+        The field is lifted to 3-vectors, smoothed per Cartesian component and
+        projected back onto each vertex's frame, so that neighbours are
+        averaged as vectors. ``strict_upstream=True`` smooths the ``(e1, e2)``
+        components as two scalars, which mixes frames where they turn sharply
+        (module docstring, item 16).
+        """
+        if strict_upstream:
+            return velocity - self.viscosity * (self._laplacian @ velocity)
+        ambient = self.e1 * velocity[:, :1] + self.e2 * velocity[:, 1:]
+        ambient = ambient - self.viscosity * (self._laplacian @ ambient)
+        return np.stack([(ambient * self.e1).sum(1), (ambient * self.e2).sum(1)], axis=1)
 
     def invert(self) -> StationaryWarp:
         """Negate the velocity field and re-flow, in place (``invert``)."""
@@ -1054,8 +1099,10 @@ class EndpointWarp:
     rh_jacobian: np.ndarray
 
     def save(self, path) -> Path:
-        """Write the warp to ``.npz``."""
+        """Write the warp to ``.npz``; returns the path written, suffix included."""
         path = Path(path)
+        if not path.name.endswith(".npz"):
+            path = path.with_name(path.name + ".npz")  # what np.savez_compressed appends anyway
         np.savez_compressed(path, **dict(self.__dict__))
         return path
 
@@ -1103,7 +1150,11 @@ class ConSEAL:
         Weight the cost and its gradient with the Voronoi areas, as the
         paper's integral does. Off by default to match the reference (item 5).
     strict_upstream
-        Reproduce items 1 to 4 of the module docstring.
+        Reproduce items 1 to 4, 12, 13, 15 and 16 of the module docstring. The
+        kernel derivative handed to :meth:`register` must then come from
+        :meth:`HeatKernelBuilder.compute` with the same flag (item 2), and
+        item 14 lives in the grids (:func:`default_grids` with
+        ``reference=True``).
     """
 
     def __init__(
@@ -1150,11 +1201,20 @@ class ConSEAL:
         """Karcher median of the subjects' square-root densities (``get_template``).
 
         Starts from the subject nearest the Euclidean mean and takes Weiszfeld
-        steps of length 0.2 until one is shorter than 0.005.
+        steps of length 0.2 until one is shorter than 0.005. The densities are
+        normalized to unit norm first, and a subject within 1e-6 radians of
+        the estimate is coincident with it: no direction, no weight. The
+        reference's arithmetic, which ``strict_upstream`` keeps, lets the
+        rounding of the starting subject's norm pin the median to that
+        subject (module docstring, item 15).
         """
         qs = [c.q_transform(kernel) for c in connectomes]
         if not qs:
             raise ValueError("a template needs at least one connectome")
+        strict = self.strict_upstream
+        if not strict:
+            qs = [q / np.sqrt((q**2).sum()) for q in qs]
+        coincident = 0.0 if strict else 1e-6  # radians; subjects sit 0.2 to 0.5 apart (item 15)
         q_bar = sum(qs) / len(qs)
         q_mu = qs[int(np.argmin([((q - q_bar) ** 2).sum() for q in qs]))].copy()
         for _ in range(int(iterations)):
@@ -1162,10 +1222,10 @@ class ConSEAL:
             inverse_distance = 0.0
             for q in qs:
                 inner = float((q * q_mu).sum())
-                if 1 - abs(inner) < 1e-14:
+                if strict and 1 - abs(inner) < 1e-14:
                     inner = float(np.sign(inner))
                 distance = float(np.arccos(np.clip(inner, -1.0, 1.0)))
-                if distance > 0:
+                if distance > coincident:
                     directions += (q - np.cos(distance) * q_mu) / np.sin(distance)
                     inverse_distance += 1.0 / distance
             if inverse_distance == 0:
@@ -1462,9 +1522,8 @@ def endpoints_align(
         where it is and need not be in the list: this is how one subject is
         registered onto another. An integer registers everyone onto that
         subject's own density. A square-root density array registers onto
-        that: an earlier run's :attr:`EndpointAlignment.template`, or the
-        normalized mean of the subjects' ``q_transform(kernel)`` arrays when
-        the median would settle on one subject (USAGE.md, the ConSEAL caveats).
+        that: an earlier run's :attr:`EndpointAlignment.template`, say, or the
+        normalized mean of the subjects' ``q_transform(kernel)`` arrays.
     sigma, kernel_degree
         Heat-kernel bandwidth and truncation degree (0.005 and 30 in the paper).
     order, delta, max_iterations, threshold, step_clamp, viscosity
@@ -1478,15 +1537,13 @@ def endpoints_align(
     area_weighted
         See :class:`ConSEAL`.
     strict_upstream
-        Reproduce the reference's errors, items 1 to 4 of the module docstring
-        (see :class:`ConSEAL`), and one more that lives in the shared
-        geometry: the Legendre recurrence behind the tangent basis treats the
-        normalized functions as unnormalized at ``m = 0``, so the divergence
-        of every zonal basis field -- which enters the gradient through
-        ``grid.laplacian`` -- is too large by ``2 / (1 + 1/(l(l+1)))``, 4/3 at
-        degree 1 (:class:`~sbci.alignment.SphericalGrid`). The default grids
-        are then built with ``reference=True``; grids passed in through
-        ``grids`` keep the setting they were built with.
+        Reproduce the reference's errors: items 1 to 4 and 12 to 16 of the
+        module docstring. Item 14 lives in the shared geometry -- the Legendre
+        recurrence behind the tangent basis, whose ``m = 0`` term makes the
+        divergence of every zonal basis field too large
+        (:class:`~sbci.alignment.SphericalGrid`) -- so the default grids are
+        then built with ``reference=True``; grids passed in through ``grids``
+        keep the setting they were built with.
     grids
         ``(lh_grid, rh_grid)`` to work on; defaults to :func:`default_grids`.
 

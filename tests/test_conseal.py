@@ -783,3 +783,156 @@ def test_strict_upstream_builds_the_default_grids_with_the_reference_basis(grid,
     endpoints_align([subject], **settings)
     endpoints_align([subject], grids=(grid, grid), strict_upstream=True, **settings)
     assert asked == [True, False]
+
+
+# --- the second review: the median's arithmetic, smoothing as vectors, save's path -----
+
+
+class _Density:
+    """Stands in for a connectome whose square-root density is given."""
+
+    def __init__(self, q):
+        self.q = q
+
+    def q_transform(self, kernel):
+        return self.q.copy()
+
+
+def regular_simplex(rng, side_degrees, count=5, n=40):
+    """``count`` unit matrices, every pair ``side_degrees`` apart.
+
+    Their Karcher median is their normalized mean, equidistant from all of
+    them, so a template that stops short shows as a spread of distances.
+    """
+    base = rng.random((n, n)) + 0.5
+    base /= np.sqrt((base**2).sum())
+    directions = []
+    for _ in range(count):
+        u = rng.normal(size=(n, n))
+        u -= (u * base).sum() * base
+        for d in directions:
+            u -= (u * d).sum() * d
+        directions.append(u / np.sqrt((u**2).sum()))
+    half = np.arccos(np.sqrt(np.cos(np.radians(side_degrees))))
+    return [np.cos(half) * base + np.sin(half) * u for u in directions]
+
+
+def degrees_between(template, densities):
+    """Fisher-Rao distance from ``template`` to each density in degrees, norms ignored."""
+    return np.degrees(
+        [np.arccos(np.clip((q * template).sum() / np.sqrt((q**2).sum()), -1, 1)) for q in densities]
+    )
+
+
+def test_the_template_does_not_stop_on_a_subject_whose_norm_rounds_low(grid):
+    """Item 15: a squared norm 5e-11 short of one once pinned the median to that subject."""
+    qs = regular_simplex(np.random.default_rng(3), side_degrees=5.3)
+    assert np.degrees(np.arccos((qs[0] * qs[1]).sum())) == pytest.approx(5.3, abs=1e-6)
+    for factor in (1 - 5e-11, 1.0, 1 + 5e-11):
+        subjects = [_Density(np.sqrt(factor) * q) for q in qs]
+        template = ConSEAL(grid, grid).template(subjects, None)
+        distances = degrees_between(template, qs)
+        assert np.isclose((template**2).sum(), 1.0)
+        assert distances.min() > 2.5  # between the subjects, not on one
+        assert distances.max() - distances.min() < 0.5
+    # the reference's arithmetic, kept under strict_upstream: the starting subject's
+    # distance to itself is acos(1 - 5e-11), a weight near 1e5, and the median stays put
+    subjects = [_Density(np.sqrt(1 - 5e-11) * q) for q in qs]
+    mean = sum(s.q for s in subjects) / len(subjects)
+    start = int(np.argmin([((s.q - mean) ** 2).sum() for s in subjects]))
+    strict = ConSEAL(grid, grid, strict_upstream=True).template(subjects, None)
+    distances = degrees_between(strict, qs)
+    assert distances[start] < 0.01
+    assert np.sort(distances)[1] > 5.0
+
+
+def test_endpoints_align_estimates_a_unit_norm_template_between_the_subjects(grid):
+    rng = np.random.default_rng(23)
+    subjects = [
+        EndpointConnectome.from_points(grid, grid, *synthetic(rng, n=900)) for _ in range(3)
+    ]
+    result = endpoints_align(
+        subjects,
+        sigma=0.05,
+        kernel_degree=12,
+        max_iterations=0,
+        template_iterations=10,
+        grids=(grid, grid),
+    )
+    assert np.isclose((result.template**2).sum(), 1.0)
+    kernel = HeatKernelBuilder(grid, grid, 12).compute(0.05, derivative=False)
+    distances = degrees_between(result.template, [s.q_transform(kernel) for s in subjects])
+    assert distances.min() > 0.5
+
+
+@pytest.fixture(scope="module")
+def bundled_left():
+    """The bundled ico4 left grid, which has a vertex at each coordinate pole."""
+    from sbci.conseal import default_grids
+
+    return default_grids(order=1)[0]
+
+
+def rotation_about_x(degrees):
+    angle = np.radians(degrees)
+    return np.array(
+        [[1, 0, 0], [0, np.cos(angle), -np.sin(angle)], [0, np.sin(angle), np.cos(angle)]]
+    )
+
+
+def test_smoothing_leaves_a_rotation_alone_at_the_coordinate_poles(bundled_left):
+    """Item 16: ten smoothing passes of a 20-degree rotation moved the polar vertices 9 degrees.
+
+    What remains is the smoothing itself, 5% of the Laplacian of a degree-1
+    field ten times over, which shrinks the rotation by half a percent
+    everywhere alike.
+    """
+    grid = bundled_left
+    poles = np.flatnonzero(np.abs(grid.vertices[:, 2]) > 1 - 1e-9)
+    assert poles.size == 2
+    drift = {}
+    for strict in (False, True):
+        warp = StationaryWarp(grid, strict_upstream=strict).rotate(rotation_about_x(20.0))
+        start = warp.vertices.copy()
+        for _ in range(10):
+            assert warp.compose(np.zeros((grid.n_vertices, 2)), strict_upstream=strict)
+        drift[strict] = np.degrees(np.arccos(np.clip((warp.vertices * start).sum(1), -1, 1)))
+    assert drift[True][poles].min() > 5.0
+    assert drift[False][poles].max() < 0.12
+    assert drift[False][poles].max() < 1.5 * drift[False].mean()
+
+
+def test_both_smoothings_agree_where_the_frame_turns_slowly(bundled_left):
+    """Within 30 degrees of the coordinate equator the two differ by under 1e-3 of the field."""
+    grid = bundled_left
+    warp = StationaryWarp(grid)
+    omega = np.radians(20.0) * np.array([1.0, 0.0, 0.0])
+    field = np.cross(np.broadcast_to(omega, grid.vertices.shape), grid.vertices)
+    velocity = np.stack([(field * grid.e1).sum(1), (field * grid.e2).sum(1)], axis=1)
+    ambient = warp._smooth(velocity)
+    componentwise = warp._smooth(velocity, strict_upstream=True)
+    scale = np.linalg.norm(velocity, axis=1).max()
+    difference = np.linalg.norm(ambient - componentwise, axis=1) / scale
+    away = np.abs(grid.vertices[:, 2]) < 0.5
+    assert difference[away].max() < 1e-3
+    # 5% of the Laplacian barely touches a degree-1 field; the poles are where they part
+    assert np.linalg.norm(ambient - velocity, axis=1).max() < 1e-3 * scale
+    assert difference[np.abs(grid.vertices[:, 2]) > 0.99].max() > 0.05
+
+
+def test_save_returns_the_path_it_wrote(grid, tmp_path):
+    warp = StationaryWarp(grid)
+    exported = EndpointWarp(
+        lh_vertices=warp.vertices,
+        lh_velocity=warp.velocity,
+        lh_jacobian=warp.jacobian,
+        rh_vertices=warp.vertices,
+        rh_velocity=warp.velocity,
+        rh_jacobian=warp.jacobian,
+    )
+    written = exported.save(tmp_path / "warp")  # np.savez_compressed appends the suffix
+    assert written == tmp_path / "warp.npz" and written.exists()
+    assert not (tmp_path / "warp").exists()
+    assert exported.save(tmp_path / "named.npz") == tmp_path / "named.npz"
+    loaded = EndpointWarp.load(written)
+    np.testing.assert_array_equal(loaded.lh_jacobian, exported.lh_jacobian)

@@ -223,8 +223,9 @@ vertices per hemisphere): a measure of anatomy the tractography never sees.
 The known warp of the recovery figure moved it to a correlation of 0.95 with
 the original. ENCORE's warp, estimated from connectivity on 5,124 vertices and
 restated on fsaverage by `sbci.migrate_warp`, put it back to 0.996, and on
-fsaverage it sits 0.33 degrees from the true warp, which moved fsaverage's
-vertices 1.58 degrees on average. The figure shows the map, and what each warp
+fsaverage it sits 0.33 degrees from the true warp over both hemispheres (0.32
+on the left one the figure shows), which moved fsaverage's vertices 1.58
+degrees on average. The figure shows the map, and what each warp
 changes in it.
 
 ![Carrying a warp between templates](figures/migration_power.png)
@@ -241,13 +242,16 @@ more alike: the mean correlation between two subjects' connectomes rises from
 0.716 to 0.761 after ten ENCORE iterations and to 0.785 after thirty ConSEAL
 iterations, and the cost falls for every subject. ENCORE registers onto its
 Karcher median. ConSEAL registers onto the mean of the square-root densities
-instead, because its median settles on one subject: on these eleven it comes
-within 0.001 degrees of sub-212116 and sits 24 to 27 degrees from the others,
-which would register everyone onto that subject's connectome, while the mean
-sits 17 to 20 degrees from every subject. The USAGE notes explain when the
-median does this and how to pass a template. Eleven subjects with 734,039 to
-988,788 streamlines each take ten minutes with ENCORE and two hours with
-ConSEAL on eight cores.
+instead, because its median stopped on one subject: on these eleven it came
+within 0.001 degrees of sub-212116 and sat 24 to 27 degrees from the others,
+which would have registered everyone onto that subject's connectome. These
+notes first put that down to the subjects' geometry; it was a rounding defect
+the port shared with the reference, and the corrected median sits 0.4 degrees
+from the mean and 17 to 20 degrees from every subject (PORTING.md item 9).
+ENCORE's numbers were measured again after the corrections of October 2026
+and hold; ConSEAL's predate them. Eleven subjects with 734,039 to 988,788
+streamlines each take nine minutes with ENCORE and two hours with ConSEAL on
+eight cores.
 
 ![Aligning the eleven subjects](figures/cohort_alignment.png)
 

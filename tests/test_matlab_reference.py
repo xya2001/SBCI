@@ -499,7 +499,8 @@ def test_alignment_warp_composition_matches_matlab(encore_reference, encore_grid
     """Where a warp sends each vertex, exactly; the Jacobian is checked apart."""
     from sbci.alignment import SphericalWarp
 
-    warp = SphericalWarp(encore_grids[0], delta=1e-10)
+    # reference=True: the Jacobian as the reference forms it, without the port's calibration
+    warp = SphericalWarp(encore_grids[0], delta=1e-10, reference=True)
     composed = warp.compose(encore_reference["disp_test"])
     assert _relative(composed.vertices, encore_reference["warp_V_composed"]) < 1e-12
 
@@ -515,9 +516,12 @@ def test_alignment_quantities_behind_the_finite_difference(encore_reference, enc
     from sbci.alignment import Concon, SphericalWarp
 
     lh_grid, rh_grid = encore_grids
-    lh_warp = SphericalWarp(lh_grid, delta=1e-10).compose(encore_reference["disp_test"])
+    # reference=True: the Jacobian as the reference forms it, without the port's calibration
+    lh_warp = SphericalWarp(lh_grid, delta=1e-10, reference=True).compose(
+        encore_reference["disp_test"]
+    )
     rh_displacement = 0.02 * np.stack([np.cos(2 * rh_grid.theta), np.sin(3 * rh_grid.phi)], axis=1)
-    rh_warp = SphericalWarp(rh_grid, delta=1e-10).compose(rh_displacement)
+    rh_warp = SphericalWarp(rh_grid, delta=1e-10, reference=True).compose(rh_displacement)
 
     assert _relative(lh_warp.jacobian, encore_reference["warp_J_composed"].ravel()) < 1e-2
 

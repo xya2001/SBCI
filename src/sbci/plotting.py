@@ -37,6 +37,14 @@ DISPLAY_MESHES = ("ico4", "fsaverage5", "fsaverage")
 #: 0.47 mm at most.
 COVERAGE_TOLERANCE = 2.0
 VIEWS = ("lateral", "medial", "dorsal", "ventral", "anterior", "posterior")
+#: The bundled sphere into anatomical orientation: x and y negated, a half-turn
+#: about z. The pipeline's sphere is stored in its own frame, turned 180 degrees
+#: about z from fsaverage's RAS, so its x and y run against the inflated
+#: surface's; drawn as stored, the lateral camera (at -x for a left hemisphere)
+#: shows the medial side. The stored coordinates stay as they are -- every grid
+#: and warp is built on them -- and only what is handed to the renderer is
+#: turned. A rotation, not a reflection, so face winding and normals are unchanged.
+SPHERE_TO_ANATOMICAL = np.array([-1.0, -1.0, 1.0])
 
 _MISSING = (
     "Plotting needs the optional dependencies. Install them with:\n    pip install 'sbci[plotting]'"
@@ -198,6 +206,19 @@ def display_mesh(name: str) -> DisplayMesh:
     )
 
 
+def display_coordinates(part, surface: str) -> np.ndarray:
+    """One hemisphere's vertices as the renderer should see them, in anatomical orientation.
+
+    The anatomical surfaces are returned as stored; the bundled ``sphere`` is
+    turned by :data:`SPHERE_TO_ANATOMICAL`, so that the lateral view shows the
+    lateral side. Always a fresh array.
+    """
+    coordinates = np.array(part.vertices, dtype=np.float64)
+    if surface == "sphere":
+        coordinates *= SPHERE_TO_ANATOMICAL
+    return coordinates
+
+
 def plot_surface(
     surface_map,
     surface: str = "inflated",
@@ -222,7 +243,11 @@ def plot_surface(
         One value per vertex on the computational grid, length 5124. NaN marks
         a vertex with no value, such as the medial wall.
     surface
-        Geometry to draw on, one of :data:`sbci.surface.GEOMETRIES`.
+        Geometry to draw on, one of :data:`sbci.surface.GEOMETRIES`. The
+        anatomical surfaces are in fsaverage's RAS frame, which the views
+        assume. The bundled ``"sphere"`` is stored in the pipeline's own frame,
+        a half-turn about z from RAS; it is turned into RAS for display
+        (:data:`SPHERE_TO_ANATOMICAL`), the stored coordinates untouched.
     connectome
         Optional :class:`~sbci.ContinuousConnectome`; its mask is applied so
         that masked vertices are not coloured.
@@ -333,7 +358,7 @@ def plot_surface(
         per_hemisphere = {"L": values[:half], "R": values[half:]}
         hemispheres = {side: grid_mesh.hemisphere(side) for side in ("L", "R")}
         meshes = {
-            side: (np.array(part.vertices, dtype=np.float64), np.array(part.faces))
+            side: (display_coordinates(part, surface), np.array(part.faces))
             for side, part in hemispheres.items()
         }
         depth = np.where(cortex, sulcal_depth(), 0.0)

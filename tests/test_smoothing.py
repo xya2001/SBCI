@@ -104,6 +104,53 @@ def test_kernel_rejects_a_mismatched_spectrum(basis):
         diffusion_kernel(np.zeros(5), u, 1.0)
 
 
+@pytest.mark.parametrize("build", [diffusion_kernel, matern_kernel])
+def test_kernels_reject_an_infinite_bandwidth(basis, build):
+    """exp(-inf) is a kernel of zeros, which only fails later as 'no positive mass'."""
+    eigenvalues, u = basis
+    with pytest.raises(ValueError, match="positive and finite"):
+        build(eigenvalues, u, np.inf)
+
+
+def test_descending_eigenvalues_are_refused_where_they_are_consumed(basis):
+    """``load_eigenpairs`` checks the files; arrays passed in directly were not checked.
+
+    The default bandwidth reads the spectrum by position, so a descending
+    array gave a default kappa of 26,899 where the ascending one gives 1.41.
+    """
+    eigenvalues, u = basis
+    descending, flipped = eigenvalues[::-1], u[:, ::-1]
+    with pytest.raises(ValueError, match="ascending"):
+        diffusion_kernel(descending, flipped, 1.0)
+    with pytest.raises(ValueError, match="ascending"):
+        matern_kernel(descending, flipped, 1.0)
+    with pytest.raises(ValueError, match="ascending"):
+        kappa_candidates(np.linspace(0.54, 0.0, 2562))
+    # ties are ascending enough: a repeated eigenvalue is not a reversal
+    np.testing.assert_allclose(
+        diffusion_kernel(np.array([0.0, 0.5, 0.5]), np.eye(3), 1.0),
+        np.diag(np.exp(-0.5 * np.array([0.0, 0.5, 0.5]))),
+    )
+
+
+def test_smooth_refuses_a_descending_basis(smoothable, toy_basis):
+    (eigenvalues, u), _ = toy_basis
+    reversed_basis = ((eigenvalues[::-1], u[:, ::-1]),) * 2
+    with pytest.raises(ValueError, match="ascending"):
+        smoothable.smooth(kernel="rdk", eigenpairs=reversed_basis)
+    with pytest.raises(ValueError, match="ascending"):
+        smoothable.smooth(kernel="rdk", bandwidth=1.0, eigenpairs=reversed_basis)
+
+
+@pytest.mark.parametrize("bad", [0.0, -0.005, np.nan, np.inf])
+def test_smooth_refuses_a_bandwidth_that_is_not_a_positive_number(smoothable, toy_basis, bad):
+    """Zero and negative sigma went through and were recorded in the metadata as used."""
+    with pytest.raises(ValueError, match="bandwidth must be positive and finite"):
+        smoothable.smooth(kernel="shk", bandwidth=bad)
+    with pytest.raises(ValueError, match="bandwidth must be positive and finite"):
+        smoothable.smooth(kernel="rdk", bandwidth=bad, eigenpairs=toy_basis)
+
+
 # --- bandwidth selection ---------------------------------------------------
 
 

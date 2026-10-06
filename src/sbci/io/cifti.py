@@ -52,8 +52,15 @@ areas. :func:`write_cifti` writes those beside the connectome as a companion
 A functional connectome goes through the same operator. Its entries are
 Pearson correlations, and because ``P`` is row-stochastic, ``P D P'`` gives
 each fsLR vertex pair the area-weighted mean of the ico4 correlations covering
-it -- taken directly, not through Fisher z. The sidecar's ``exchange_values``
-says which of the two a file holds (:data:`EXCHANGE_VALUES`).
+it -- taken directly, not through Fisher z. The stored ico4 diagonal is zero
+by the file format, and ``P D P'`` would spread that zero to every pair of
+fsLR vertices falling in the same ico4 cell -- with 12.7 fsLR vertices to a
+cell, most share theirs with another -- so those pairs would read a
+correlation of exactly 0 beside neighbours at 0.6-0.8. The diagonal is
+therefore set to the self-correlation, 1, before an FC resampling, and a
+same-cell pair then carries 1. A density's diagonal stays zero, as the format
+has it. The sidecar's ``exchange_values`` says which of the two a file holds
+(:data:`EXCHANGE_VALUES`).
 """
 
 from __future__ import annotations
@@ -81,10 +88,14 @@ EXCHANGE_VALUES = {
     "sc": "density per fsaverage vertex squared",
     "fc": (
         "Pearson correlation, unitless; each fsLR vertex pair carries the area-weighted "
-        "mean of the ico4 correlations covering it, averaged directly (no Fisher z)"
+        "mean of the ico4 correlations covering it, averaged directly (no Fisher z), with "
+        "the ico4 self-correlation taken as 1, so two fsLR vertices in one ico4 cell read 1"
     ),
 }
 """What the ``.dconn.nii`` entries are, by modality: the sidecar's ``exchange_values``."""
+
+_SUFFIXES = (".dconn.nii.gz", ".dconn.nii", ".nii.gz", ".nii")
+"""Exchange-file suffixes, longest first; what :func:`write_cifti` strips to name the companions."""
 
 _RESAMPLING_UNAVAILABLE = (
     "The ico4 to fsLR-32k overlap matrix is not bundled. Regenerate it with "
@@ -178,6 +189,26 @@ def resample(dense: np.ndarray, block: int = 8192) -> np.ndarray:
     return out
 
 
+def companion_stem(name: str) -> str:
+    """The exchange file's name without its CIFTI suffix, which names the sidecar and the areas.
+
+    Only the suffix comes off, so ``sub-01.ses-1_sc.dconn.nii`` and
+    ``sub-01.ses-2_fc.dconn.nii`` keep their own sidecars; cutting at the
+    first dot gave both ``sub-01.json`` and let the second overwrite the first.
+
+    Examples
+    --------
+    >>> companion_stem("sub-01.ses-1_sc.dconn.nii")
+    'sub-01.ses-1_sc'
+    >>> companion_stem("sub-01_fc.dconn.nii.gz")
+    'sub-01_fc'
+    """
+    for suffix in _SUFFIXES:
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return name
+
+
 def write_cifti(path: str | Path, connectome: Any, block: int = 8192) -> Path:
     """Write a ``.dconn.nii`` on fsLR-32k, with metadata and areas beside it.
 
@@ -185,18 +216,27 @@ def write_cifti(path: str | Path, connectome: Any, block: int = 8192) -> Path:
     metadata table from the manuscript -- CIFTI has nowhere natural to put
     kernel, bandwidth, streamline count, weighting and provenance -- and a
     ``.dscalar.nii`` of fsLR vertex areas, without which the density cannot be
-    integrated.
+    integrated. The two companions take the file's name with its
+    ``.dconn.nii`` removed (:func:`companion_stem`).
+
+    A functional connectome's diagonal is set to 1, the self-correlation,
+    before resampling; see the module notes.
     """
     from nibabel import cifti2
 
     path = Path(path)
     if not os.access(path.parent, os.W_OK):
         raise OSError(f"cannot write to {path.parent}")
-    stem = path.name.split(".")[0]
+    stem = companion_stem(path.name)
     # Built first: metadata the sidecar cannot describe should fail here, not
     # after the dense file has gone to disk.
     metadata = sidecar(connectome.metadata.fields, stem)
-    resampled = resample(connectome.dense(), block=block)
+    dense = connectome.dense()
+    if connectome.metadata.fields["included_connections"] == "fc":
+        # Zero is the format's placeholder, not a correlation: left in, every
+        # fsLR pair inside one ico4 cell would read 0 beside neighbours at 0.7.
+        np.fill_diagonal(dense, 1.0)
+    resampled = resample(dense, block=block)
 
     axis = _brain_model_axis()
     image = cifti2.Cifti2Image(resampled, (axis, axis))

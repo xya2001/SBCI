@@ -55,8 +55,9 @@ import numpy as np
 N_VERTICES = 5124
 
 # Names meaning "this vertex belongs to no region". Matched case-insensitively
-# against the region name; every match is folded into label 0.
-BACKGROUND = re.compile(r"(missing|unknown|background|medial[_ ]?wall|\?\?\?)", re.IGNORECASE)
+# against the region name; every match is folded into label 0. The PALS-B12
+# atlases spell the wall ``MEDIAL.WALL``, with a dot.
+BACKGROUND = re.compile(r"(missing|unknown|background|medial[_ .]?wall|\?\?\?)", re.IGNORECASE)
 
 
 def _decode(names) -> list[str]:

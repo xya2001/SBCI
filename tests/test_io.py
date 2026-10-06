@@ -225,6 +225,20 @@ def test_a_file_that_is_not_hdf5_is_named_as_such(tmp_path):
         read_hdf5(junk)
 
 
+def test_a_metadata_dataset_that_is_not_a_string_is_refused_plainly(tmp_path, connectome):
+    """Not json's 'the JSON object must be str, bytes or bytearray, not ndarray'."""
+    import h5py
+
+    from sbci.errors import InvalidFileError
+
+    path = connectome.save(tmp_path / "sub-z_sc.h5")
+    with h5py.File(path, "a") as handle:
+        del handle["metadata"]
+        handle.create_dataset("metadata", data=np.arange(3))
+    with pytest.raises(InvalidFileError, match="/metadata is not a JSON string"):
+        read_hdf5(path)
+
+
 def test_an_incomplete_endpoint_group_names_what_is_missing(tmp_path, connectome):
     import h5py
 

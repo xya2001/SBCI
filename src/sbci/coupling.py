@@ -54,9 +54,25 @@ def _nonconstant(matrix: np.ndarray) -> np.ndarray:
     return ~np.all(np.diff(matrix, axis=0) == 0, axis=0)
 
 
+def _nan_throughout(matrix: np.ndarray) -> np.ndarray:
+    """Columns that are NaN at every off-diagonal entry.
+
+    That is a region with no vertex at this resolution, as ``to_atlas`` gives
+    it under ``how="mean"``: no pair with anyone, so nothing to correlate.
+    """
+    off_diagonal = ~np.eye(matrix.shape[0], dtype=bool)
+    return np.all(np.isnan(matrix) | ~off_diagonal, axis=0)
+
+
 def _usable(sc: np.ndarray, fc: np.ndarray) -> np.ndarray:
-    """Vertices whose SC and FC profiles both carry information."""
-    return _nonconstant(fc) & _nonconstant(sc)
+    """Vertices whose SC and FC profiles both carry information.
+
+    A profile that is NaN throughout carries none either, and left in it would
+    put a NaN into every other profile's sum and make the whole map NaN. It is
+    dropped like a constant profile -- the others are then compared over the
+    vertices that remain -- and gets NaN in its own slot.
+    """
+    return _nonconstant(fc) & _nonconstant(sc) & ~_nan_throughout(fc) & ~_nan_throughout(sc)
 
 
 def _prepare(sc, fc, triangular: bool, drop_diagonal: bool):

@@ -1,12 +1,14 @@
-"""Compare a recording made before the review of 5 October 2026 with one made by record_outputs.py.
+"""Compare two recordings of the heavy methods on the released young adults, array by array.
 
     python tests/reference/compare_outputs.py OLD.npz NEW.npz
 
-Three comparisons: the reference-arithmetic runs in NEW against the old defaults (must be
-identical on the same CPU type); the unchanged methods under the same key (must be identical,
-with the within-region diagonal of the mean parcellations reported separately, since its
-definition changed); and the new defaults against the old ones, reported as the size of the
-change the corrections make.
+NEW is made by record_outputs.py. When OLD predates it -- the recording of 2 October 2026,
+before the first review -- three comparisons: the reference-arithmetic runs in NEW against
+the old defaults (identical on the same CPU type for ENCORE), the unchanged methods under the
+same key (identical, the within-region diagonal of the mean parcellations reported
+separately, since its definition changed), and the new defaults against the old ones, the
+size of the change the corrections make. When OLD was made by record_outputs.py too, every
+key the two share is compared as it stands, and the keys only one holds are listed.
 """
 
 import sys
@@ -40,6 +42,14 @@ def report(label, x, y, off_diagonal=False):
     )
     return diff
 
+
+if "alignref_costs" in old.files:
+    print("== two recordings by record_outputs.py, key by key")
+    for key in sorted(set(old.files) & set(new.files)):
+        report(key, old[key], new[key])
+    for key in sorted(set(old.files) ^ set(new.files)):
+        print(f"{key:34s} only in {'OLD' if key in old.files else 'NEW'}")
+    sys.exit(0)
 
 print("== reference arithmetic in the new code against the old defaults (must be identical)")
 worst = 0.0

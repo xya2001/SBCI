@@ -29,7 +29,9 @@ MATERIAL = {"ambient": 0.18, "diffuse": 0.88, "specular": 0.3, "specular_power":
 WALL_GREY = 0.58
 #: How dark the sulci get relative to the crowns (0 = no shading).
 SHADING_DEPTH = 0.5
-#: Camera directions per view, for a left hemisphere: (position, view-up).
+#: Camera directions per view, for a left hemisphere: (position, view-up), in
+#: fsaverage's RAS frame. The bundled sphere is not in that frame;
+#: :func:`sbci.plotting.display_coordinates` turns it before it gets here.
 _CAMERAS = {
     "lateral": ((-1.0, 0.0, 0.0), (0.0, 0.0, 1.0)),
     "medial": ((1.0, 0.0, 0.0), (0.0, 0.0, 1.0)),
@@ -143,8 +145,10 @@ def render_view(
     radius)`` triples, drawn as lit spheres of that radius in the mesh's units
     (millimetres on an anatomical surface), so they keep their size whatever
     the window. The camera looks along the axis of ``view`` with a parallel
-    projection; a right hemisphere's lateral and medial views are mirrored
-    from the left's.
+    projection, taking the vertices to be in fsaverage's RAS frame (the bundled
+    sphere is not: pass it through :func:`sbci.plotting.display_coordinates`
+    first); a right hemisphere's lateral and medial views are mirrored from
+    the left's.
     """
     pv = _import_pyvista()
     vertices = np.asarray(vertices, dtype=np.float64)

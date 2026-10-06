@@ -107,6 +107,14 @@ def grid(sphere):
     return SphericalGrid(sphere[0], sphere[1], order=2)
 
 
+@pytest.fixture(scope="module")
+def ico4_grids():
+    """The bundled sphere's two hemispheres, rotated off the poles, at a low basis order."""
+    from sbci.alignment import _hemisphere_grids
+
+    return _hemisphere_grids(order=2)
+
+
 def test_voronoi_areas_cover_the_surface(sphere):
     """Every triangle's area is distributed, so the total is the mesh area."""
     vertices, faces = sphere
@@ -174,23 +182,84 @@ def test_composing_a_zero_displacement_moves_no_vertex(grid):
     np.testing.assert_allclose(composed.vertices, grid.vertices, atol=1e-12)
 
 
-def test_the_jacobian_of_the_identity_converges_to_one():
-    """It is not 1 on a coarse mesh, and it should not be.
+def test_a_zero_step_keeps_the_identity_jacobian_at_one(grid, ico4_grids):
+    """The scheme's bias on the identity is divided out; ``reference=True`` keeps it.
+
+    Uncalibrated, the central difference through points relocated on the
+    planar mesh returns 0.805 for the identity on this 42-vertex sphere and
+    0.9965 on the bundled ico4 grid (second review, finding A). On the toy
+    grid the calibrated value comes back bit for bit; on ico4 the
+    renormalization of the unmoved vertices in :meth:`SphericalWarp.compose`
+    changes last bits, which the ``2e-5`` step magnifies to 4e-11.
+    """
+    zero = np.zeros((grid.n_vertices, 2))
+    calibrated = SphericalWarp(grid, delta=1e-5).compose(zero).jacobian
+    np.testing.assert_allclose(calibrated, 1.0, atol=1e-12)
+    uncalibrated = SphericalWarp(grid, delta=1e-5, reference=True).compose(zero).jacobian
+    assert 0.79 < uncalibrated.min() and uncalibrated.max() < 0.82
+
+    left = ico4_grids[0]
+    zero = np.zeros((left.n_vertices, 2))
+    calibrated = SphericalWarp(left, delta=1e-5).compose(zero).jacobian
+    np.testing.assert_allclose(calibrated, 1.0, atol=1e-10)
+    uncalibrated = SphericalWarp(left, delta=1e-5, reference=True).compose(zero).jacobian
+    assert uncalibrated.mean() == pytest.approx(0.9965, abs=5e-4)
+    assert 0.995 < uncalibrated.min() and uncalibrated.max() < 0.998
+
+
+def test_evaluate_conserves_the_mass_of_a_density_on_the_bundled_grid(ico4_grids):
+    """A density pushed through small warps keeps its mass; uncalibrated, it loses 0.7%.
+
+    :meth:`Concon.evaluate` transports with the product of the two
+    hemispheres' Jacobians, so the identity's bias of 0.9965 on each costs
+    ``1 - 0.9965^2``, about 0.7% of the mass, on every accepted step (second
+    review, finding A). Interpolation alone moves the mass of this smooth
+    density by 2e-5, so the rest is the Jacobian's.
+    """
+    lh_grid, rh_grid = ico4_grids
+    concon = Concon(lh_grid, rh_grid, delta=1e-5)
+    smooth = 1.0 + 0.5 * np.concatenate([lh_grid.vertices[:, 2], rh_grid.vertices[:, 2]])
+    density = np.outer(smooth, smooth)
+    np.fill_diagonal(density, 0.0)
+    mass = (density * concon.area_product).sum()
+
+    calibrated, uncalibrated = [], []
+    for hemisphere in (lh_grid, rh_grid):
+        displacement = 0.01 * np.stack(
+            [np.sin(3 * hemisphere.theta), np.cos(2 * hemisphere.phi) * np.sin(hemisphere.theta)],
+            axis=1,
+        )
+        calibrated.append(SphericalWarp(hemisphere, delta=1e-5).compose(displacement))
+        uncalibrated.append(
+            SphericalWarp(hemisphere, delta=1e-5, reference=True).compose(displacement)
+        )
+    assert not any(warp.folds() for warp in calibrated + uncalibrated)
+
+    kept = (concon.evaluate(density, *calibrated) * concon.area_product).sum() / mass
+    assert kept == pytest.approx(1.0, abs=1e-3)
+    lost = 1 - (concon.evaluate(density, *uncalibrated) * concon.area_product).sum() / mass
+    assert 0.005 < lost < 0.01
+
+
+def test_the_bias_the_calibration_removes_shrinks_under_refinement():
+    """Uncalibrated, the identity's Jacobian is not 1 on a coarse mesh, and it should not be.
 
     The Jacobian is a finite difference of a function interpolated over flat
     triangles, so it carries the mesh's chord-versus-arc error. What has to be
-    true is that refining the mesh drives it to 1. The reference behaves the
+    true is that refining the mesh drives it to 1 -- the reference behaves the
     same way: on its own demo mesh it reports a range of 0.824 to 1.070 for a
-    small warp.
+    small warp -- and that the calibration removes it at every level.
     """
     errors = []
     for level in (1, 2, 3):
         vertices, faces = icosphere(level)
         mesh = SphericalGrid(vertices, faces, order=2)
-        warp = SphericalWarp(mesh, delta=1e-5)
-        jacobian = warp.compose(np.zeros((mesh.n_vertices, 2))).jacobian
+        zero = np.zeros((mesh.n_vertices, 2))
         away = np.setdiff1d(np.arange(mesh.n_vertices), mesh.pole_vertices())
-        errors.append(np.abs(jacobian[away] - 1).max())
+        uncalibrated = SphericalWarp(mesh, delta=1e-5, reference=True).compose(zero).jacobian
+        errors.append(np.abs(uncalibrated[away] - 1).max())
+        calibrated = SphericalWarp(mesh, delta=1e-5).compose(zero).jacobian
+        np.testing.assert_allclose(calibrated[away], 1.0, atol=1e-10)
     assert errors[0] > errors[1] > errors[2]
     assert errors[-1] < 0.05
 
@@ -301,6 +370,60 @@ def test_a_step_too_long_is_halved_rather_than_ending_the_registration(pair):
     assert moved < before - 1e-9
 
 
+def test_a_default_step_registration_lowers_the_cost_with_the_calibrated_jacobian(pair):
+    """The calibration rescales the Jacobian field; the descent must still make progress.
+
+    On this 42-vertex sphere the uncalibrated identity is 0.805, so before the
+    second review's finding A the aligned density came back with 65% of its
+    mass; now its Jacobians sit around 1 and the mass is kept.
+    """
+    grid, densities = pair
+    encore = Encore(grid, grid, step=0.05, max_iterations=5, delta=1e-5)
+    before = (
+        (encore.root(densities[0]) - encore.root(densities[1])) ** 2 * encore.area_product
+    ).sum()
+    aligned, lh_warp, rh_warp, after = encore.register(densities[0], densities[1])
+    assert after < before - 1e-6
+    assert not lh_warp.reference and not rh_warp.reference
+    for warp in (lh_warp, rh_warp):
+        assert 0.9 < warp.jacobian.min() and warp.jacobian.max() < 1.1
+    mass = (densities[1] * encore.area_product).sum()
+    assert (aligned * encore.area_product).sum() == pytest.approx(mass, rel=0.01)
+
+
+def test_a_density_with_a_nonzero_diagonal_registers_like_one_without(pair):
+    """The diagonal is not part of the density, so it must not change a registration.
+
+    Before the second review's finding B, ``root`` kept it: the starting cost
+    then carried the fixed density's whole diagonal as a residual that no
+    trial image -- all of which come from :meth:`Concon.evaluate_root`, which
+    zeroes it -- could remove, and every step was refused.
+    """
+    grid, densities = pair
+    encore = Encore(grid, grid, step=0.05, max_iterations=5, delta=1e-5)
+    with_diagonal = [density + 3.0 * np.eye(density.shape[0]) for density in densities[:2]]
+    untouched = [density.copy() for density in with_diagonal]
+
+    clean = encore.register(densities[0], densities[1])
+    dirty = encore.register(*with_diagonal)
+    before = (
+        (encore.root(with_diagonal[0]) - encore.root(with_diagonal[1])) ** 2 * encore.area_product
+    ).sum()
+    assert dirty[3] < before - 1e-6
+    np.testing.assert_array_equal(dirty[0], clean[0])
+    for mine, theirs in zip(dirty[1:3], clean[1:3], strict=True):
+        np.testing.assert_array_equal(mine.vertices, theirs.vertices)
+        np.testing.assert_array_equal(mine.jacobian, theirs.jacobian)
+    assert dirty[3] == clean[3]
+    for given, kept in zip(with_diagonal, untouched, strict=True):
+        np.testing.assert_array_equal(given, kept)  # root() and register() work on copies
+    # the template and align() go through root() as well
+    np.testing.assert_array_equal(encore.root(with_diagonal[0]), encore.root(densities[0]))
+    np.testing.assert_array_equal(
+        encore.template(with_diagonal, iterations=2), encore.template(densities[:2], iterations=2)
+    )
+
+
 def test_align_records_a_cost_trace_per_subject(pair):
     from sbci.alignment import align
 
@@ -356,6 +479,7 @@ def test_warps_round_trip_through_save_and_load(tmp_path, grid):
     displacement = 0.01 * np.stack([np.sin(grid.theta), np.cos(grid.phi)], axis=1)
     composed = SphericalWarp(grid, delta=1e-5).compose(displacement)
     warp = Warp(composed.vertices, composed.jacobian, composed.vertices, composed.jacobian)
+    np.testing.assert_array_equal(warp.lh_rotation, np.eye(3))  # the grid's own frame by default
 
     path = warp.save(tmp_path / "sub-toy_warp.npz")
     back = Warp.load(path)
@@ -363,6 +487,54 @@ def test_warps_round_trip_through_save_and_load(tmp_path, grid):
     np.testing.assert_array_equal(back.lh_jacobian, warp.lh_jacobian)
     np.testing.assert_array_equal(back.rh_vertices, warp.rh_vertices)
     np.testing.assert_array_equal(back.rh_jacobian, warp.rh_jacobian)
+    np.testing.assert_array_equal(back.lh_rotation, np.eye(3))
+    np.testing.assert_array_equal(back.rh_rotation, np.eye(3))
+
+    # the grid rotations travel with the warp (second review, finding C)
+    lh_rotation, rh_rotation = _rotation_about_y(0.3), _rotation_about_y(0.7)
+    rotated = Warp(
+        composed.vertices,
+        composed.jacobian,
+        composed.vertices,
+        composed.jacobian,
+        lh_rotation=lh_rotation,
+        rh_rotation=rh_rotation,
+    )
+    back = Warp.load(rotated.save(tmp_path / "sub-rotated_warp.npz"))
+    np.testing.assert_array_equal(back.lh_rotation, lh_rotation)
+    np.testing.assert_array_equal(back.rh_rotation, rh_rotation)
+
+
+def _rotation_about_y(angle):
+    cos, sin = np.cos(angle), np.sin(angle)
+    return np.array([[cos, 0.0, sin], [0.0, 1.0, 0.0], [-sin, 0.0, cos]])
+
+
+def test_a_warp_saved_before_the_rotations_were_kept_still_loads(tmp_path, grid):
+    """A file holding only the four original arrays reads back in the grid's own frame."""
+    path = tmp_path / "sub-old_warp.npz"
+    ones = np.ones(grid.n_vertices)
+    np.savez_compressed(
+        path,
+        lh_vertices=grid.vertices,
+        lh_jacobian=ones,
+        rh_vertices=grid.vertices,
+        rh_jacobian=ones,
+    )
+    old = Warp.load(path)
+    np.testing.assert_array_equal(old.lh_vertices, grid.vertices)
+    np.testing.assert_array_equal(old.lh_rotation, np.eye(3))
+    np.testing.assert_array_equal(old.rh_rotation, np.eye(3))
+
+
+def test_save_returns_the_file_numpy_wrote(tmp_path, grid):
+    """``np.savez_compressed`` adds ``.npz`` to a name without it; the returned path must exist."""
+    ones = np.ones(grid.n_vertices)
+    warp = Warp(grid.vertices, ones, grid.vertices, ones)
+    path = warp.save(tmp_path / "sub-toy_warp")
+    assert path == tmp_path / "sub-toy_warp.npz" and path.exists()
+    np.testing.assert_array_equal(Warp.load(path).lh_vertices, grid.vertices)
+    assert warp.save(tmp_path / "sub-toy_warp.npz") == tmp_path / "sub-toy_warp.npz"
 
 
 # --- the derivative operators, against derivatives we know ----------------
@@ -536,6 +708,33 @@ def test_a_custom_grid_records_the_identity_rotation(pair):
     result = align(densities[:2], grids=(grid, grid), max_iterations=1)
     lh, rh = result.grid_rotations
     assert np.allclose(lh, np.eye(3)) and np.allclose(rh, np.eye(3))
+    for warp in result.warps:
+        np.testing.assert_array_equal(warp.lh_rotation, np.eye(3))
+        np.testing.assert_array_equal(warp.rh_rotation, np.eye(3))
+
+
+def test_align_records_the_grid_rotations_in_every_warp(pair, monkeypatch):
+    """Each warp holds what ``Alignment.grid_rotations`` holds, so a saved warp keeps its frame.
+
+    The bundled grids are stood in for by the toy grid, with two rotations of
+    the kind :func:`rotate_off_poles` applies (second review, finding C).
+    """
+    from sbci import alignment
+
+    grid, densities = pair
+    lh_rotation, rh_rotation = _rotation_about_y(0.3), _rotation_about_y(0.7)
+
+    def toy_hemispheres(order, rotate=True, return_rotations=False, reference=False):
+        return ((grid, grid), (lh_rotation, rh_rotation)) if return_rotations else (grid, grid)
+
+    monkeypatch.setattr(alignment, "_hemisphere_grids", toy_hemispheres)
+    result = align(densities[:2], max_iterations=1, template_iterations=1)
+    np.testing.assert_array_equal(result.grid_rotations[0], lh_rotation)
+    np.testing.assert_array_equal(result.grid_rotations[1], rh_rotation)
+    assert len(result.warps) == 2
+    for warp in result.warps:
+        np.testing.assert_array_equal(warp.lh_rotation, lh_rotation)
+        np.testing.assert_array_equal(warp.rh_rotation, rh_rotation)
 
 
 def test_the_threaded_sparse_product_is_bit_for_bit_the_single_call():
@@ -757,7 +956,8 @@ def test_reference_mode_reaches_the_grids_and_the_estimator(pair):
     encore = Encore(reference, reference, max_iterations=2, delta=1e-5, reference=True)
     assert encore.concon.reference and not Encore(grid, grid).concon.reference
     template = encore.root(densities[0])
-    _, _, _, cost = encore.register(template, densities[1], target_is_root=True)
+    _, lh_warp, rh_warp, cost = encore.register(template, densities[1], target_is_root=True)
+    assert lh_warp.reference and rh_warp.reference  # the uncalibrated Jacobian, as the reference's
     result = align(
         densities[1:2],
         template=template,

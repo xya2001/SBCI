@@ -147,8 +147,9 @@ def main(path):
     for i, (a, b) in enumerate(zip(costs, theirs, strict=False)):
         print(f"  iteration {i}: ours {a:.9f}  theirs {b:.9f}  rel {abs(a - b) / b:.2e}")
 
-    print("--- template (5 iterations)")
-    template = ConSEAL(grid, grid).template([f1, f2, f3], kernel, iterations=5)
+    print("--- template (5 iterations, strict)")
+    engine = ConSEAL(grid, grid, strict_upstream=True)
+    template = engine.template([f1, f2, f3], kernel, iterations=5)
     report("template", template, ref["template"])
 
 

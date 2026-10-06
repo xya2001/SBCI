@@ -212,6 +212,74 @@ def test_the_sidecar_names_correlations_for_fc_and_a_density_for_sc(tmp_path, mo
     assert sc["exchange_values"] == "density per fsaverage vertex squared"
 
 
+def test_fc_pairs_within_one_ico4_cell_read_the_self_correlation(tmp_path, monkeypatch):
+    """The stored diagonal is zero by the format; resampled as is, a same-cell fsLR pair reads 0.
+
+    For FC the diagonal is set to 1, the self-correlation, before resampling,
+    so such a pair reads 1 and the rest of the matrix is ``P D P'`` as before.
+    A density keeps its zero diagonal, as the format has it, and its
+    area-weighted mass.
+    """
+    import nibabel as nib
+
+    written = {}
+    for modality in ("sc", "fc"):
+        toy = _toy_export(monkeypatch, modality)
+        dense = toy.dense().astype(np.float64)
+        np.fill_diagonal(dense, 0.0)  # as the format stores it
+        toy.dense = lambda dense=dense: dense.copy()
+        path = cifti.write_cifti(tmp_path / f"sub-toy_{modality}.dconn.nii", toy, block=16)
+        written[modality] = (dense, np.asarray(nib.load(str(path)).get_fdata()))
+    operator = cifti.transfer().toarray()
+    # fsLR rows drawing on one ico4 vertex only, grouped by that vertex
+    sources: dict[int, list[int]] = {}
+    for k, row in enumerate(operator):
+        if np.count_nonzero(row) == 1:
+            sources.setdefault(int(np.flatnonzero(row)[0]), []).append(k)
+    shared = [rows for rows in sources.values() if len(rows) > 1]
+    assert shared, "the toy overlap has to put two fsLR vertices in one ico4 cell"
+
+    dense, out = written["fc"]
+    for rows in shared:
+        assert out[rows[0], rows[1]] == pytest.approx(1.0, abs=1e-6)
+    expected = dense.copy()
+    np.fill_diagonal(expected, 1.0)
+    np.testing.assert_allclose(out, operator @ expected @ operator.T, rtol=1e-5, atol=1e-6)
+
+    dense, out = written["sc"]
+    for rows in shared:
+        assert out[rows[0], rows[1]] == 0.0
+    np.testing.assert_allclose(out, operator @ dense @ operator.T, rtol=1e-5, atol=1e-6)
+    fslr_area, ico4_area = cifti.vertex_areas()
+    assert fslr_area @ out @ fslr_area == pytest.approx(ico4_area @ dense @ ico4_area, rel=1e-5)
+
+
+def test_companion_files_keep_a_dotted_name(tmp_path, monkeypatch):
+    """Only the ``.dconn.nii`` comes off, so two sessions of one subject keep their own sidecars.
+
+    Cut at the first dot, ``sub-01.ses-1_sc`` and ``sub-01.ses-2_fc`` both
+    wrote ``sub-01.json``, and the second overwrote the first with the other
+    modality's metadata.
+    """
+    import json
+
+    cifti.write_cifti(
+        tmp_path / "sub-01.ses-1_sc.dconn.nii", _toy_export(monkeypatch, "sc"), block=16
+    )
+    cifti.write_cifti(
+        tmp_path / "sub-01.ses-2_fc.dconn.nii", _toy_export(monkeypatch, "fc"), block=16
+    )
+    assert not (tmp_path / "sub-01.json").exists()
+    sc = json.loads((tmp_path / "sub-01.ses-1_sc.json").read_text())
+    fc = json.loads((tmp_path / "sub-01.ses-2_fc.json").read_text())
+    assert sc["included_connections"] == "sc" and fc["included_connections"] == "fc"
+    assert sc["exchange_vertex_areas"] == "sub-01.ses-1_sc_vertexarea.dscalar.nii"
+    assert (tmp_path / sc["exchange_vertex_areas"]).exists()
+    assert (tmp_path / "sub-01.ses-2_fc_vertexarea.dscalar.nii").exists()
+    assert cifti.companion_stem("sub-01_sc.dconn.nii.gz") == "sub-01_sc"
+    assert cifti.companion_stem("sub-01_sc.nii") == "sub-01_sc"
+
+
 def test_the_sidecar_refuses_metadata_without_a_modality(tmp_path, monkeypatch):
     """Rather than labelling unknown values a density -- and before the dense file is written."""
     from sbci.metadata import MetadataError

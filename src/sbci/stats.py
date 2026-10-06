@@ -94,10 +94,11 @@ def _design_matrix(design, add_intercept):
     design = np.asarray(design, dtype=np.float64)
     if design.ndim == 1:
         design = design[:, None]
-    # A constant, nonzero column already serves as the intercept; prepending
-    # another would make the design rank deficient and count one degree of
-    # freedom too many in the F test.
-    if add_intercept and not _constant_columns(design).any():
+    # Always column 0, so that ``terms`` keep meaning the same columns whatever
+    # the covariates hold. A covariate that happens to be constant (one sex in
+    # the cohort) is then collinear with it: harmless to the fit, since the
+    # degrees of freedom follow the rank, and refused if asked to be tested.
+    if add_intercept:
         design = np.column_stack([np.ones(design.shape[0]), design])
     return design
 
@@ -184,11 +185,17 @@ def local_test(
     scores
         ``(n_subjects, n_components)``, from :attr:`sbci.reduction.Reduction.scores`.
     design
-        ``(n_subjects, n_covariates)``. An intercept column is prepended unless
-        one is already there or ``add_intercept`` is false.
+        ``(n_subjects, n_covariates)``. Unless ``add_intercept`` is false an
+        intercept is prepended as column 0, always, so covariate ``j`` is
+        column ``j + 1`` whatever the covariates hold. A covariate that is
+        constant over the cohort is collinear with the intercept: it costs no
+        degree of freedom, and asking to test it is refused as collinear. To
+        supply the intercept yourself, pass ``add_intercept=False``.
     terms
-        Which design columns to test, as indices into the final design matrix.
-        Defaults to every column except the intercept.
+        Which design columns to test, as integer indices into the final design
+        matrix, each at most once. Defaults to every non-constant column except
+        the intercept. A boolean array is refused: it would be read as the
+        indices 0 and 1.
     method
         Multiplicity correction, one of :data:`METHODS`.
     permutations
@@ -232,16 +239,26 @@ def local_test(
     if terms is None:
         intercept = [i for i in range(n_terms) if np.all(matrix[:, i] == matrix[0, i])]
         tested = [i for i in range(n_terms) if i not in intercept]
+        if not tested:
+            raise ValueError("no terms to test; the design is an intercept alone")
     else:
-        tested = [int(t) for t in np.atleast_1d(terms)]
+        requested = np.atleast_1d(np.asarray(terms))
+        if requested.size == 0:
+            raise ValueError("terms= is empty; name at least one design column")
+        if requested.dtype.kind not in "iu":
+            raise ValueError(
+                f"terms must be integer column indices, got {requested.dtype}; a boolean "
+                "array would be read as the indices 0 and 1"
+            )
+        tested = [int(t) for t in requested]
+        if len(set(tested)) != len(tested):
+            raise ValueError(f"terms {tested} name a column more than once")
         outside = [t for t in tested if not 0 <= t < n_terms]
         if outside:
             raise ValueError(
                 f"terms {outside} are outside the design's {n_terms} columns (column 0 is "
                 "the intercept when one is added)"
             )
-    if not tested:
-        raise ValueError("no terms to test; the design is an intercept alone")
 
     codes = None
     if groups is not None:
@@ -326,7 +343,10 @@ def local_test(
     if codes is not None:
         n_groups = int(codes.max()) + 1
         if rank_full < n_terms:
-            raise ValueError("groups= needs a design of full column rank")
+            raise ValueError(
+                "groups= needs a design of full column rank; a constant covariate duplicates "
+                "the intercept, and dummy codes for every level of a factor do too"
+            )
         statistic = _clustered_wald(
             matrix, scores, full_beta, codes, n_groups, tested, np.isfinite(statistic)
         )

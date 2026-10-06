@@ -126,6 +126,58 @@ def test_discrete_of_identical_matrices_is_one(symmetric):
     np.testing.assert_allclose(discrete_coupling(symmetric, symmetric), 1.0)
 
 
+def test_a_region_that_is_nan_throughout_is_skipped_not_spread():
+    """``to_atlas(how="mean")`` gives an empty region a NaN row; it must not make every region NaN.
+
+    The empty region is dropped like a constant profile and comes out NaN
+    itself; the others are correlated over the regions that exist, exactly as
+    if the empty one had never been in the atlas.
+    """
+    rng = np.random.default_rng(0)
+    n = 6
+    sc = rng.random((n, n))
+    sc = sc + sc.T
+    fc = rng.random((n, n)) - 0.5
+    fc = fc + fc.T
+    np.fill_diagonal(sc, 0.0)
+    np.fill_diagonal(fc, 0.0)
+    expected = discrete_coupling(sc, fc)
+
+    def with_empty(matrix):
+        return np.insert(np.insert(matrix, 2, np.nan, axis=0), 2, np.nan, axis=1)
+
+    result = discrete_coupling(with_empty(sc), with_empty(fc))
+    assert np.isnan(result[2]) and np.isfinite(np.delete(result, 2)).all()
+    np.testing.assert_allclose(np.delete(result, 2), expected)
+    # SC aggregated by mass has zeros there instead of NaN: the same answer
+    sc_mass = with_empty(sc)
+    sc_mass[2, :] = 0.0
+    sc_mass[:, 2] = 0.0
+    np.testing.assert_allclose(np.delete(discrete_coupling(sc_mass, with_empty(fc)), 2), expected)
+    for compute in (global_coupling, lambda a, b: local_coupling(a, b, np.ones(n + 1), min_area=1)):
+        out = compute(with_empty(sc), with_empty(fc))
+        assert np.isnan(out[2]) and np.isfinite(np.delete(out, 2)).all()
+
+
+def test_to_atlas_matrices_with_an_empty_region_couple_region_by_region(connectome):
+    """End to end: an atlas with a region that has no cortical vertex, SC by mass and FC by mean."""
+    from sbci.atlas import Atlas
+
+    fc, _ = _toy_pair(connectome)
+    gappy = Atlas(name="gappy", labels=np.array([1, 1, 2, 2, 0]), names=("A", "B", "C"))
+    full = Atlas(name="full", labels=np.array([1, 1, 2, 2, 0]), names=("A", "B"))
+    sc_m, fc_m = connectome.to_atlas(gappy), fc.to_atlas(gappy)
+    assert np.isnan(fc_m[2]).all() and (sc_m[2] == 0.0).all()
+    result = discrete_coupling(sc_m, fc_m)
+    assert np.isnan(result[2])
+    np.testing.assert_allclose(
+        result[:2], discrete_coupling(connectome.to_atlas(full), fc.to_atlas(full))
+    )
+    # both by mean, so both carry the NaN row
+    both = discrete_coupling(connectome.to_atlas(gappy, how="mean"), fc_m)
+    assert np.isnan(both[2]) and np.isfinite(both[:2]).all()
+
+
 # --- local -----------------------------------------------------------------
 
 

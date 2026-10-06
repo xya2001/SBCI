@@ -155,6 +155,9 @@ FreeSurfer and no MATLAB; `tools/convert_atlases.py` regenerates them from the
 toolkit's files, and the output is committed so no release step needs MATLAB. Short names resolve to the stored names ignoring
 case, spaces, hyphens and underscores. `list_atlases()` gives the full set,
 which also includes Gordon, Yeo, the PALS-B12 family and CoCoNest at 22 scales.
+The grid sets the resolution: Schaefer-900 and Schaefer-1000 come out with 899
+and 999 regions, because one parcel of each has no ico4 vertex, and 68 of the
+11,825 bundled regions have a single cortical vertex (PORTING.md item 3).
 
 Label `0` means "no region" — the medial wall, plus anything outside a
 partial-coverage atlas. Regions are numbered `1..K` with no gaps, and
@@ -427,7 +430,7 @@ minute. See PORTING.md item 6.
 A re-smoothed density can carry mass on the medial wall, exactly as both
 references do, so `sbci validate` may flag a file saved straight from it --
 SPEC_QUESTIONS.md item 14. Pass `mask_medial_wall=True` to zero it first --
-a file saved that way passes all nine `sbci validate` checks, verified end to
+a file saved that way passes all eleven `sbci validate` checks, verified end to
 end on a real subject -- and `progress=lambda done, total: ...` to watch a run.
 
 The kernel is evaluated the way `c3_main` evaluates it: through two
@@ -599,15 +602,17 @@ accepted step.
 
 Four things to know before trusting the numbers:
 
-- **Three errors in the reference are corrected by default.** Its Legendre
+- **Four errors in the reference are corrected by default.** Its Legendre
   derivative recurrence has a wrong m = 0 term, which leaves the tangent basis
   fields right but makes the divergence of every zonal field up to twice too
   large, and the registration gradient uses it; its transported square-root
   density is normalized before its diagonal is zeroed, so the cost is
-  evaluated on vectors 0.02% to 0.2% short of unit norm; and it accepts a
-  warp that folds the mesh whenever the cost falls. The port fixes the three;
-  `reference=True` restores the first two for comparison with the MATLAB run
-  (a fold is never accepted). PORTING.md item 4 has the sizes.
+  evaluated on vectors 0.02% to 0.2% short of unit norm; its finite-difference
+  Jacobian of the identity warp is 0.9965 rather than 1, so a transported
+  density loses 0.7% of its mass; and it accepts a warp that folds the mesh
+  whenever the cost falls. The port fixes the four; `reference=True` restores
+  the first three for comparison with the MATLAB run (a fold is never
+  accepted). PORTING.md items 4, 8 and 9 have the sizes.
 - **The bundled grid is rotated first.** The Jacobian is built in `(theta, phi)`
   coordinates and closes with a factor of `sin(theta)`, so a vertex on the
   coordinate axis gets a Jacobian of exactly zero and loses its whole row and
@@ -677,14 +682,20 @@ seconds per 100,000 streamlines rather than minutes. Six things to know:
   vertex map directly and differentiates the kernel its own way, which the
   package does not reproduce, so call this the unregularized public update,
   not the paper's. PORTING.md item 7 explains the lineage.
-- **Five errors in the reference are corrected by default.** Its gradient adds
+- **Six errors in the reference are corrected by default.** Its gradient adds
   a term in the wrong tangent frame and differentiates a differently
   normalized kernel; a refused warp step still enters its velocity field; a
-  rising cost is accepted as convergence; and the tangent basis it shares with
+  rising cost is accepted as convergence; the tangent basis it shares with
   ENCORE carries a wrong m = 0 term in its Legendre derivative recurrence,
   which leaves the basis fields right but their divergences up to twice too
-  large (PORTING.md item 4). `strict_upstream=True` reproduces all five, and
-  does so to the digits of the MATLAB reference run.
+  large (PORTING.md item 4); and its Karcher median collapses onto the
+  subject it starts from whenever that subject's square-root density rounds
+  to a squared norm below 1, which float32 endpoint weights make routine
+  (PORTING.md item 9). The port also smooths the velocity field as vectors
+  in space rather than as two frame components, which the reference's
+  component-wise smoothing distorts near the coordinate poles.
+  `strict_upstream=True` reproduces all of it, and does so to the digits of
+  the MATLAB reference run.
 - **Rigid initialization is off by default**, as in the reference's own
   example; `init_rotation=True` runs the multi-shell rotation search first.
 - **The stopping threshold is absolute.** The public default of 1e-4 is a
@@ -692,19 +703,29 @@ seconds per 100,000 streamlines rather than minutes. Six things to know:
   registration after a few iterations; `threshold=1e-7` lets it converge. On
   a known deformation the public defaults undo a third of it, the
   unregularized update four fifths (PORTING.md item 7).
-- **The Karcher median can be one subject.** With `template=None` the median
-  starts at the subject nearest the mean and takes Weiszfeld steps until one
-  is shorter than 0.005, as `get_template` does. When the subjects sit evenly
-  around the mean the first step is already that short and the template *is*
-  that subject: its cost is 0, it takes no iterations, and everyone else is
-  registered onto its bundles. In the synthetic checks of PORTING.md item 7
-  this happens at three degrees of anatomical spread (every subject 10 to 11 Fisher-Rao degrees
-  from the mean) and not at two, and it happens on the eleven released young
-  adults: the median lands 0.001 degrees from sub-212116 and 24 to 27 from the
-  others, while every subject is 17 to 20 degrees from the mean. With two
-  subjects the median is any point between them, so rounding decides which
-  one it lands on, and two machines can decide differently. Pass `template=` the subject to hold
-  fixed, or a precomputed square-root density -- the normalized mean of the subjects'
+- **The Karcher median used to stop on one subject, through rounding.** With
+  `template=None` the median starts at the subject nearest the mean and takes
+  Weiszfeld steps until one is shorter than 0.005, as `get_template` does.
+  The reference never renormalizes the square-root densities, and float32
+  endpoint weights leave each one's squared norm about 1e-10 off 1. When the
+  starting subject's falls below 1, the reference's coincidence test misses
+  it, the subject gets a Weiszfeld weight of about 7e4, and the first step is
+  already shorter than 0.005: the template *is* that subject, its cost 0, and
+  everyone else is registered onto its bundles. That is what happened on the
+  eleven released young adults, whose median landed 0.001 degrees from
+  sub-212116 (squared norm 1.7e-10 below 1) and 24 to 27 from the others --
+  an effect these notes had put down to the subjects sitting evenly around the
+  mean -- and in the synthetic checks of PORTING.md item 7, at three degrees
+  of anatomical spread and not at two, because the starting subject's norm
+  rounded below 1 in one cohort and above it in the other. The port
+  normalizes the densities and treats a subject within 1e-6 radians of the
+  estimate as coincident: the median of the eleven now sits 0.4 degrees from
+  their mean and 17 to 20 degrees from every subject. `strict_upstream=True`
+  reproduces the old behaviour (PORTING.md item 9). With two subjects the
+  median is any point between them: it starts from whichever subject rounding
+  puts nearer their mean and ends a fifth of the way to the other, so two
+  machines can still differ. Pass `template=` the subject to hold fixed, or a
+  precomputed square-root density -- the normalized mean of the subjects'
   `q_transform(kernel)` arrays, for one -- to choose.
 - **The unregularized update onto one subject can align away a real
   difference.** With `delta=0.1, step_clamp=inf, viscosity=0` and the template
@@ -828,8 +849,7 @@ resamples any 32k map through it, and the map is aligned the way
 
 ```python
 alignment = sbci.align(subjects)                                 # ENCORE on the grid
-warp = sbci.migrate_warp(alignment.warps[3], to="fs_LR_32k",
-                         grid_rotations=alignment.grid_rotations)
+warp = sbci.migrate_warp(alignment.warps[3], to="fs_LR_32k")    # the warp carries its grid's rotation
 warp.to_gifti("sub-004_encore")        # sub-004_encore.L.sphere.surf.gii and .R.
 ```
 
@@ -856,12 +876,11 @@ points you handle yourself.
 
 ![Carrying a warp between templates](docs/figures/migration_power.png)
 
-*Top: sub-100307's own sulcal depth from its FreeSurfer reconstruction, on fsaverage (163,842 vertices per hemisphere), and what changes in it when the known warp of the recovery figure moves it (r = 0.95 with the original) and when ENCORE's warp, carried from the grid with `migrate_warp`, puts it back (r = 0.996). Bottom: ENCORE's warp on the grid (5,124 vertices), the same warp restated on fsaverage, and the known warp on fsaverage; the carried warp is 0.33 degrees from the true one, which moved vertices 1.58 degrees on average.*
+*Top: sub-100307's own sulcal depth from its FreeSurfer reconstruction, on fsaverage (163,842 vertices per hemisphere), and what changes in it when the known warp of the recovery figure moves it (r = 0.95 with the original) and when ENCORE's warp, carried from the grid with `migrate_warp`, puts it back (r = 0.996). Bottom: ENCORE's warp on the grid (5,124 vertices), the same warp restated on fsaverage, and the known warp on fsaverage; the carried warp is 0.32 degrees from the true one on the left hemisphere shown (0.33 over both), which moved vertices 1.58 degrees on average.*
 
 ```python
 alignment = sbci.align(subjects)                              # ENCORE
-moved = sbci.migrate_warp(alignment.warps[0], to="fs_LR_32k",
-                          grid_rotations=alignment.grid_rotations)
+moved = sbci.migrate_warp(alignment.warps[0], to="fs_LR_32k")
 registration = sbci.endpoints_align(subjects)                 # ConSEAL
 moved = sbci.migrate_warp(registration.warps[0], to="fs_LR_32k")
 
@@ -888,8 +907,12 @@ Three things to know:
   `sbci.SphereMap.from_gifti(native_sphere, msmall_sphere)`.
 - **The maps are piecewise linear.** Each step is a barycentric lookup, so a
   point carried to fs_LR and back returns within 0.3 degrees, and the identity
-  warp migrates to the identity within the same. Pass an ENCORE warp with its
-  `grid_rotations`: ENCORE works on a rotated copy of the grid.
+  warp migrates to the identity within the same. ENCORE works on a copy of
+  the grid rotated clear of the poles, and each warp carries that rotation
+  (`warp.lh_rotation`, `warp.rh_rotation`, saved with it), so a reloaded warp
+  migrates the same way as a fresh one; `grid_rotations=` overrides it.
+  Until October 2026 the rotation lived only in `Alignment.grid_rotations`,
+  and a warp reloaded from disk was migrated as if unrotated, 14 degrees off.
 
 ## Writing the exchange file
 

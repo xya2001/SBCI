@@ -237,12 +237,11 @@ difference rather than a rounding detail:
   region, having no pair, gets NaN. Until the review of 5 October 2026 (item
   8) the denominator was the squared region area, which counted the
   self-pairs and ran the diagonal low by `1 - sum_i a_i^2 / A^2`: half with
-  two vertices, about 4% for Schaefer-sized regions on ico4. Of the 11,831
+  two vertices, about 4% for Schaefer-sized regions on ico4. Of the 11,825
   regions in the 44 bundled atlases, 68 have a single cortical vertex on
   ico4 (21 of them in Schaefer-1000, 15 in Schaefer-900) and 45 have none
-  (six in Gordon, one to four in each CoCoNest scale); those read NaN on the
-  diagonal, and an empty region keeps its zeros off it, as the reference
-  does. Desikan's and Schaefer-200's smallest regions have five.
+  (six in Gordon, one to four in each CoCoNest scale); those read NaN under
+  `how="mean"`. Desikan's and Schaefer-200's smallest regions have five.
 
 - **Open divergence:** the triangle convention above. The diagonal one was
   decided with the review. Confirm which behavior the released files should
@@ -272,7 +271,7 @@ difference rather than a rounding detail:
 | Basis Laplacian (`reference=True`; item 8 says why the default differs) | 5.9 eps |
 | Tangent frames, exponential and logarithm maps | 0.5 to 4 eps |
 | Barycentric query against the AABB tree | 2.0 eps, same triangle 162/162 |
-| Identity warp Jacobian | exact |
+| Identity warp Jacobian (`reference=True`; the default calibrates it, *Four more* below) | exact |
 | Warp composition, vertex by vertex | 0.3 eps |
 | **Karcher median template** | **44 eps** |
 
@@ -394,15 +393,21 @@ mesh before the frames are built; `align()` refuses a grid that still has
 poles. Worth reporting upstream: the reference's own demo grid happens to avoid
 the poles, which is why this has not bitten anyone.
 
-### Three more, found by the review of 5 October 2026
+### Four more, found by the reviews of 5 October 2026
 
 The Legendre derivative recurrence that builds the tangent basis has a wrong
 m = 0 term, the transported square-root density is normalized before its
-diagonal is zeroed, and a warp that folds the mesh is accepted whenever the
-cost falls. All three are the reference's, reproduced here to rounding until
-the review; item 8 has the sizes. The port now corrects them by default;
-`reference=True` restores the first two so that the agreement above can still
-be demonstrated, and the fold check stays on in either mode.
+diagonal is zeroed, a warp that folds the mesh is accepted whenever the cost
+falls, and the finite-difference Jacobian of the identity warp is 0.9965
+rather than 1 on ico4 (0.805 on a 42-vertex icosphere: a discretization bias
+of the scheme, which shrinks under refinement), so a transported density
+loses 0.7% of its mass at every accepted step. All four are the reference's,
+reproduced here to rounding until the reviews; items 8 and 9 have the sizes.
+The port now corrects them by default -- the Jacobian is calibrated by the
+identity's own value, so a zero step gives exactly 1 and the transported mass
+is conserved to 1e-4 -- and `reference=True` restores the first, second and
+fourth so that the agreement above can still be demonstrated; the fold check
+stays on in either mode.
 
 ### Still open
 
@@ -1326,7 +1331,9 @@ searches picked the same triangle for every one of 240,000 endpoints.
 ### What was found in the reference
 
 The port reproduces all of these under `strict_upstream=True`; by default it
-corrects 1 to 4. Numbering matches the module docstring.
+corrects 1 to 4 and 12 to 16 (5 and 8 are choices and stay, 6, 9 and 11 are
+fixed in both modes, 7 only reaches the bandwidth selection). Numbering
+matches the module docstring.
 
 1. **A gradient term in the wrong tangent frame.** `Concon.evaluate` forms
    `Dx = dK A K'` and symmetrizes it, `Dx + Dx.'`, before projecting each row
@@ -1595,11 +1602,16 @@ FPCA with `candidates=6` (so that the fit reaches the largest component, item
 (`r` is the correlation of the component with the planted bundle; every
 "found" has adjusted p below 0.001.) Three things follow. ENCORE never
 removes the effect and brings it to the front. The Karcher median is one
-subject at three degrees: the Weiszfeld iteration starts at the subject
-nearest the mean and stops when a step is shorter than 0.005, and with every
-subject 10 to 11 Fisher-Rao degrees from the mean the first step already is,
-so subject 1 becomes the template (cost 0, no iterations) and the others are
-registered onto its bundles. And the paper's update (no clamp, no viscosity)
+subject at three degrees: subject 1 becomes the template (cost 0, no
+iterations) and the others are registered onto its bundles. *The cause first
+given here -- that with every subject 10 to 11 Fisher-Rao degrees from the
+mean the first Weiszfeld step is already shorter than 0.005 -- was wrong.
+The step is that short because subject 1's square-root density rounds to a
+squared norm 1.4e-10 below 1, which the reference's coincidence snap misses,
+so subject 1 weighs about 7e4 times the others (item 9); at two degrees the
+starting subject's norm rounded 5.1e-10 above 1 and nothing happened. The
+corrected median sits 0.3 degrees from the mean of the three-degree cohort;
+the "not found" above is the collapsed template's.* And the paper's update (no clamp, no viscosity)
 onto that one subject reshapes the bundles enough to remove a fivefold weight
 difference, while the same update onto the mean of the square-root densities
 keeps it, as does the public code's clamp and viscosity onto the one subject.
@@ -1704,10 +1716,85 @@ cluster's Intel and AMD nodes round differently, VERIFICATION.md Tier 3):
   correlation; neither atlas has a one-vertex region, so neither matrix
   gains a NaN.
 
+## 9. The second list, 5 October 2026 -- NINE FINDINGS AND A DOZEN SMALL ONES, ALL BUT ONE CONFIRMED
+
+A second reviewer's list arrived the same day, built on the first and
+re-run against the corrected code. Each item was checked with an independent
+probe or against the code before anything changed; one (the pole vertices,
+item 2 below) holds for a different reason than the one given.
+
+| # | Finding | Verdict | Fixed by | Size |
+| --- | --- | --- | --- | --- |
+| 1 | ConSEAL's Karcher median collapses onto its starting subject | **confirmed**: the square-root densities are not renormalized, float32 barycentric weights put a subject's squared norm 1e-10 off 1, and when the starting subject's is below 1 the `1e-14` snap misses it, that subject's Weiszfeld weight is about 7e4 and the first step is already shorter than 0.005 (**the reference's arithmetic**, item 7 docstring item 15) | unit-norm densities and a 1e-6 radian coincidence guard; `strict_upstream=True` keeps the reference's | on the eleven released subjects the median started from sub-212116, whose squared norm rounds 1.7e-10 below 1, and stopped 0.001 degrees from it and 24-27 from the rest; it now sits 0.43 degrees from their mean and 16.6-20.2 from every subject. The synthetic cohort that collapsed at three degrees of spread had its starting subject 1.4e-10 below 1, the one that did not at two degrees 5.1e-10 above |
+| 2 | ConSEAL's default grids have four vertices on the poles | **partly**: the vertex at the north pole moves 2.0 degrees of a 4-degree shift of the endpoints around it, but the endpoints, carried by their triangles, land within 0.09 degrees of the truth either way; the cause is the 5% velocity smoothing, which averages the two frame components as scalars across neighbours whose frames turn 72 degrees around a pole -- after a 20-degree `rotate()`, ten zero-size steps move the two most polar vertices 8.8 degrees and one 11.3, on the unrotated grid and on one rotated off the poles alike (7.5 and 9.9); the reference smooths the same way (docstring item 16) | the velocity field is smoothed as ambient 3-vectors and projected back onto the tangent planes; `strict_upstream=True` keeps the component-wise smoothing; the grids stay in the file's frame, since a grid rotated off the poles moves the same vertex 3.7 degrees and lands its endpoints worse (0.10 against 0.035) | the ten-step drift at the poles falls to 0.09 degrees (the 5% smoothing of a degree-1 field, as everywhere else); the pole vertex follows 3.45 of the 4 degrees and the endpoints around it land 0.035 degrees from the truth (0.085 before); away from the poles the two smoothings agree to 3e-4 of the field within 30 degrees of the equator, and a two-subject registration moves by 0.003 degrees per endpoint |
+| 3 | `local_test(terms=...)` tests a different column when a covariate is constant | **confirmed** in the code: the intercept was not prepended when any column was constant, so the indices shifted | the intercept is always column 0, so a constant covariate is collinear with it and testing it is refused as such (and `groups=`, which needs full column rank, now refuses such a design instead of running on the shifted one); boolean, duplicate and empty `terms` are refused | an all-female stratum's `terms=[1]` tested the intercept |
+| 4 | the FC exchange file has zeros next to its diagonal | **confirmed** by construction: the zero ico4 FC diagonal spreads to every pair of fsLR vertices in one cell | the FC diagonal is set to the self-correlation 1 before resampling; the sidecar says so | 12.7 fsLR vertices to an ico4 cell, so most pairs of neighbours share one and read 0 |
+| 5 | sidecar files overwrite each other | **confirmed**: the name was cut at the first dot | only the `.dconn.nii` suffix is stripped | `sub-01.ses-1_sc` and `sub-01.ses-2_fc` both wrote `sub-01.json` |
+| 6 | three PALS atlases keep the medial wall as two regions | **confirmed**: `MEDIAL.WALL`, with a dot, slipped past the background pattern | pattern widened in `tools/convert_atlases.py`, the three atlases rebuilt from the toolkit's files | Lobes 12 -> 10 regions (394 wall vertices now unassigned), Brodmann 82 -> 80, Visuotopic 25 -> 23; 11,825 bundled regions |
+| 7 | `surface="sphere"` plots show the wrong side | **confirmed** from the coordinates: the bundled sphere is the pipeline's frame, its x and y anti-correlated with the inflated surface's (-0.97, -0.95; z +0.92), a half turn about z | the plotting negates x and y of the sphere it draws; the stored sphere, which every grid and warp is built on, is untouched | "lateral" rendered the medial view |
+| 8 | ENCORE refuses every step for a raw array with a nonzero diagonal | **confirmed** in the code: the starting cost kept the diagonal, the trial costs did not | `Encore.root()` zeroes the diagonal | one subject stuck at 0.0306 instead of 0.0168; connectomes unaffected |
+| 9 | `Warp.save` does not store the grid rotation | **confirmed**: a reloaded warp was migrated as if unrotated | the rotations are fields of the warp, saved and reloaded, and `migrate_warp` reads them | 13.5 degrees of error in the reviewer's run |
+
+The small ones: ENCORE's identity-warp Jacobian came out 0.9965 (0.9958 to
+0.9971) after any step, a discretization bias of the finite-difference scheme
+inherited from the reference, so `aligned` densities lost 0.7% of their mass
+-- it is now calibrated by the identity's own value (`reference=True` keeps
+the bias); `parcellate` zeroes the vertex diagonal it assumes zero and treats
+an empty region as NaN throughout under `"mean"`; `smooth("shk")` refuses a
+bandwidth that is not positive; the kernels refuse eigenvalues that are not
+ascending; `from_snapped` refuses negative vertex ids; `TemplateWarp.apply`
+refuses a hemisphere that is not L or R, and every `save` returns the path
+that exists; `save()` refuses a suffix `load()` would not accept; an
+interrupted download keeps its `.part` file and resumes; `validate` fails
+whatever `load` refuses, which it did not for a misnamed `.mat` file, a
+coordinate array of the wrong shape, a mask or area of the wrong length or a
+`/metadata` dataset that is not a string (two checks added, eleven in all);
+`strict_upstream` says which items it reproduces (1 to 4 and 12 to 16);
+Schaefer-900 and -1000 have 899 and 999 regions on ico4 (BLUEPRINT.md, now
+also USAGE.md). Large `StationaryWarp.rotate` rotations are inexact, as the
+reviewer said: 0.035 degrees of error at 20 degrees, 0.15 at 45, 0.58 at 90,
+1.03 at 120, 1.60 at 150, because the first scaled step of the
+scaling-and-squaring flow follows great circles where a rotation's flow lines
+are latitude circles, and six squarings double that deviation each time
+(predicted `alpha^2 sin(psi) cos(psi) / 128`, 93-96% of the measured maxima);
+the reference's `exp_svf` has the same scheme and the port matches its warp
+vertices to 6.6e-10, so it is left as it is -- more squarings would move the
+small-angle results too -- and `init_rotation=True` realizes its icosahedral
+rotations up to 1.6 degrees off before the diffeomorphic steps correct them.
+
+### What the corrections change on the released subjects
+
+Recorded with `tests/reference/record_outputs.py` on an AMD EPYC 9654 node
+and set against the first review's recording on the same CPU type with
+`tests/reference/compare_outputs.py`, key by key:
+
+- **Everything but the two aligners' defaults is identical, bit for bit**:
+  parcellation (the new diagonal and empty-region rules change nothing on
+  Desikan and Schaefer-200), the three couplings, seeding, smoothing, the
+  FPCA fit and both projections; and so is ENCORE under `reference=True`.
+- **ENCORE**: the calibrated Jacobian keeps the aligned density's mass,
+  0.70% more of it than before; the warped vertices move 0.001 degrees on
+  average (0.003 at most) and the costs 3e-5 to 6e-5 relative. The
+  known-warp recovery figure is unchanged to the digits it quotes.
+- **ConSEAL**: the vector smoothing moves the aligned endpoints of the two
+  subjects 0.001 degrees on average, ten times that within 10 degrees of
+  the coordinate poles (0.009) and 0.085 at most. The two-subject template
+  did not move: it sits a fifth of the way from sub-100307 to sub-103010
+  (5.6 and 22.4 degrees) under both arithmetics.
+- **The template of the eleven** (`tests/reference/template_probe.py`, on
+  all of them, default against `strict_upstream=True`; it also runs the two
+  synthetic cohorts of item 7): the reference's arithmetic stops on
+  sub-212116, 0.001 degrees from it and 16.9 from the mean; the corrected
+  median sits 0.43 degrees from the mean and 16.6 to 20.2 from every
+  subject. The cohort figure of docs/RESULTS.md registered ConSEAL onto the
+  mean of the square-root densities because of the collapse; its ENCORE half
+  was measured again with the corrected code and holds (mean pairwise
+  correlation 0.7163 to 0.7606).
+
 ## Status
 
-All seven ports are done and verified, and the review of 5 October 2026
-(item 8) has been answered in full; what is left is under each item's
-*Still open*. They were done in the order 3, 1, 2, 5, 4, 6, 7: parcellation
+All seven ports are done and verified, and the two reviews of 5 October 2026
+(items 8 and 9) have been answered in full; what is left is under each
+item's *Still open*. They were done in the order 3, 1, 2, 5, 4, 6, 7: parcellation
 unblocked the first notebook, kernel smoothing the WP3 speed target, and the
 two alignments came last because nothing else depends on them.

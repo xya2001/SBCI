@@ -26,7 +26,7 @@ CANONICAL_COUNTS = {
     "Schaefer400": 400,
 }
 
-BACKGROUND = re.compile(r"(missing|unknown|background|medial[_ ]?wall|\?\?\?)", re.IGNORECASE)
+BACKGROUND = re.compile(r"(missing|unknown|background|medial[_ .]?wall|\?\?\?)", re.IGNORECASE)
 
 
 def test_atlases_are_bundled():
@@ -71,21 +71,17 @@ def test_no_background_region_survives(name):
     assert not leaked, f"{name} still lists background regions: {leaked}"
 
 
-#: The one bundled atlas that assigns every vertex, medial wall included.
-FULL_COVERAGE = {"PALS_B12_Lobes"}
-
-
 @pytest.mark.parametrize("name", list_atlases())
 def test_coverage_is_plausible(name):
-    """Every atlas covers some of the surface, and only one covers all of it."""
-    atlas = load_atlas(name)
-    assert 0.0 < atlas.coverage <= 1.0
+    """Every atlas covers some of the surface and none covers all of it.
 
-    if name in FULL_COVERAGE:
-        assert atlas.coverage == 1.0, f"{name} was expected to assign every vertex"
-    else:
-        assert (atlas.labels == 0).any(), "the medial wall should be unassigned"
-        assert atlas.coverage < 1.0
+    PALS_B12_Lobes used to: its two ``MEDIAL.WALL`` entries, spelt with a dot,
+    slipped past the background pattern and were kept as regions until the
+    review of October 2026.
+    """
+    atlas = load_atlas(name)
+    assert 0.0 < atlas.coverage < 1.0
+    assert (atlas.labels == 0).any(), "the medial wall should be unassigned"
 
 
 @pytest.mark.parametrize(

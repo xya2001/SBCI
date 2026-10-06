@@ -164,6 +164,14 @@ def test_cli_writes_a_file_that_validates(tmp_path, capsys):
     assert not [c for c in validate_file(path) if not c.passed]
 
 
+def test_cli_example_refuses_a_name_load_would_not_read(tmp_path, capsys):
+    """A .mat name is refused in words, not with a traceback, and nothing is written."""
+    path = tmp_path / "example.mat"
+    assert main(["example", "--out", str(path)]) == 1
+    assert "not a name load() would read back" in capsys.readouterr().err
+    assert not path.exists()
+
+
 def test_cli_info_reports_the_modality(tmp_path, capsys):
     path = tmp_path / "example.h5"
     main(["example", "--out", str(path)])

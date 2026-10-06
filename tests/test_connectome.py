@@ -192,10 +192,23 @@ def test_functional_connectomes_are_aggregated_as_fisher_z_means(connectome, atl
     expected = parcellate(correlations, atlas, area, how="mean", fisher_z=True)
     np.testing.assert_allclose(matrix, expected)
     assert np.nanmax(np.abs(matrix)) < 1.0  # not saturated
-    assert np.isnan(matrix[2, 2])  # C is the medial-wall vertex alone: no cortical pair
-    assert np.isfinite(matrix[:2, :]).all()
+    # C is the medial-wall vertex alone: no cortical pair with anyone, so NaN throughout
+    assert np.isnan(matrix[2, :]).all() and np.isnan(matrix[:, 2]).all()
+    assert np.isfinite(matrix[:2, :2]).all()
     with pytest.raises(ValueError, match="no mass"):
         fc.to_atlas(atlas, how="mass")
+
+
+def test_to_atlas_gives_an_empty_region_nan_under_mean_and_zero_under_mass(connectome):
+    """A region with no vertex at this resolution keeps its row; what it holds depends on how."""
+    from sbci.atlas import Atlas
+
+    gappy = Atlas(name="gappy", labels=np.array([1, 1, 2, 2, 0]), names=("A", "B", "C"))
+    mass = connectome.to_atlas(gappy)
+    mean = connectome.to_atlas(gappy, how="mean")
+    assert (mass[2, :] == 0.0).all() and (mass[:, 2] == 0.0).all()
+    assert np.isnan(mean[2, :]).all() and np.isnan(mean[:, 2]).all()
+    assert np.isfinite(mean[:2, :2]).all() and np.isfinite(mass).all()
 
 
 def test_to_atlas_leaves_masked_vertices_out_of_the_region_areas(connectome):
@@ -240,3 +253,13 @@ def test_load_names_a_missing_file_plainly(tmp_path):
 def test_save_names_a_missing_directory_plainly(tmp_path, connectome):
     with pytest.raises(FileNotFoundError, match="directory does not exist"):
         connectome.save(tmp_path / "nowhere" / "sub-x_sc.h5")
+
+
+def test_save_refuses_a_name_load_would_not_read(tmp_path, connectome):
+    """HDF5 under any suffix wrote fine and then would not load; refuse before writing."""
+    target = tmp_path / "sub-x_sc.mat"
+    with pytest.raises(ValueError, match=r"load\(\) would read back"):
+        connectome.save(target)
+    assert not list(tmp_path.iterdir())
+    for name in ("sub-x_sc.h5", "sub-x_sc.hdf5", "sub-01.ses-1_sc.h5"):
+        assert ContinuousConnectome.load(connectome.save(tmp_path / name)).n_vertices == 5

@@ -108,6 +108,68 @@ def test_migrated_warp_round_trips_and_saves(tmp_path):
     assert abs(np.linalg.norm(image.darrays[0].data, axis=1) - 100).max() < 1e-2
 
 
+def test_a_reloaded_warp_migrates_with_its_own_rotations(tmp_path):
+    """A warp saved and loaded carries ENCORE's grid rotations, so migrating it needs no argument.
+
+    Before the second review's finding C the rotations lived only in
+    ``Alignment.grid_rotations``: a warp read back from its file was taken as
+    unrotated, and the identity warp of the rotated grid landed 15 degrees
+    from where it belongs on fs_LR.
+    """
+    from sbci.alignment import pole_rotation
+
+    sphere = sbci.load_surface("sphere")
+    vertices = normalize_rows(np.asarray(sphere.vertices, dtype=np.float64))
+    lh_rotation, rh_rotation = pole_rotation(vertices[:HALF]), pole_rotation(vertices[HALF:])
+    assert not np.allclose(lh_rotation, np.eye(3))
+    # the identity warp of the rotated grids, as align() returns it
+    warp = Warp(
+        lh_vertices=vertices[:HALF] @ lh_rotation.T,
+        lh_jacobian=np.ones(HALF),
+        rh_vertices=vertices[HALF:] @ rh_rotation.T,
+        rh_jacobian=np.ones(HALF),
+        lh_rotation=lh_rotation,
+        rh_rotation=rh_rotation,
+    )
+    reloaded = Warp.load(warp.save(tmp_path / "sub-rotated_warp.npz"))
+    np.testing.assert_array_equal(reloaded.lh_rotation, lh_rotation)
+
+    own = migrate_warp(reloaded, to="fs_LR_32k")
+    explicit = migrate_warp(reloaded, to="fs_LR_32k", grid_rotations=(lh_rotation, rh_rotation))
+    np.testing.assert_array_equal(own.lh_vertices, explicit.lh_vertices)
+    np.testing.assert_array_equal(own.rh_vertices, explicit.rh_vertices)
+    (left_vertices, _), _ = template_mesh("fs_LR_32k")
+    assert _degrees(own.lh_vertices, left_vertices).max() < 0.3  # an identity lands on the template
+    # an explicit argument still overrides: read as unrotated, the same file is a 15-degree rotation
+    unrotated = migrate_warp(reloaded, to="fs_LR_32k", grid_rotations=(np.eye(3), np.eye(3)))
+    assert np.median(_degrees(unrotated.lh_vertices, left_vertices)) > 5.0
+
+
+def test_apply_refuses_a_hemisphere_other_than_l_or_r():
+    points = np.eye(3)
+    warp = TemplateWarp("fs_LR_32k", points, np.ones(3), points, np.ones(3), faces=(None, None))
+    for hemisphere in ("left", "l", "X", ""):
+        with pytest.raises(ValueError, match="'L' or 'R'"):
+            warp.apply(points, hemisphere)
+
+
+def test_save_returns_the_file_numpy_wrote(tmp_path):
+    """``np.savez_compressed`` adds ``.npz`` to a name without it; the returned path must exist."""
+    (left, left_faces), (right, right_faces) = template_mesh("fs_LR_32k")
+    warp = TemplateWarp(
+        "fs_LR_32k",
+        left,
+        np.ones(left.shape[0]),
+        right,
+        np.ones(right.shape[0]),
+        faces=(left_faces, right_faces),
+    )
+    path = warp.save(tmp_path / "sub-example_warp")
+    assert path == tmp_path / "sub-example_warp.npz" and path.exists()
+    assert TemplateWarp.load(path).template == "fs_LR_32k"
+    assert warp.save(tmp_path / "sub-example_warp.npz") == tmp_path / "sub-example_warp.npz"
+
+
 def test_maps_need_one_vertex_set():
     with pytest.raises(ValueError, match="same"):
         SphereMap(np.eye(3), np.eye(4)[:, :3][:2], np.array([[0, 1, 2]]))

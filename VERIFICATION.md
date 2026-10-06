@@ -155,11 +155,14 @@ Between the two groups the rounding differs and the methods differ as their
 arithmetic allows: parcellation, coupling, seeding and smoothing still bit for
 bit (FC parcellation to 5.6e-17); `reduce` to 1.4e-16 on the basis; ENCORE to
 5e-16 on the aligned densities and 5e-8 on the warp's vertices after ten
-iterations. ConSEAL on two subjects without `template=` landed its Karcher
-median on subject 0 in one group and on subject 1 in the other, since the
-median of two points is any point between them and rounding decides; its cost
-traces and warps are therefore comparable across machines only with
-`template=` given or a third subject in the cohort. A verifier comparing
+iterations. ConSEAL on two subjects without `template=` started its Karcher
+median from subject 0 in one group and from subject 1 in the other, since the
+two are equally near their mean and rounding decides, and the median of two
+points is any point between them (it now ends a fifth of the way from the
+starting subject to the other; until the fix of PORTING.md item 9 it could
+also stop on the starting subject outright); its cost traces and warps are
+therefore comparable across machines only with `template=` given or a third
+subject in the cohort. A verifier comparing
 against the numbers in these documents should expect rounding-level
 differences on other hardware, and exact agreement only on the same
 instruction set. After the corrections of 5 October 2026 (PORTING.md item 8)
@@ -237,12 +240,12 @@ port now computes the right thing, and the rows above are reproduced only with
 `reference=True` (ENCORE, `project`) or `strict_upstream=True` (ConSEAL), which
 restore the reference's arithmetic.
 
-### Seven things in the references that a verifier will hit
+### Nine things in the references that a verifier will hit
 
 The first four are not port defects. Anyone reproducing this will meet them,
-and should not conclude the port is broken. The last three are errors in the
-references that the port reproduced until the review of 5 October 2026; it now
-corrects them by default:
+and should not conclude the port is broken. The last five are errors in the
+references that the port reproduced until the two reviews of 5 October 2026;
+it now corrects them by default:
 
 1. **`ConConBasis.Fit` cannot run as published.** Line 260 reads `auto_sparse`,
    which is never defined; the parsed option is `params.auto_sparse`. Every call
@@ -280,6 +283,18 @@ corrects them by default:
    differ by the factor `1/(1 + sum_i psi_k(i)^4)`: two thirds on a two-vertex
    toy, 0.04% on a smooth ico4 component. The port's `project()` now scores a
    new subject exactly as the fit scored the training cohort.
+8. **ConSEAL's `get_template` collapses onto its starting subject** when that
+   subject's square-root density has a squared norm just below 1 -- which
+   float32 barycentric weights (and the reference's own single precision)
+   make routine: the `1e-14` snap misses it, the subject's Weiszfeld weight
+   is about 7e4, and the first step is already shorter than the stopping
+   length. The port normalizes the densities and uses a 1e-6 radian
+   coincidence guard; `strict_upstream=True` keeps the reference's arithmetic
+   (PORTING.md item 9).
+9. **ENCORE's finite-difference Jacobian of the identity warp is 0.9965**, not
+   1, a discretization bias that costs the transported density 0.7% of its
+   mass; the port calibrates by the identity's own value, `reference=True`
+   keeps the bias.
 
 ---
 

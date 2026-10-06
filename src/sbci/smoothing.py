@@ -95,9 +95,9 @@ def diffusion_kernel(eigenvalues: np.ndarray, eigenvectors: np.ndarray, kappa: f
     >>> np.allclose(K, np.diag(np.exp(-0.5 * np.array([0.0, 1.0, 2.0]))))
     True
     """
-    if not kappa > 0:  # written so that NaN fails too
-        raise ValueError(f"kappa must be positive, got {kappa}")
-    rho = np.exp(-(kappa**2) / 2.0 * np.asarray(eigenvalues, dtype=np.float64).ravel())
+    if not (kappa > 0 and np.isfinite(kappa)):  # written so that NaN fails too
+        raise ValueError(f"kappa must be positive and finite, got {kappa}")
+    rho = np.exp(-(kappa**2) / 2.0 * _ascending(eigenvalues))
     return _assemble(rho, eigenvectors)
 
 
@@ -111,13 +111,30 @@ def matern_kernel(
     nu
         Differentiability. The reference script uses 1, 2 or 3.
     """
-    if not kappa > 0:
-        raise ValueError(f"kappa must be positive, got {kappa}")
+    if not (kappa > 0 and np.isfinite(kappa)):
+        raise ValueError(f"kappa must be positive and finite, got {kappa}")
     if not nu > 0:
         raise ValueError(f"nu must be positive, got {nu}")
-    lam = np.asarray(eigenvalues, dtype=np.float64).ravel()
+    lam = _ascending(eigenvalues)
     rho = (2.0 * nu / kappa**2 + lam) ** (-nu - 1.0)
     return _assemble(rho, eigenvectors)
+
+
+def _ascending(eigenvalues) -> np.ndarray:
+    """The eigenvalues as a flat float64 array, refused unless ascending.
+
+    The order is what the default bandwidth reads: :func:`kappa_candidates`
+    takes the highest frequency from the last entry and the 200th from
+    position 199. :func:`load_eigenpairs` checks the MATLAB files; arrays
+    passed in directly are checked here, where they are consumed.
+    """
+    lam = np.asarray(eigenvalues, dtype=np.float64).ravel()
+    if not np.all(np.diff(lam) >= 0):
+        raise ValueError(
+            "eigenvalues must be in ascending order, as load_eigenpairs returns them; "
+            "sort them and their eigenvectors together"
+        )
+    return lam
 
 
 def _assemble(rho: np.ndarray, eigenvectors: np.ndarray) -> np.ndarray:
@@ -733,7 +750,7 @@ def kappa_candidates(eigenvalues: np.ndarray, n: int = 10, index: int = 200) -> 
     >>> candidates.size, bool(np.all(np.diff(candidates) > 0))
     (10, True)
     """
-    lam = np.asarray(eigenvalues, dtype=np.float64).ravel()
+    lam = _ascending(eigenvalues)
     if lam.size < index:
         raise ValueError(f"need at least {index} eigenvalues, got {lam.size}")
     kappa_min = np.sqrt(-2.0 * np.log(0.9) / lam[-1])
@@ -901,10 +918,13 @@ class Endpoints:
             points = np.empty((surface.size, 3))
             for side, sphere in enumerate(spheres):
                 pick = surface == side
-                if pick.any() and vertex[pick].max() >= sphere.shape[0]:
+                # A negative id would wrap round to the far end of the sphere.
+                outside = pick & ((vertex < 0) | (vertex >= sphere.shape[0]))
+                if outside.any():
                     raise ValueError(
-                        f"vertex {int(vertex[pick].max())} is beyond the "
-                        f"{'left' if side == 0 else 'right'} sphere's {sphere.shape[0]} vertices"
+                        f"vertex {int(vertex[outside][0])} is outside the "
+                        f"{'left' if side == 0 else 'right'} sphere's {sphere.shape[0]} "
+                        f"vertices (0 to {sphere.shape[0] - 1})"
                     )
                 points[pick] = sphere[vertex[pick]]
             return points
@@ -1260,11 +1280,15 @@ def smooth(
     """
     if kernel not in KERNELS:
         raise ValueError(f"kernel must be one of {KERNELS}, got {kernel!r}")
+    if bandwidth is not None:
+        bandwidth = float(bandwidth)
+        if not (bandwidth > 0 and np.isfinite(bandwidth)):
+            raise ValueError(f"bandwidth must be positive and finite, got {bandwidth}")
     if getattr(connectome, "endpoints", None) is None:
         raise MissingDataError(_NO_ENDPOINTS)
 
     if kernel == "shk":
-        sigma = DEFAULT_SIGMA if bandwidth is None else float(bandwidth)
+        sigma = DEFAULT_SIGMA if bandwidth is None else bandwidth
         points_in, points_out = endpoint_positions(connectome.endpoints)
         from .grid import hemisphere_labels
 

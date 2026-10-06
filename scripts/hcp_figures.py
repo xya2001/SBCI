@@ -631,11 +631,10 @@ def cohort_figures(out: Path, subjects, conseal: bool = True) -> None:
     after_conseal = None
     conseal_costs = None
     if conseal:
-        # ConSEAL's Karcher median settles on one subject when the subjects sit
-        # evenly around the mean, as it does on the ten young adults drawn at random (0.001
-        # degrees from sub-212116; USAGE, ConSEAL caveats); register onto the mean
-        # of the square-root densities instead so that every subject moves, as
-        # with ENCORE's template.
+        # ConSEAL's Karcher median stopped on sub-212116 (0.001 degrees from it), a
+        # rounding defect shared with the reference and since corrected (PORTING.md
+        # item 9); register onto the mean of the square-root densities instead so
+        # that every subject moves, as with ENCORE's template.
         from sbci.conseal import (
             DEFAULT_KERNEL_DEGREE,
             DEFAULT_SIGMA,

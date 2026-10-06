@@ -141,6 +141,8 @@ def read_hdf5(path: str | Path) -> dict[str, Any]:
                 raise FormatError(f"{path.name} has no /{required} dataset")
 
         raw = handle[METADATA][()]
+        if not isinstance(raw, (str, bytes)):
+            raise InvalidFileError(f"{path.name}: /{METADATA} is not a JSON string")
         parts: dict[str, Any] = {
             "data": np.asarray(handle[CONNECTIVITY][()], dtype=np.float32),
             "area": np.asarray(handle[AREA][()], dtype=np.float64),

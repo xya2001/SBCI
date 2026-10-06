@@ -138,6 +138,49 @@ def test_a_region_without_a_distinct_pair_has_nan_on_the_diagonal(dense, atlas, 
     assert parcellate(dense, atlas, area, how="mass")[2, 2] == 0.0
 
 
+def test_ones_on_the_vertex_diagonal_change_nothing(dense, atlas, area):
+    """``np.corrcoef`` puts ones on the diagonal; the self-pairs are excluded by contract.
+
+    Left in, they sat in the within-region mass but not in its denominator:
+    ``A`` would have read ``(4 + 1*1*1 + 2*1*2) / 4 = 2.25`` instead of 1.
+    """
+    with_ones = dense + np.eye(5)
+    for how in ("mass", "mean"):
+        np.testing.assert_allclose(
+            parcellate(with_ones, atlas, area, how=how), parcellate(dense, atlas, area, how=how)
+        )
+    assert parcellate(with_ones, atlas, area, how="mean")[0, 0] == pytest.approx(1.0)
+    np.testing.assert_array_equal(with_ones, dense + np.eye(5))  # the caller's matrix is left alone
+    correlations = np.corrcoef(np.random.default_rng(0).standard_normal((5, 30)))
+    np.testing.assert_allclose(np.diag(correlations), 1.0)
+    zeroed = correlations.copy()
+    np.fill_diagonal(zeroed, 0.0)
+    np.testing.assert_allclose(
+        parcellate(correlations, atlas, area, how="mean", fisher_z=True),
+        parcellate(zeroed, atlas, area, how="mean", fisher_z=True),
+    )
+
+
+def test_an_empty_region_is_nan_throughout_under_mean_and_zero_under_mass(dense, atlas, area):
+    """No vertex at this resolution means no pair with anyone, not a mean of zero with everyone."""
+    from sbci.atlas import Atlas
+
+    gappy = Atlas(name="gappy", labels=np.array([1, 1, 2, 2, 0]), names=("A", "B", "C"))
+    mean = parcellate(dense, gappy, area, how="mean")
+    assert np.isnan(mean[2, :]).all() and np.isnan(mean[:, 2]).all()
+    np.testing.assert_allclose(mean[:2, :2], EXPECTED_MEAN[:2, :2])
+    mass = parcellate(dense, gappy, area, how="mass")
+    assert (mass[2, :] == 0.0).all() and (mass[:, 2] == 0.0).all()
+    np.testing.assert_allclose(mass[:2, :2], EXPECTED_MASS[:2, :2])
+    # a region whose only vertex carries no area -- the medial wall -- is empty too
+    walled = parcellate(dense, atlas, np.array([1.0, 2.0, 3.0, 1.0, 0.0]), how="mean")
+    assert np.isnan(walled[2, :]).all() and np.isnan(walled[:, 2]).all()
+    assert np.isfinite(walled[:2, :2]).all()
+    # one vertex with area is a region with pairs to others: NaN on its diagonal only
+    single = parcellate(dense, atlas, area, how="mean")
+    assert np.isnan(single[2, 2]) and np.isfinite(single[2, :2]).all()
+
+
 def test_region_weights_layout(atlas, area):
     weights, ids = region_weights(atlas, area)
     assert weights.shape == (5, 3)

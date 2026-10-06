@@ -203,20 +203,79 @@ def test_the_result_reports_what_it_found():
     assert result.coefficients.shape == (5, 2)
 
 
-def test_an_intercept_in_any_column_is_recognized():
-    """A constant column anywhere in the design is the intercept; none is added."""
+def test_a_constant_covariate_does_not_shift_the_column_numbering():
+    """The intercept is always column 0, so ``terms=[2]`` is the second covariate regardless.
+
+    A single-sex stratum passes sex as a constant column. That column is
+    collinear with the intercept and refused if asked for; the score stays
+    column 2, as in a mixed cohort, and tests the same thing. Before, the
+    intercept was left out of such a design and ``terms=[1]`` -- documented as
+    the score -- tested the constant, while ``.terms`` still reported ``(1,)``.
+    """
     from sbci.stats import _design_matrix
 
     rng = np.random.default_rng(5)
-    covariate = rng.standard_normal(30)
-    first = _design_matrix(np.column_stack([np.ones(30), covariate]), add_intercept=True)
-    second = _design_matrix(np.column_stack([covariate, np.ones(30)]), add_intercept=True)
-    assert first.shape == (30, 2) and second.shape == (30, 2)
-    scores = 0.5 * covariate + rng.standard_normal(30)
-    a = local_test(scores, np.column_stack([np.ones(30), covariate]), terms=[1])
-    b = local_test(scores, np.column_stack([covariate, np.ones(30)]), terms=[0])
-    assert a.statistic[0] == pytest.approx(b.statistic[0], rel=1e-9)
-    assert a.residual_dof == b.residual_dof == 28
+    n = 40
+    covariate = rng.standard_normal(n)
+    scores = np.column_stack([0.5 * covariate + rng.standard_normal(n), rng.standard_normal(n)])
+    design = np.column_stack([np.full(n, 2.0), covariate])  # every subject the same sex, coded 2
+    assert _design_matrix(design, add_intercept=True).shape == (n, 3)
+
+    stratum = local_test(scores, design, terms=[2], method="none")
+    mixed = local_test(scores, covariate, method="none")
+    assert stratum.terms == (2,) and mixed.terms == (1,)
+    np.testing.assert_allclose(stratum.statistic, mixed.statistic, rtol=1e-8)
+    np.testing.assert_allclose(stratum.pvalue, mixed.pvalue, rtol=1e-8)
+    np.testing.assert_allclose(stratum.coefficients[:, 2], mixed.coefficients[:, 1], rtol=1e-8)
+    assert stratum.residual_dof == mixed.residual_dof == n - 2
+    assert stratum.numerator_dof == 1
+    # the default leaves the constant column out, as it leaves the intercept out
+    assert local_test(scores, design).terms == (2,)
+    with pytest.raises(ValueError, match="collinear"):
+        local_test(scores, design, terms=[1])
+
+
+def test_the_covariate_beside_a_constant_matches_statsmodels():
+    sm = pytest.importorskip("statsmodels.api")
+    rng = np.random.default_rng(6)
+    n = 45
+    covariate = rng.standard_normal(n)
+    scores = (0.4 * covariate + rng.standard_normal(n))[:, None]
+    design = np.column_stack([np.ones(n), covariate])  # a constant covariate, then the score
+    ours = local_test(scores, design, terms=[2], method="none")
+    theirs = sm.OLS(scores[:, 0], sm.add_constant(covariate)).fit()
+    assert ours.coefficients[0, 2] == pytest.approx(theirs.params[1], rel=1e-9)
+    assert ours.statistic[0] == pytest.approx(theirs.tvalues[1] ** 2, rel=1e-9)
+    assert ours.pvalue[0] == pytest.approx(theirs.pvalues[1], rel=1e-9)
+
+
+def test_an_intercept_of_your_own_goes_with_add_intercept_false():
+    """Supplying the intercept means turning the prepended one off; then it is column 0."""
+    rng = np.random.default_rng(7)
+    n = 30
+    covariate = rng.standard_normal(n)
+    scores = 0.5 * covariate + rng.standard_normal(n)
+    own = local_test(scores, np.column_stack([np.ones(n), covariate]), add_intercept=False)
+    plain = local_test(scores, covariate)
+    assert own.terms == (1,) and plain.terms == (1,)
+    assert own.statistic[0] == pytest.approx(plain.statistic[0], rel=1e-9)
+    assert own.residual_dof == plain.residual_dof == n - 2
+
+
+def test_terms_must_be_integer_indices_without_repeats():
+    """A boolean array would silently become the indices 0 and 1; a repeat is a mistake."""
+    rng = np.random.default_rng(38)
+    scores, design = rng.standard_normal((20, 2)), rng.standard_normal((20, 2))
+    with pytest.raises(ValueError, match="integer column indices"):
+        local_test(scores, design, terms=np.array([False, True, True]))
+    with pytest.raises(ValueError, match="integer column indices"):
+        local_test(scores, design, terms=[True])
+    with pytest.raises(ValueError, match="more than once"):
+        local_test(scores, design, terms=[1, 1])
+    with pytest.raises(ValueError, match="empty"):
+        local_test(scores, design, terms=[])
+    assert local_test(scores, design, terms=np.array([1, 2])).terms == (1, 2)
+    assert local_test(scores, design, terms=2).terms == (2,)
 
 
 def test_degrees_of_freedom_follow_the_rank_of_the_design():

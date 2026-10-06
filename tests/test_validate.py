@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
+from sbci import ContinuousConnectome
 from sbci.cli import main
+from sbci.errors import SbciError
 from sbci.io import write_hdf5
 from sbci.validate import validate_file
 
@@ -28,12 +31,70 @@ def test_a_well_formed_file_passes_every_grid_independent_check(tmp_path, connec
     """The toy grid is not ico4, so `grid` is expected to fail and nothing else."""
     results = _results(validate_file(_write(tmp_path, connectome)))
     assert results["readable"]
+    assert results["name"]
     assert results["metadata"]
+    assert results["shapes"]
     assert results["symmetry"]
     assert results["nonnegativity"]
     assert results["unit mass"]
     assert results["mask"]
     assert not results["grid"], "toy grid must not be mistaken for ico4"
+
+
+def _rewrite(path, name, data):
+    import h5py
+
+    with h5py.File(path, "a") as handle:
+        del handle[name]
+        handle.create_dataset(name, data=data)
+    return path
+
+
+def _misnamed(tmp_path, connectome):
+    return _write(tmp_path, connectome).rename(tmp_path / "sub-toy_sc.mat")
+
+
+def _flat_coordinates(tmp_path, connectome):
+    return _write(tmp_path, connectome, coords=np.zeros((5, 2), dtype=np.float32))
+
+
+def _short_mask(tmp_path, connectome):
+    return _rewrite(_write(tmp_path, connectome), "mask", connectome.mask[:4])
+
+
+def _metadata_not_a_string(tmp_path, connectome):
+    return _rewrite(_write(tmp_path, connectome), "metadata", np.arange(3))
+
+
+def _old_spec_version(tmp_path, connectome):
+    metadata = type(connectome.metadata)(dict(connectome.metadata.fields, spec_version="9.0.0"))
+    return _rewrite(_write(tmp_path, connectome), "metadata", metadata.to_json())
+
+
+@pytest.mark.parametrize(
+    ("make", "failing"),
+    [
+        (_misnamed, "name"),
+        (_flat_coordinates, "shapes"),
+        (_short_mask, "shapes"),
+        (_metadata_not_a_string, "readable"),
+        (_old_spec_version, "metadata"),
+    ],
+)
+def test_what_load_refuses_fails_a_named_check(tmp_path, connectome, make, failing):
+    """`sbci validate` must not pass a file that `ContinuousConnectome.load` then rejects.
+
+    Each file here is refused by ``load`` and, apart from the toy grid's
+    expected ``grid`` failure, fails exactly the check named; the well-formed
+    toy file fails ``grid`` alone.
+    """
+    path = make(tmp_path, connectome)
+    with pytest.raises(SbciError):
+        ContinuousConnectome.load(path)
+    failed = {check.name for check in validate_file(path) if not check.passed} - {"grid"}
+    assert failing in failed, failed
+    if failing != "readable":
+        assert "readable" not in failed
 
 
 def test_unit_mass_violation_is_caught(tmp_path, connectome):

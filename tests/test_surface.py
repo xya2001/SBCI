@@ -187,6 +187,81 @@ def test_plot_handles_a_constant_map():
     matplotlib.pyplot.close(figure)
 
 
+def test_the_sphere_is_turned_into_anatomical_orientation_for_display():
+    """The bundled sphere sits in the pipeline's frame, a half-turn about z from RAS.
+
+    Drawn as stored, its x and y run against the inflated surface's and the
+    lateral camera showed the medial side. The stored coordinates are left
+    alone -- every grid and warp is built on them -- and what the renderer
+    gets has x and y negated: a rotation, so the faces still wind outward.
+    """
+    from sbci.plotting import SPHERE_TO_ANATOMICAL, display_coordinates
+    from sbci.surface import vertex_normals
+
+    assert np.linalg.det(np.diag(SPHERE_TO_ANATOMICAL)) == 1.0  # a rotation, not a reflection
+    sphere, inflated = load_surface("sphere"), load_surface("inflated")
+    for side in ("L", "R"):
+        part = sphere.hemisphere(side)
+        stored = np.asarray(part.vertices)
+        shown = display_coordinates(part, "sphere")
+        reference = np.asarray(inflated.hemisphere(side).vertices)
+        before = [np.corrcoef(stored[:, k], reference[:, k])[0, 1] for k in range(3)]
+        after = [np.corrcoef(shown[:, k], reference[:, k])[0, 1] for k in range(3)]
+        assert before[0] < -0.9 and before[1] < -0.9 and before[2] > 0.9, before
+        assert min(after) > 0.9, after
+        np.testing.assert_array_equal(shown, stored * SPHERE_TO_ANATOMICAL)
+        radial = shown / np.linalg.norm(shown, axis=1, keepdims=True)
+        normals = vertex_normals(shown, part.faces)
+        assert float(((radial * normals).sum(axis=1) > 0.9).mean()) > 0.99
+    shown = display_coordinates(sphere.hemisphere("L"), "sphere")
+    assert not np.shares_memory(shown, sphere.vertices)
+
+
+@pytest.mark.parametrize("name", ["inflated", "white", "pial"])
+def test_the_anatomical_surfaces_are_drawn_as_stored(name):
+    from sbci.plotting import display_coordinates
+
+    part = load_surface(name).hemisphere("L")
+    np.testing.assert_array_equal(display_coordinates(part, name), part.vertices)
+
+
+@needs_plotting
+def test_plot_hands_the_turned_sphere_to_both_renderers(monkeypatch):
+    """Both nilearn's ``plot_surf`` and PyVista's ``render_view`` receive the turned sphere."""
+    from nilearn import plotting as nilearn_plotting
+
+    from sbci import render
+    from sbci.plotting import display_coordinates, plot_surface
+
+    expected = display_coordinates(load_surface("sphere").hemisphere("L"), "sphere")
+    values = np.linspace(-1.0, 1.0, N_VERTICES)
+
+    recorded = []
+    monkeypatch.setattr(
+        nilearn_plotting, "plot_surf", lambda *a, **k: recorded.append(k["surf_mesh"][0])
+    )
+    figure = plot_surface(values, surface="sphere", views=("lateral",))
+    matplotlib.pyplot.close(figure)
+    np.testing.assert_array_equal(recorded[0], expected)  # the left hemisphere is drawn first
+
+    rendered = []
+
+    def fake_view(coordinates, faces, rgb, view, side, **kwargs):
+        rendered.append(coordinates)
+        return np.zeros((8, 10, 4), dtype=np.uint8)
+
+    monkeypatch.setattr(render, "render_view", fake_view)
+    figure = plot_surface(values, surface="sphere", views=("lateral",), engine="pyvista")
+    matplotlib.pyplot.close(figure)
+    np.testing.assert_array_equal(rendered[0], expected)
+
+    # and the anatomical surfaces go through untouched
+    recorded.clear()
+    figure = plot_surface(values, surface="inflated", views=("lateral",))
+    matplotlib.pyplot.close(figure)
+    np.testing.assert_array_equal(recorded[0], load_surface("inflated").hemisphere("L").vertices)
+
+
 def test_surface_dataclass_is_constructible():
     """Surface is a plain value object, usable without the bundled data."""
     surface = Surface("toy", np.zeros((3, 3)), np.array([[0, 1, 2]], dtype=np.int32))

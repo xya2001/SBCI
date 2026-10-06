@@ -52,7 +52,11 @@ def parcellate(
     Parameters
     ----------
     dense
-        Symmetric ``n_vertices x n_vertices`` connectivity with a zero diagonal.
+        Symmetric ``n_vertices x n_vertices`` connectivity. Its diagonal, the
+        self-pairs, is excluded by contract and zeroed here, so a matrix with
+        ones on it (as ``np.corrcoef`` returns) aggregates exactly as one with
+        zeros; left in, the self-pairs would sit in the within-region mass but
+        not in its denominator.
     atlas
         Parcellation on the same grid, or the name of a bundled one.
     area
@@ -78,10 +82,13 @@ def parcellate(
     ``sum_i a_i^2`` is left out of the within-region denominators too:
     dividing by the full ``A_k^2`` would put a region whose pairs all carry
     ``r`` at ``r (1 - sum_i a_i^2 / A_k^2)``, about 4% low for a
-    Schaefer200-sized region on ico4. A region with a single vertex (or none
-    at this resolution) has no distinct pair, and its diagonal entry is
-    ``NaN``. The legacy MATLAB routine loops only over ``i < j`` and leaves
-    the region diagonal at zero -- see ``PORTING.md`` item 3.
+    Schaefer200-sized region on ico4. A region with a single vertex has no
+    distinct pair, and its diagonal entry is ``NaN``; a region with no vertex
+    at this resolution (none carrying area: 45 of the 11,825 bundled regions
+    have no cortical vertex on ico4) has no pair with anyone, and is ``NaN``
+    along its whole row and column. Under ``"mass"`` both stay at zero. The
+    legacy MATLAB routine loops only over ``i < j`` and leaves the region
+    diagonal at zero -- see ``PORTING.md`` item 3.
     """
     if how not in HOW:
         raise ValueError(f"how must be one of {HOW}, got {how!r}")
@@ -91,6 +98,11 @@ def parcellate(
         atlas = load_atlas(atlas)
 
     dense = np.asarray(dense, dtype=np.float64)
+    if np.diagonal(dense).any():
+        # Copied only when there is something to clear: the caller's matrix
+        # is left alone, and a 210 MB ico4 matrix is not duplicated for nothing.
+        dense = dense.copy()
+        np.fill_diagonal(dense, 0.0)
     if fisher_z:
         dense = np.arctanh(np.clip(dense, -0.999999, 0.999999))
 
@@ -105,13 +117,13 @@ def parcellate(
         denominator = np.outer(totals, totals)
         # Within a region the mass runs over distinct vertex pairs only, so the
         # self-pairs come off the diagonal denominators. A region of one vertex
-        # has no pair, and no within-region mean: NaN rather than zero.
+        # has no pair within itself, and one of no vertex has no pair with
+        # anyone: no mean to give, so NaN rather than zero wherever the weight
+        # of the pairs is zero.
         self_pairs = np.asarray(weights.multiply(weights).sum(axis=0)).ravel()
-        diagonal = np.diag_indices_from(denominator)
-        denominator[diagonal] -= self_pairs
+        denominator[np.diag_indices_from(denominator)] -= self_pairs
         with np.errstate(invalid="ignore", divide="ignore"):
-            out = np.where(denominator > 0, mass / denominator, 0.0)
-        out[diagonal] = np.where(denominator[diagonal] > 0, out[diagonal], np.nan)
+            out = np.where(denominator > 0, mass / denominator, np.nan)
     else:
         out = mass
 

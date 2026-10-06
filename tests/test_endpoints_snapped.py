@@ -65,7 +65,17 @@ def test_from_snapped_reads_a_file_and_refuses_what_it_cannot_place(grids, tmp_p
         v_ids0=np.array([lh.n_vertices + 1.0]),
         v_ids1=np.array([0.0]),
     )
-    with pytest.raises(ValueError, match="beyond"):
+    with pytest.raises(ValueError, match="outside the left sphere"):
+        Endpoints.from_snapped(path, *spheres, grids=grids)
+    # a negative id would wrap round to the far end of the sphere
+    np.savez(
+        path,
+        surf_ids0=np.array([0.0, 1.0]),
+        surf_ids1=np.array([1.0, 1.0]),
+        v_ids0=np.array([3.0, -1.0]),
+        v_ids1=np.array([8.0, 2.0]),
+    )
+    with pytest.raises(ValueError, match="vertex -1 is outside the right sphere"):
         Endpoints.from_snapped(path, *spheres, grids=grids)
     np.savez(path, surf_ids0=np.array([0.0]))
     with pytest.raises(FormatError, match="have no surf_ids1, v_ids0"):

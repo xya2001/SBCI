@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 
 from . import grid, spec
+from .connectome import COMPUTATIONAL_SUFFIXES
 from .errors import SbciError
 from .io import read_hdf5
 from .metadata import MetadataError
@@ -34,11 +35,14 @@ class Check:
 def validate_file(path: str | Path, tolerance: float = 1e-5) -> list[Check]:
     """Check one computational file against the specification.
 
-    Checks that the file is readable, its metadata complete and canonical, the
-    grid the ico4 grid, the stored form the strict upper triangle in float32,
-    every value finite, SC nonnegative, the area weights positive and in the
-    pipeline's units, the area-weighted mass one, and the medial wall empty.
-    Tolerances are relative to the file's own scale where a scale exists.
+    Checks that the file is readable, named as :meth:`sbci.ContinuousConnectome.load`
+    reads it, its metadata complete and canonical, the grid the ico4 grid, the
+    area, mask and coordinates the size of that grid, the stored form the
+    strict upper triangle in float32, every value finite, SC nonnegative, the
+    area weights positive and in the pipeline's units, the area-weighted mass
+    one, and the medial wall empty. Tolerances are relative to the file's own
+    scale where a scale exists. Everything ``load`` refuses fails some check
+    here; the converse does not hold, since ``load`` does not check the values.
     """
     path = Path(path)
     checks: list[Check] = []
@@ -54,6 +58,11 @@ def validate_file(path: str | Path, tolerance: float = 1e-5) -> list[Check]:
     except (OSError, KeyError, SbciError, ValueError) as exc:
         return [Check("readable", False, str(exc))]
     checks.append(Check("readable", True))
+
+    # load() decides what kind of file it has from the name, before reading.
+    named = path.name.endswith(COMPUTATIONAL_SUFFIXES)
+    detail = "" if named else f"{path.name!r} would not load; expected {COMPUTATIONAL_SUFFIXES}"
+    checks.append(Check("name", named, detail))
 
     metadata = parts["metadata"]
     try:
@@ -74,6 +83,27 @@ def validate_file(path: str | Path, tolerance: float = 1e-5) -> list[Check]:
     except ValueError as exc:
         n = None
         checks.append(Check("grid", False, str(exc)))
+
+    # The arrays have to agree on the vertex count, as load() requires of them;
+    # the coordinates are optional but, when present, one triple per vertex.
+    coords = parts["coords"]
+    if n is None:
+        checks.append(Check("shapes", False, "no vertex count to compare the arrays against"))
+    elif area.size != n or mask.size != n:
+        checks.append(
+            Check(
+                "shapes",
+                False,
+                f"connectivity implies {n} vertices but area has {area.size} and mask has "
+                f"{mask.size}",
+            )
+        )
+    elif coords is not None and np.shape(coords) != (n, 3):
+        checks.append(
+            Check("shapes", False, f"coordinates are {np.shape(coords)}, expected {(n, 3)}")
+        )
+    else:
+        checks.append(Check("shapes", True))
 
     # Symmetry is structural: storing only the upper triangle guarantees it,
     # so the check is that the stored form is the one the spec names.
