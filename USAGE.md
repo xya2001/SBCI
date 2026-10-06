@@ -693,11 +693,17 @@ seconds per 100,000 streamlines rather than minutes. Six things to know:
   to a squared norm below 1, which float32 endpoint weights make routine
   (PORTING.md item 9). The port also smooths the velocity field as vectors
   in space rather than as two frame components, which the reference's
-  component-wise smoothing distorts near the coordinate poles.
+  component-wise smoothing distorts near the coordinate poles, and it holds
+  the rotation of the rigid initialization exactly, outside the velocity
+  field, where the reference holds it as the field itself: realized 1.6
+  degrees off at 150 degrees and eroded by every later smoothing.
   `strict_upstream=True` reproduces all of it, and does so to the digits of
   the MATLAB reference run.
 - **Rigid initialization is off by default**, as in the reference's own
-  example; `init_rotation=True` runs the multi-shell rotation search first.
+  example; `init_rotation=True` runs the multi-shell rotation search first,
+  and the rotation it finds is held exactly while the registration deforms
+  after it. The exported warp keeps it as `lh_rigid` and `rh_rigid`; its
+  vertices are the whole map.
 - **The stopping threshold is absolute.** The public default of 1e-4 is a
   quarter of the whole cost when two subjects are alike, and stops the
   registration after a few iterations; `threshold=1e-7` lets it converge. On

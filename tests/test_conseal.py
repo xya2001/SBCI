@@ -329,7 +329,9 @@ def test_the_flow_of_a_rotational_field_is_that_rotation(grid):
     rotation = np.array(
         [[np.cos(angle), -np.sin(angle), 0], [np.sin(angle), np.cos(angle), 0], [0, 0, 1]]
     )
-    warp = StationaryWarp(grid).rotate(rotation)
+    warp = StationaryWarp(grid)
+    warp.velocity = rotational_velocity(warp, rotation)
+    warp.vertices = warp.exponential()
     expected = grid.vertices @ rotation.T
     # the flow interpolates the field linearly over ico2 triangles, so this is approximate
     assert np.abs(np.arccos(np.clip((warp.vertices * expected).sum(1), -1, 1))).max() < 1e-2
@@ -633,9 +635,13 @@ def test_cotangent_weights_use_the_angle_opposite_the_edge():
 
 
 def test_a_half_turn_rotation_is_not_mistaken_for_the_identity(grid):
+    """The reference reads the axis off the skew part of R, which vanishes for a half turn."""
     half_turn = np.diag([-1.0, -1.0, 1.0])
-    warp = StationaryWarp(grid).rotate(half_turn)
     expected = grid.vertices @ half_turn.T
+    np.testing.assert_allclose(
+        StationaryWarp(grid).rotate(half_turn).vertices, expected, atol=1e-12
+    )
+    warp = StationaryWarp(grid, strict_upstream=True).rotate(half_turn)
     turned = np.arccos(np.clip((warp.vertices * expected).sum(1), -1, 1))
     unmoved = np.arccos(np.clip((warp.vertices * grid.vertices).sum(1), -1, 1))
     assert np.median(turned) < 0.2
@@ -873,6 +879,15 @@ def bundled_left():
     return default_grids(order=1)[0]
 
 
+def rotational_velocity(warp, rotation):
+    """The ``(e1, e2)`` components of the field whose unit-time flow is ``rotation``."""
+    from scipy.spatial.transform import Rotation
+
+    omega = Rotation.from_matrix(rotation).as_rotvec()
+    field = np.cross(np.broadcast_to(omega, warp.base.shape), warp.base)
+    return np.stack([(field * warp.e1).sum(1), (field * warp.e2).sum(1)], axis=1)
+
+
 def rotation_about_x(degrees):
     angle = np.radians(degrees)
     return np.array(
@@ -892,7 +907,11 @@ def test_smoothing_leaves_a_rotation_alone_at_the_coordinate_poles(bundled_left)
     assert poles.size == 2
     drift = {}
     for strict in (False, True):
-        warp = StationaryWarp(grid, strict_upstream=strict).rotate(rotation_about_x(20.0))
+        # the rotation's own field, as the reference holds a rotation; rotate()
+        # itself now keeps the rotation out of the field (item 17)
+        warp = StationaryWarp(grid, strict_upstream=strict)
+        warp.velocity = rotational_velocity(warp, rotation_about_x(20.0))
+        warp.vertices = warp.exponential()
         start = warp.vertices.copy()
         for _ in range(10):
             assert warp.compose(np.zeros((grid.n_vertices, 2)), strict_upstream=strict)
@@ -936,3 +955,95 @@ def test_save_returns_the_path_it_wrote(grid, tmp_path):
     assert exported.save(tmp_path / "named.npz") == tmp_path / "named.npz"
     loaded = EndpointWarp.load(written)
     np.testing.assert_array_equal(loaded.lh_jacobian, exported.lh_jacobian)
+
+
+# --- rigid rotations, held outside the velocity field (module docstring, item 17) ---
+
+
+def degrees_off(points, expected):
+    """Angle between corresponding unit vectors, in degrees."""
+    return np.degrees(np.arccos(np.clip((points * expected).sum(1), -1, 1)))
+
+
+@pytest.mark.parametrize("degrees", [20.0, 150.0, 180.0])
+def test_rotate_holds_the_rotation_exactly_and_steps_do_not_erode_it(bundled_left, degrees):
+    """The reference's flow of a rotation was 1.6 degrees off at 150, and each step shrank it."""
+    grid = bundled_left
+    rotation = rotation_about_x(degrees)
+    expected = grid.vertices @ rotation.T
+    warp = StationaryWarp(grid).rotate(rotation)
+    np.testing.assert_allclose(warp.vertices, expected, atol=1e-12)
+    np.testing.assert_allclose(warp.rigid, rotation, atol=1e-12)
+    assert not warp.velocity.any()
+    np.testing.assert_allclose(warp.jacobian, 1.0, atol=1e-9)
+    for _ in range(10):
+        assert warp.compose(np.zeros((grid.n_vertices, 2)))
+    np.testing.assert_allclose(warp.vertices, expected, atol=1e-12)
+    if degrees == 150.0:
+        flowed = StationaryWarp(grid, strict_upstream=True).rotate(rotation)
+        assert degrees_off(flowed.vertices, expected).max() > 1.0  # the reference's
+        for _ in range(10):
+            flowed.compose(np.zeros((grid.n_vertices, 2)), strict_upstream=True)
+        assert degrees_off(flowed.vertices, expected).max() > 1.5  # and eroding
+
+
+def test_a_deformation_after_a_rotation_is_its_flow_after_the_rotation(bundled_left):
+    """A 5-degree rotation composed after a 150-degree one lands on their product."""
+    from scipy.spatial.transform import Rotation
+
+    grid = bundled_left
+    large = rotation_about_x(150.0)
+    small = Rotation.from_rotvec(np.radians(5.0) * np.array([0.0, 0.6, 0.8])).as_matrix()
+    warp = StationaryWarp(grid, viscosity=0.0).rotate(large)
+    assert warp.compose(rotational_velocity(warp, small))
+    np.testing.assert_allclose(warp.rigid, large, atol=1e-12)  # the step went into the field
+    # 0.007 degrees at most, of which 0.003 is the flow of the small field itself
+    assert degrees_off(warp.vertices, grid.vertices @ (small @ large).T).max() < 0.02
+
+
+def test_inverting_a_rotated_warp_inverts_its_rigid_part(bundled_left):
+    from scipy.spatial.transform import Rotation
+
+    grid = bundled_left
+    large = rotation_about_x(150.0)
+    small = Rotation.from_rotvec(np.radians(5.0) * np.array([0.0, 0.6, 0.8])).as_matrix()
+    warp = StationaryWarp(grid, viscosity=0.0).rotate(large)
+    assert warp.compose(rotational_velocity(warp, small))
+    inverse = warp.copy().invert()
+    np.testing.assert_allclose(inverse.rigid, large.T, atol=1e-12)
+    np.testing.assert_allclose(warp.rigid, large, atol=1e-12)  # the copy was inverted
+    assert degrees_off(inverse.apply(warp.vertices), grid.vertices).max() < 0.02
+
+
+def test_the_rigid_search_leaves_its_rotation_out_of_the_field(grid, connectome, kernel):
+    k, dk = kernel
+    rotation = rotation_about_x(14.0)
+    p_in, p_out = connectome.positions()
+    rotated = EndpointConnectome.from_points(
+        grid,
+        grid,
+        p_in @ rotation.T,
+        p_out @ rotation.T,
+        connectome.hemisphere_in,
+        connectome.hemisphere_out,
+    )
+    engine = ConSEAL(grid, grid, max_iterations=0)
+    lh, rh, _, _ = engine.register(connectome, rotated, k, dk, init_rotation=True)
+    for warp in (lh, rh):
+        assert not warp.velocity.any()
+        assert not np.allclose(warp.rigid, np.eye(3))
+        np.testing.assert_allclose(warp.vertices, grid.vertices @ warp.rigid.T, atol=1e-12)
+
+
+def test_an_endpoint_warp_keeps_its_rigid_part_through_save_and_load(grid, tmp_path):
+    lh = StationaryWarp(grid).rotate(rotation_about_x(30.0))
+    exported = EndpointWarp(
+        lh.vertices, lh.velocity, lh.jacobian, lh.vertices, lh.velocity, lh.jacobian, lh.rigid
+    )
+    loaded = EndpointWarp.load(exported.save(tmp_path / "rigid"))
+    np.testing.assert_array_equal(loaded.lh_rigid, lh.rigid)
+    np.testing.assert_array_equal(loaded.rh_rigid, np.eye(3))
+    # a file written before the rigid part was kept loads with identities
+    older = {k: v for k, v in exported.__dict__.items() if not k.endswith("_rigid")}
+    np.savez_compressed(tmp_path / "older.npz", **older)
+    np.testing.assert_array_equal(EndpointWarp.load(tmp_path / "older.npz").lh_rigid, np.eye(3))

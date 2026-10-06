@@ -1331,7 +1331,7 @@ searches picked the same triangle for every one of 240,000 endpoints.
 ### What was found in the reference
 
 The port reproduces all of these under `strict_upstream=True`; by default it
-corrects 1 to 4 and 12 to 16 (5 and 8 are choices and stay, 6, 9 and 11 are
+corrects 1 to 4 and 12 to 17 (5 and 8 are choices and stay, 6, 9 and 11 are
 fixed in both modes, 7 only reaches the bandwidth selection). Numbering
 matches the module docstring.
 
@@ -1395,6 +1395,14 @@ matches the module docstring.
     copied an `EndpointConnectome` but kept its older committed locations, so
     an object returned by one alignment was silently reset at the start of
     the next; it now commits the copy's current locations first.
+15. **The Karcher median stops on its starting subject** when that subject's
+    square-root density rounds to a squared norm below 1 (item 9).
+16. **The velocity field is smoothed as two scalar components**, which mixes
+    frames where they turn sharply around a coordinate pole (item 9).
+17. **A rigid rotation is held as a velocity field**, realized 1.6 degrees
+    off at 150 degrees and eroded by every later smoothing (item 9). The
+    port holds it exactly, outside the field.
+    `strict_upstream=True` reproduces 15 to 17 with the rest.
 
 ### The gradient, measured
 
@@ -1749,18 +1757,37 @@ interrupted download keeps its `.part` file and resumes; `validate` fails
 whatever `load` refuses, which it did not for a misnamed `.mat` file, a
 coordinate array of the wrong shape, a mask or area of the wrong length or a
 `/metadata` dataset that is not a string (two checks added, eleven in all);
-`strict_upstream` says which items it reproduces (1 to 4 and 12 to 16);
+`strict_upstream` says which items it reproduces (1 to 4 and 12 to 17);
 Schaefer-900 and -1000 have 899 and 999 regions on ico4 (BLUEPRINT.md, now
-also USAGE.md). Large `StationaryWarp.rotate` rotations are inexact, as the
-reviewer said: 0.035 degrees of error at 20 degrees, 0.15 at 45, 0.58 at 90,
-1.03 at 120, 1.60 at 150, because the first scaled step of the
-scaling-and-squaring flow follows great circles where a rotation's flow lines
-are latitude circles, and six squarings double that deviation each time
-(predicted `alpha^2 sin(psi) cos(psi) / 128`, 93-96% of the measured maxima);
-the reference's `exp_svf` has the same scheme and the port matches its warp
-vertices to 6.6e-10, so it is left as it is -- more squarings would move the
-small-angle results too -- and `init_rotation=True` realizes its icosahedral
-rotations up to 1.6 degrees off before the diffeomorphic steps correct them.
+also USAGE.md).
+
+Large `StationaryWarp.rotate` rotations were inexact, as the reviewer said:
+0.035 degrees of error at 20 degrees, 0.15 at 45, 0.58 at 90, 1.03 at 120,
+1.60 at 150 and 2.29 at a half turn. The reference holds a rotation as its
+own velocity field, and the first scaled step of the scaling-and-squaring
+flow follows a great circle where a rotation moves a point along a small
+circle, an error six squarings double each time (predicted `alpha^2 sin(psi)
+cos(psi) / 128`, 93-96% of the measured maxima). Measuring it found a second
+effect, larger: every later step smooths the field by 5%, rotation and all,
+so a stored 150-degree rotation erodes to 142.6 over the 100 iterations of a
+registration (7.5 degrees at most from where it belongs), which the gradient
+has to keep restoring. More squarings would only have narrowed the first effect, and
+would have moved every small-field result with it. The port instead holds a
+rotation exactly, outside the velocity field, and the warp is the field's
+flow after it (the module docstring's item 17): `rotate` is exact to rounding
+at every angle, nothing erodes, a 5-degree rotation composed after a
+150-degree one lands within 0.007 degrees of their product (0.003 of it the
+5-degree flow's own error), and inverting such a warp returns every vertex
+within 0.007 degrees. A warp without a rotation -- every registration without
+`init_rotation=True` -- is computed exactly as before, bit for bit.
+`tests/reference/rotation_probe.py` measures all of this, and what it costs a
+registration: a synthetic subject turned by 150 degrees and handed the exact
+inverse rotation, as a perfect rigid search would find it, started with its
+endpoints 0.98 degrees from the truth on average (1.60 at most) when the
+rotation was a field, and thirty steps left them at 0.81 (1.73) -- the
+registration cannot remove an error it keeps re-creating -- where the
+rotation held exactly leaves them at 0.001; at 60 degrees, 0.17 and 0.13
+against 0.001. `strict_upstream=True` keeps the reference's arithmetic.
 
 ### What the corrections change on the released subjects
 

@@ -240,10 +240,10 @@ port now computes the right thing, and the rows above are reproduced only with
 `reference=True` (ENCORE, `project`) or `strict_upstream=True` (ConSEAL), which
 restore the reference's arithmetic.
 
-### Nine things in the references that a verifier will hit
+### Ten things in the references that a verifier will hit
 
 The first four are not port defects. Anyone reproducing this will meet them,
-and should not conclude the port is broken. The last five are errors in the
+and should not conclude the port is broken. The last six are errors in the
 references that the port reproduced until the two reviews of 5 October 2026;
 it now corrects them by default:
 
@@ -295,6 +295,11 @@ it now corrects them by default:
    1, a discretization bias that costs the transported density 0.7% of its
    mass; the port calibrates by the identity's own value, `reference=True`
    keeps the bias.
+10. **ConSEAL holds a rigid rotation as a velocity field** (`rotate`, used by
+    `init_rotation=True`): its flow is 1.6 degrees off at 150 degrees, and
+    every later smoothing erodes it, 7.4 of 150 degrees over 100 steps. The
+    port holds the rotation exactly, outside the field; `strict_upstream=True`
+    keeps the reference's (PORTING.md item 9).
 
 ---
 

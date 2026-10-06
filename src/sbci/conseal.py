@@ -25,7 +25,7 @@ What was found in the reference while porting
 ---------------------------------------------
 The reference is research code, and this port reproduces its behaviour --
 including the shortcuts below -- when ``strict_upstream=True``. By default
-items 1 to 4 and 12 to 16 are corrected; 5 and 8 are kept as the choices they
+items 1 to 4 and 12 to 17 are corrected; 5 and 8 are kept as the choices they
 are, 6, 9 and 11 are fixed in both modes, and 7 only reaches
 :meth:`HeatKernelBuilder.cross_validate`. PORTING.md item 7 has the
 measurements.
@@ -128,6 +128,19 @@ measurements.
     of the field where the frame turns slowly (within 30 degrees of the
     coordinate equator); ``strict_upstream=True`` keeps the reference's. Found
     by the second review of 5 October 2026.
+17. **A rigid rotation is held as a velocity field.** ``rotate``, which the
+    rigid initialization uses, sets the field to the rotation's own rotational
+    field and realizes it by scaling and squaring, whose first scaled step
+    follows a great circle where the rotation moves a point along a small
+    circle; six squarings double that error each time, to 0.035 degrees at a
+    20-degree rotation, 1.6 at 150 and 2.3 at a half turn. And every later
+    step smooths the field by 5%, rotation and all, so over the 100 iterations
+    of a registration a 150-degree rotation erodes to 142.6 degrees, which the
+    gradient has to keep restoring. By default the rotation is held exactly,
+    outside the field, and the warp is the field's flow after it; the field
+    carries only the deformation. ``strict_upstream=True`` keeps the
+    reference's. Found by the second review of 5 October 2026, which measured
+    the first effect.
 """
 
 from __future__ import annotations
@@ -747,6 +760,12 @@ class StationaryWarp:
     parallel transport. Composing is addition of velocity fields, followed by
     the reference's 5% Laplacian smoothing (module docstring, item 8), applied
     to the field as 3-vectors rather than frame components (item 16).
+
+    A rigid rotation set by :meth:`rotate` is held exactly, as ``rigid``, and
+    the warp is the field's flow after it: the field then carries only the
+    deformation, which the flow computes accurately and the smoothing is meant
+    for (item 17). ``rigid`` is the identity until :meth:`rotate` is called,
+    and the warp is then the flow alone, exactly as before.
     """
 
     def __init__(
@@ -759,9 +778,13 @@ class StationaryWarp:
         """The identity warp of ``grid``.
 
         ``strict_upstream`` selects the reference's cotangent weights (module
-        docstring, item 12). The faces must be oriented outward, since that is
-        what the fold test assumes; an inward mesh would refuse every step.
+        docstring, item 12) and its way of holding a rotation (item 17). The
+        faces must be oriented outward, since that is what the fold test
+        assumes; an inward mesh would refuse every step.
         """
+        self.strict_upstream = bool(strict_upstream)
+        self.rigid = np.eye(3)
+        self._rigid_query = None  # weights, indices and the rotated vertices, once rigid is set
         self.grid = grid
         self.e1, self.e2 = grid.e1, grid.e2
         self.faces = grid.faces
@@ -795,6 +818,7 @@ class StationaryWarp:
         clone.__dict__.update(self.__dict__)
         clone.velocity = self.velocity.copy()
         clone.vertices = self.vertices.copy()
+        clone.rigid = self.rigid.copy()
         return clone
 
     def exponential(self, velocity=None) -> np.ndarray:
@@ -816,6 +840,39 @@ class StationaryWarp:
             current = normalize_rows(sphere_exp_map(current, step))
         return current
 
+    def _images(self, velocity=None) -> np.ndarray:
+        """Where the warp sends the base vertices: the flow of ``velocity`` after ``rigid``.
+
+        Without a rigid part that is the flow itself. With one, the flow is
+        carried to the rotated vertices as each squaring carries it, by
+        interpolating its displacements transported to the point, so a zero
+        field leaves the rotation exact.
+        """
+        if self._rigid_query is None:
+            return self.exponential(velocity)
+        weights, indices, rotated = self._rigid_query
+        velocity = self.velocity if velocity is None else np.asarray(velocity, dtype=np.float64)
+        if not np.any(velocity):
+            return rotated.copy()
+        displacement = sphere_log_map(self.base, self.exponential(velocity))
+        moved = _transport(
+            displacement[indices].reshape(-1, 3),
+            self.base[indices].reshape(-1, 3),
+            np.repeat(rotated, 3, axis=0),
+        ).reshape(self.n_vertices, 3, 3)
+        step = (weights[:, :, None] * moved).sum(axis=1)
+        return normalize_rows(sphere_exp_map(rotated, step))
+
+    def _set_rigid(self, rotation) -> None:
+        """Hold ``rotation`` as the rigid part, and where it sends the base vertices."""
+        self.rigid = np.asarray(rotation, dtype=np.float64).copy()
+        if np.array_equal(self.rigid, np.eye(3)):
+            self._rigid_query = None
+            return
+        rotated = normalize_rows(self.base @ self.rigid.T)
+        weights, indices, _ = self._query.query_faces(rotated)
+        self._rigid_query = (weights, indices, rotated)
+
     def compose(self, displacement, strict_upstream: bool = False) -> bool:
         """Add a tangent displacement to the velocity field and re-flow; returns whether applied.
 
@@ -828,7 +885,7 @@ class StationaryWarp:
         velocity = self.velocity + displacement
         if self.viscosity:
             velocity = self._smooth(velocity, strict_upstream)
-        candidate = self.exponential(velocity)
+        candidate = self._images(velocity)
         if triangles_fold(candidate, self.faces):
             self.rejected += 1
             warnings.warn(
@@ -857,19 +914,54 @@ class StationaryWarp:
         return np.stack([(ambient * self.e1).sum(1), (ambient * self.e2).sum(1)], axis=1)
 
     def invert(self) -> StationaryWarp:
-        """Negate the velocity field and re-flow, in place (``invert``)."""
-        self.velocity = -self.velocity
-        self.vertices = self.exponential()
+        """Invert the warp in place: negate the velocity field and re-flow (``invert``).
+
+        A rigid part ``R`` inverts too. The inverse of the flow of ``v`` after
+        ``R`` is ``R'`` followed by the flow of ``-R' v(R y)``, the field
+        carried to the rotated frame; it is read at the rotated vertices by the
+        same transported interpolation as :meth:`_images`.
+        """
+        if self._rigid_query is None:
+            self.velocity = -self.velocity
+            self.vertices = self.exponential()
+            return self
+        weights, indices, rotated = self._rigid_query
+        ambient = self.e1 * self.velocity[:, :1] + self.e2 * self.velocity[:, 1:]
+        moved = _transport(
+            ambient[indices].reshape(-1, 3),
+            self.base[indices].reshape(-1, 3),
+            np.repeat(rotated, 3, axis=0),
+        ).reshape(self.n_vertices, 3, 3)
+        pulled = -((weights[:, :, None] * moved).sum(axis=1) @ self.rigid)  # -R' v(R y), as rows
+        self._set_rigid(self.rigid.T)
+        self.velocity = np.stack([(pulled * self.e1).sum(1), (pulled * self.e2).sum(1)], axis=1)
+        self.vertices = self._images()
         return self
 
     def rotate(self, rotation) -> StationaryWarp:
-        """Set the warp to a rigid rotation, as the flow of its rotational field (``rotate``)."""
+        """Set the warp to a rigid rotation, held exactly (``rotate``).
+
+        The rotation becomes the warp's rigid part and the velocity field is
+        cleared, so the vertices are the rotated vertices to rounding and later
+        steps deform after the rotation without eroding it (module docstring,
+        item 17). ``strict_upstream=True`` on the constructor sets the field to
+        the rotation's own rotational field, as the reference does, whose flow
+        is 1.6 degrees off at 150 degrees and which every later smoothing
+        shrinks.
+        """
         from scipy.spatial.transform import Rotation
 
+        # The nearest proper rotation, whatever rounding the caller's matrix carries.
+        rotation = Rotation.from_matrix(np.asarray(rotation, dtype=np.float64))
+        if not self.strict_upstream:
+            self._set_rigid(rotation.as_matrix())
+            self.velocity = np.zeros_like(self.velocity)
+            self.vertices = self._images()
+            return self
         # The reference reads the axis off the skew part of R, which vanishes for
         # a half turn and silently makes it the identity; the rotation vector
         # from a proper decomposition does not.
-        omega = Rotation.from_matrix(np.asarray(rotation, dtype=np.float64)).as_rotvec()
+        omega = rotation.as_rotvec()
         field = np.cross(np.broadcast_to(omega, self.base.shape), self.base)
         self.velocity = np.stack([(field * self.e1).sum(1), (field * self.e2).sum(1)], axis=1)
         self.vertices = self.exponential()
@@ -1089,7 +1181,14 @@ def rotation_shells():
 
 @dataclass
 class EndpointWarp:
-    """One subject's warp of both hemispheres, exported from :class:`StationaryWarp`."""
+    """One subject's warp of both hemispheres, exported from :class:`StationaryWarp`.
+
+    The vertices are the whole map. Each hemisphere's warp is the flow of its
+    velocity field after the rigid rotation ``lh_rigid`` / ``rh_rigid``, the
+    identity unless the registration began with ``init_rotation=True``
+    (module docstring, item 17); a file written before the rigid part was
+    kept loads with identities.
+    """
 
     lh_vertices: np.ndarray
     lh_velocity: np.ndarray
@@ -1097,6 +1196,8 @@ class EndpointWarp:
     rh_vertices: np.ndarray
     rh_velocity: np.ndarray
     rh_jacobian: np.ndarray
+    lh_rigid: np.ndarray = field(default_factory=lambda: np.eye(3))
+    rh_rigid: np.ndarray = field(default_factory=lambda: np.eye(3))
 
     def save(self, path) -> Path:
         """Write the warp to ``.npz``; returns the path written, suffix included."""
@@ -1150,7 +1251,7 @@ class ConSEAL:
         Weight the cost and its gradient with the Voronoi areas, as the
         paper's integral does. Off by default to match the reference (item 5).
     strict_upstream
-        Reproduce items 1 to 4, 12, 13, 15 and 16 of the module docstring. The
+        Reproduce items 1 to 4, 12, 13 and 15 to 17 of the module docstring. The
         kernel derivative handed to :meth:`register` must then come from
         :meth:`HeatKernelBuilder.compute` with the same flag (item 2), and
         item 14 lives in the grids (:func:`default_grids` with
@@ -1537,7 +1638,7 @@ def endpoints_align(
     area_weighted
         See :class:`ConSEAL`.
     strict_upstream
-        Reproduce the reference's errors: items 1 to 4 and 12 to 16 of the
+        Reproduce the reference's errors: items 1 to 4 and 12 to 17 of the
         module docstring. Item 14 lives in the shared geometry -- the Legendre
         recurrence behind the tangent basis, whose ``m = 0`` term makes the
         divergence of every zonal basis field too large
@@ -1612,6 +1713,8 @@ def endpoints_align(
                 rh_vertices=rh_warp.vertices,
                 rh_velocity=rh_warp.velocity,
                 rh_jacobian=rh_warp.jacobian,
+                lh_rigid=lh_warp.rigid,
+                rh_rigid=rh_warp.rigid,
             )
         )
         result.connectomes.append(warped)
