@@ -10,6 +10,7 @@ from __future__ import annotations
 import csv
 import os
 
+import numpy as np
 import pytest
 
 import sbci
@@ -420,7 +421,7 @@ def test_a_table_with_two_columns_of_one_name_is_refused(folder, tmp_path):
 
 
 def test_what_counts_as_missing(folder):
-    """Pandas' defaults, case and all: None is missing, none is a value; missing= sets another."""
+    """Pandas' defaults, case and all: None is missing, none is a value; missing= adds markers."""
     root, add = folder
     add("sub-01_sc.h5")
     add("sub-02_sc.h5")
@@ -428,7 +429,7 @@ def test_what_counts_as_missing(folder):
     cohort = load_cohort(root, table)
     assert cohort.column("medication").tolist() == ["none", None]
     assert cohort.column("site").tolist() == [None, "B"]
-    literal = load_cohort(root, table, missing={""})
+    literal = load_cohort(root, table, missing={""}, keep_default_missing=False)
     assert literal.column("site").tolist() == ["NA", "B"]
 
 
@@ -479,3 +480,73 @@ def test_a_real_file_that_load_refuses_is_refused_here_too(written, tmp_path):
         sbci.load(copy)
     cohort = load_cohort([written / "sub-a_sc.h5", copy])
     assert cohort.subjects == ["sub-a"] and "vertex_out" in cohort.excluded["sub-z"]
+
+
+# --- the seventh review -----------------------------------------------------------
+
+
+def test_missing_markers_add_to_the_defaults(folder):
+    """missing="-999" was split into "-", "9", and replaced the defaults: NA became a level."""
+    root, add = folder
+    for subject in ("01", "02", "03"):
+        add(f"sub-{subject}_sc.h5")
+    table = {
+        "subject": ["01", "02", "03"],
+        "score": ["12", "-999", "15"],
+        "group": ["a", "NA", "b"],
+    }
+    cohort = load_cohort(root, table, missing="-999")
+    assert np.isnan(cohort.column("score")[1]) and cohort.column("group").tolist() == [
+        "a",
+        None,
+        "b",
+    ]
+    listed = load_cohort(root, table, missing=["-999", "a"])
+    assert listed.column("group").tolist() == [None, None, "b"]
+
+
+def test_the_session_check_heeds_exclude_and_reports_a_refusal(folder):
+    from sbci.cohort import CohortError
+
+    root, add = folder
+    for name in (
+        "sub-A_ses-1_sc.h5",
+        "sub-A_ses-2_fc.h5",
+        "sub-B_ses-1_sc.h5",
+        "sub-B_ses-1_fc.h5",
+    ):
+        add(name)
+    kept = load_cohort(root, modalities=("sc", "fc"), exclude={"sub-A": "two visits"})
+    assert kept.subjects == ["sub-B"] and kept.excluded == {
+        "sub-A": "excluded by the caller: two visits"
+    }
+    with pytest.raises(
+        CohortError, match="sub-A's files come from more than one session"
+    ) as refused:
+        load_cohort(root, modalities=("sc", "fc"))
+    reasons = {row["subject"]: row["reason"] for row in refused.value.report}
+    assert reasons["sub-A"] == "files from more than one session (sc from 1; fc from 2)"
+    assert reasons["sub-B"].startswith("refused with the cohort")
+
+
+def test_a_copy_beside_a_subjects_file_is_one_of_its_files(folder):
+    """sub-01_old_sc.h5 beside sub-01_sc.h5 was a subject of its own, sub-01_old."""
+    root, add = folder
+    for name in ("sub-01_sc.h5", "sub-01_old_sc.h5", "sub-02_sc.h5"):
+        add(name)
+    cohort = load_cohort(root)
+    assert cohort.subjects == ["sub-02"]
+    assert cohort.excluded == {"sub-01": "2 sc files: sub-01_old_sc.h5, sub-01_sc.h5"}
+    listed = load_cohort(root, {"subject": ["01", "01_old", "02"]})
+    assert listed.subjects == ["sub-01", "sub-01_old", "sub-02"]
+
+
+def test_a_code_with_a_leading_zero_stays_text(folder):
+    root, add = folder
+    add("sub-01_sc.h5")
+    add("sub-02_sc.h5")
+    cohort = load_cohort(
+        root, {"subject": ["01", "02"], "site": ["01", "02"], "dose": ["0.5", "2"]}
+    )
+    assert cohort.column("site").tolist() == ["01", "02"]
+    assert cohort.column("dose").tolist() == [0.5, 2.0]

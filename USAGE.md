@@ -147,7 +147,10 @@ asked for and a value in every column `require=` names, with their files and
 covariates in one order, and a report with a row for every subject seen in
 the files or the tables, saying who was left out and why. Cells read as
 missing are pandas' defaults -- empty, `NA`, `NaN`, `None` and the like, case
-and all, so `none` is a value -- unless `missing=` says otherwise.
+and all, so `none` is a value; `missing="-999"` adds a marker of your own, and
+`keep_default_missing=False` reads only yours. A column of numbers is read as
+numbers, except codes written with a leading zero, `01` and `02`, which stay
+text.
 
 Each file's structure is checked as `sbci.load` checks it, without reading its
 arrays -- the metadata, the sizes and shapes of the area, mask and coordinates,
@@ -167,7 +170,11 @@ and FC from another, are refused until `session=` chooses (`1` matches
 visits on purpose. A mapping names every modality, `None` for the files without
 a session label: the HCP's SC has none, and `{"sc": None, "fc": "REST1"}` pairs
 it with the first day's FC. `exclude={"sub-01": "motion"}` leaves out subjects on
-grounds decided upstream, and the reason stands in the report. A refusal is a
+grounds decided upstream, and the reason stands in the report; a subject left
+out so is not held to the one-visit rule either. A file named like another
+subject's with a suffix -- `sub-01_old_sc.h5` beside `sub-01_sc.h5` -- counts as
+one more of that subject's files, to be chosen between, unless a table lists
+it as a subject of its own. A refusal is a
 `sbci.cohort.CohortError` that carries the report as far as it was built,
 which `sbci cohort --report` writes all the same.
 
@@ -676,7 +683,11 @@ tested estimates with standard errors, confidence intervals and an effect
 size. Covariates can stay in their own units, a raw streamline count among
 them: the fit, the errors and the test are computed from the design with its
 columns scaled to unit length, so rescaling a covariate rescales its own
-coefficient and error and changes nothing else.
+coefficient and error and changes nothing else. Text is a factor whatever it
+reads as, codes `"01"` and `"02"` included, and `categorical=` makes numbers
+one; levels go in their natural order, 2 before 10. Without an intercept,
+`design(..., intercept=False)` codes the first factor with a column for every
+level, as R's `~ 0 + site` does.
 
 ```python
 import numpy as np

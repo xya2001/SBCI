@@ -244,3 +244,38 @@ def test_features_are_tested_column_by_column():
     assert np.isnan(result.pvalue[45:]).all() and np.isfinite(result.pvalue[:45]).all()
     assert set(range(5)) <= set(result.significant(0.05).tolist())
     np.testing.assert_allclose(result.estimate[:, 0], result.coefficients[:, 1])
+
+
+# --- the seventh review -----------------------------------------------------------
+
+
+def test_without_an_intercept_the_first_factor_is_coded_in_full():
+    """Dropping a level as well as the intercept left the model without either: p 3e-38."""
+    rng = np.random.default_rng(3)
+    site = np.array(["A", "B", "C"])[rng.integers(0, 3, 90)]
+    age = rng.normal(28.0, 3.5, 90)
+    scores = rng.standard_normal((90, 2)) + 5.0  # far from zero, as scores without centring are
+    bare = design({"site": site, "age": age}, intercept=False)
+    assert bare.names == ("site[A]", "site[B]", "site[C]", "age")
+    usual = design({"site": site, "age": age})
+    np.testing.assert_allclose(
+        local_test(scores, bare, terms=["age"]).pvalue,
+        local_test(scores, usual, terms=["age"]).pvalue,
+        rtol=1e-9,
+    )
+
+
+def test_text_is_a_factor_and_levels_go_in_their_natural_order():
+    """Codes "01", "02", "03" were one numeric column; codes 2, 3, 10 took 10 as reference."""
+    age = [21.0, 25.0, 30.0, 33.0, 27.0, 35.0]
+    codes = design({"site": ["01", "02", "03", "01", "02", "03"], "age": age})
+    assert codes.names == ("intercept", "site[02]", "site[03]", "age")
+    for site in ([2, 3, 10, 2, 3, 10], ["2", "3", "10", "2", "3", "10"]):
+        made = design({"site": site, "age": age}, categorical=["site"])
+        assert made.names == ("intercept", "site[3]", "site[10]", "age")
+    chosen = design(
+        {"site": [2.0, 3.0, 10.0, 2.0, 3.0, 10.0], "age": age},
+        categorical=["site"],
+        reference={"site": 10},
+    )
+    assert chosen.names == ("intercept", "site[2]", "site[3]", "age")

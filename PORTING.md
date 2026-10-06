@@ -1993,10 +1993,26 @@ On the 943 young adults the numbers USAGE quotes from
 intervals and the counts -- come out as before at the precision quoted: at
 that cohort's streamline counts the inverted `X'X` was still accurate enough.
 
+## 14. The seventh list, 6 October 2026 -- CONTRASTS, DESIGNS, THE LOADER'S EDGES
+
+Eight findings, six medium and two low; each was checked with a probe first,
+and all hold.
+
+| # | Finding | Verdict | Fixed by |
+| --- | --- | --- | --- |
+| 1 | (medium) a contrast on a rank-deficient design with a large-scale column gets the wrong degrees of freedom | **confirmed**, once the contrast weighs the large column: drawn from the design's rows, 2-row contrasts got 1 degree of freedom and single rows were refused as collinear, in 60 of 60 trials beside a column at 1e7 to 1e12. Contrasts on the dummies alone came out right, which is why a first probe missed it. In the column's own units the contrast's rows look parallel, so their null space, the reduced model and its rank were wrong | the null space is found on unit-length columns, where `c @ beta` is `(c / norms) @ (norms * beta)`; the F and its degrees of freedom equal those of the same model with the column in unit units, in every trial |
+| 2 | (medium) `design(intercept=False)` drops one level of each factor | **confirmed**: names `site[B]`, `site[C]`, `age`, a model with neither an intercept nor the reference level | the first factor is coded with a column for every level, standing in for the intercept, as R's `~ 0 + site` does; age's p equals statsmodels' and the design with an intercept's |
+| 3 | (medium) `load_cohort(missing="-999")` splits the string into characters | **confirmed**: the markers became `-` and `9`, so -999 stayed a score, and they replaced the defaults, so `NA` became a group level | a string is one marker, and markers are added to pandas' defaults, as pandas' `na_values` are; `keep_default_missing=False` reads only the markers named |
+| 4 | (medium) the session refusal ignores `exclude=` and writes no report | **confirmed**: it was raised before the caller's exclusions were looked at, with an empty report | a subject the caller leaves out is not held to the one-visit rule, and a refusal carries the report: the subjects whose files cross sessions say which, everyone else is out with the cohort |
+| 5 | (medium) `icc` returns 1.0 for a feature that never varies | **confirmed** for constants such as 0.1 and 0.3, where the mean squares are rounding, which over themselves read 1 | a feature agreeing with itself to ten significant digits does not vary, the rule `local_test` uses, and its ICC is missing |
+| 6 | (medium) `design()` decides factor or number by whether the values parse as numbers | **confirmed**: codes `"01"`, `"02"`, `"03"` made one numeric column, and codes 2, 3, 10 taken as a factor had 10 as the reference, sorted as text | text is a factor whatever it reads as and numbers are numbers unless `categorical=` says otherwise; levels go in their natural order, as numbers when every one reads as a number; the loader keeps codes written with a leading zero as text, where it read them as numbers |
+| 7 | (low) a backup copy becomes a phantom subject | **confirmed**: `sub-01_old_sc.h5` became subject `sub-01_old` | a file named like another subject's with a suffix is one more of that subject's files, a duplicate it reports and leaves the subject out for, unless a table lists it as a subject of its own |
+| 8 | (low) a re-smoothed half keeps the full streamline count in its metadata | **confirmed**: 20,000 recorded for 10,000 streamlines | smoothing records the count of the streamlines it smoothed; on the released files the recorded count and the stored endpoints agree, 865,820 for sub-100206 |
+
 ## Status
 
-All seven ports are done and verified, and the six reviews of 5 and 6
-October 2026 (items 8 to 13) have been answered in full; what is left is
+All seven ports are done and verified, and the seven reviews of 5 and 6
+October 2026 (items 8 to 14) have been answered in full; what is left is
 under each item's *Still open*. They were done in the order 3, 1, 2, 5, 4, 6, 7: parcellation
 unblocked the first notebook, kernel smoothing the WP3 speed target, and the
 two alignments came last because nothing else depends on them.

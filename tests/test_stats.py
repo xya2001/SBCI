@@ -801,3 +801,29 @@ def test_a_date_in_seconds_tests_as_the_same_date_in_days():
         )
         aged = local_test(scores, np.column_stack([age, seconds]), contrast={1: 1.0}, groups=groups)
         assert np.isfinite(aged.estimate_errors).all()
+
+
+# --- the seventh review -----------------------------------------------------------
+
+
+def test_a_contrast_weighing_a_large_column_keeps_its_degrees_of_freedom():
+    """A rank-deficient design beside a column in large units, contrasts drawn from its rows.
+
+    Weighing the large column, the contrast's rows looked parallel in its units,
+    so the reduced model lost a dimension: 1 degree of freedom for 2, or a single
+    estimable row refused as collinear. The same model with the column in unit
+    units is the reference.
+    """
+    n = 120
+    for seed in range(12):
+        rng = np.random.default_rng(seed)
+        site = np.array(["A", "B", "C"])[rng.integers(0, 3, n)]
+        dummies = np.column_stack([site == "A", site == "B", site == "C"]).astype(float)
+        unit = np.column_stack([np.ones(n), dummies, rng.normal(1.0, 0.2, n), rng.normal(0, 1, n)])
+        scale = np.array([1, 1, 1, 1, 10.0 ** (7 + seed % 6), 1.0])
+        scores = rng.standard_normal((n, 1)) + 0.3 * (site == "B")[:, None]
+        rows = rng.standard_normal((1 + seed % 2, n)) @ unit  # estimable by construction
+        expected = local_test(scores, unit, contrast=rows, add_intercept=False)
+        result = local_test(scores, unit * scale, contrast=rows * scale, add_intercept=False)
+        assert result.numerator_dof == expected.numerator_dof == rows.shape[0]
+        np.testing.assert_allclose(result.statistic, expected.statistic, rtol=1e-7)

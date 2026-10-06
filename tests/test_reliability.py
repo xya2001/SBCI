@@ -112,3 +112,27 @@ def test_take_keeps_the_streamlines_asked_for_and_their_positions():
         endpoints.take([count])
     with pytest.raises(ValueError, match="a mask over 50 streamlines"):
         endpoints.take(np.ones(3, dtype=bool))
+
+
+# --- the seventh review -----------------------------------------------------------
+
+
+def test_a_feature_that_never_varies_is_nan_whatever_its_value():
+    """A constant 0.1 left rounding in the mean squares, which over themselves read 1."""
+    for value in (0.1, 0.3, 1e6 / 3, -7.25):
+        constant = np.full((6, 1), value)
+        assert np.isnan(icc([constant, constant])).all()
+        assert np.isnan(icc([constant, constant], kind="consistency")).all()
+
+
+def test_a_resmoothed_half_records_its_own_streamline_count():
+    """A half of 20,000 streamlines said 20,000 in its metadata."""
+    import sbci
+    from sbci.connectome import ContinuousConnectome
+
+    sc = sbci.example(modality="sc")
+    half = sc.endpoints.take(np.arange(sc.endpoints.n_streamlines) % 2 == 0)
+    holder = ContinuousConnectome(sc.data, sc.area, sc.mask, sc.metadata, endpoints=half)
+    smoothed = holder.smooth(kernel="shk", bandwidth=0.005, mask_medial_wall=True)
+    assert smoothed.metadata.fields["streamline_count"] == half.n_streamlines
+    assert half.n_streamlines == sc.endpoints.n_streamlines // 2

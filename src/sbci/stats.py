@@ -66,6 +66,7 @@ structure, not just its label.
 from __future__ import annotations
 
 import difflib
+import numbers
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -250,6 +251,19 @@ class Design:
         raise ValueError(f"the design has no covariate or column {name!r}{hint}")
 
 
+def _is_number(value) -> bool:
+    """A number, as opposed to text that reads as one: ``"01"`` is a code."""
+    return isinstance(value, (numbers.Real, np.bool_)) and not isinstance(value, str)
+
+
+def _level(value) -> str:
+    """A factor level's name: a whole number without its ``.0``, text as written."""
+    if _is_number(value) and not isinstance(value, (bool, np.bool_)):
+        number = float(value)
+        return str(int(number)) if number.is_integer() else str(number)
+    return str(value).strip()
+
+
 def design(covariates, intercept: bool = True, reference=None, categorical=()) -> Design:
     """A design matrix with named columns, from named covariates.
 
@@ -259,13 +273,17 @@ def design(covariates, intercept: bool = True, reference=None, categorical=()) -
         ``{name: values}``, one value per subject in each: a table's columns,
         or :attr:`sbci.LoadedCohort.covariates` as it is.
     intercept
-        Put a column of ones first, named ``intercept``.
+        Put a column of ones first, named ``intercept``. Without it the first
+        factor is coded with a column for every level, which together stand in
+        for the intercept, as R's ``~ 0 + factor`` does.
     reference
         ``{factor: level}``, the level a factor's dummies are coded against;
-        by default its first in sorted order.
+        by default its first in order: as numbers when every level reads as
+        one, so that 2 comes before 10, and as text otherwise.
     categorical
         Covariates to take as factors although their values are numbers, as a
-        site coded 1, 2, 3. Text is a factor anyway.
+        site coded 1, 2, 3. Text is a factor anyway, whatever it reads as:
+        codes ``"01"``, ``"02"`` are levels, not a number.
 
     A number enters as it is. A factor of ``L`` levels enters as ``L - 1``
     columns of zeros and ones, one per level but the reference, named
@@ -301,6 +319,7 @@ def design(covariates, intercept: bool = True, reference=None, categorical=()) -
     columns: list = []
     names: list = []
     groups: dict = {}
+    every_level = not intercept  # the first factor, coded in full, stands in for the intercept
     if intercept:
         columns.append(np.ones(n))
         names.append("intercept")
@@ -314,11 +333,8 @@ def design(covariates, intercept: bool = True, reference=None, categorical=()) -
                 f"{missing[0]}): leave those subjects out first, as load_cohort(require=...) does"
             )
         numbers = None
-        if name not in categorical:
-            try:
-                numbers = np.array([float(value) for value in cells])
-            except (TypeError, ValueError):
-                numbers = None
+        if name not in categorical and all(_is_number(value) for value in cells):
+            numbers = np.array([float(value) for value in cells])
         if numbers is not None:
             if np.all(numbers == numbers[0]):
                 raise ValueError(f"{name} does not vary in these subjects; drop it")
@@ -326,13 +342,18 @@ def design(covariates, intercept: bool = True, reference=None, categorical=()) -
             columns.append(numbers)
             names.append(name)
             continue
-        labels = np.array([str(value).strip() for value in cells])
-        levels = sorted(set(labels.tolist()))
+        labels = np.array([_level(value) for value in cells])
+        try:
+            levels = sorted(set(labels.tolist()), key=lambda level: (float(level), level))
+        except ValueError:
+            levels = sorted(set(labels.tolist()))
         if len(levels) < 2:
             raise ValueError(f"{name} has one level in these subjects, {levels[0]!r}; drop it")
-        base = str(reference.get(name, levels[0]))
+        base = _level(reference[name]) if name in reference else levels[0]
         if base not in levels:
             raise ValueError(f"{name} has no level {base!r}; its levels are {levels}")
+        if every_level:
+            base, every_level = None, False
         indices = []
         for level in levels:
             if level == base:
@@ -787,9 +808,15 @@ def local_test(
         reduced = matrix[:, reduced_columns] if reduced_columns else np.zeros((n_subjects, 0))
     else:
         # The model the hypothesis leaves: the design's columns in every
-        # combination the contrast does not constrain, its null space.
+        # combination the contrast does not constrain, its null space. Found on
+        # unit-length columns, where c @ beta is (c / norms) @ (norms * beta): a
+        # contrast weighing a covariate in large units has rows that look
+        # parallel in those units, and until 6 October 2026 their null space,
+        # the reduced model and its rank came out wrong.
         rows = hypothesis
-        _, singular, right = np.linalg.svd(hypothesis)
+        norms = np.linalg.norm(matrix, axis=0)
+        norms = np.where(norms > 0, norms, 1.0)
+        _, singular, right = np.linalg.svd(hypothesis / norms)
         rank = int((singular > singular.max() * max(hypothesis.shape) * np.finfo(float).eps).sum())
         if rank < hypothesis.shape[0]:
             raise ValueError("the contrast's rows are not independent; drop the redundant ones")
@@ -800,7 +827,7 @@ def local_test(
                 "dummy of a factor coded at every level beside the intercept"
             )
         free = right[rank:].T
-        reduced = matrix @ free if free.shape[1] else np.zeros((n_subjects, 0))
+        reduced = (matrix / norms) @ free if free.shape[1] else np.zeros((n_subjects, 0))
 
     # Degrees of freedom follow the rank, not the column count: a collinear
     # design (dummy codes for every level plus an intercept) still fits by
@@ -1070,7 +1097,8 @@ def icc(sessions, kind: str = "agreement") -> np.ndarray:
     grand = data.mean(axis=(0, 1))
     between_subjects = k * ((data.mean(axis=0) - grand) ** 2).sum(axis=0)
     between_sessions = n * ((data.mean(axis=1) - grand) ** 2).sum(axis=0)
-    residual = ((data - grand) ** 2).sum(axis=(0, 1)) - between_subjects - between_sessions
+    spread = ((data - grand) ** 2).sum(axis=(0, 1))
+    residual = spread - between_subjects - between_sessions
     msr = between_subjects / (n - 1)
     msc = between_sessions / (k - 1)
     mse = residual / ((n - 1) * (k - 1))
@@ -1080,7 +1108,11 @@ def icc(sessions, kind: str = "agreement") -> np.ndarray:
         denominator = msr + (k - 1) * mse
     with np.errstate(invalid="ignore", divide="ignore"):
         value = (msr - mse) / denominator
-    usable = np.isfinite(data).all(axis=(0, 1)) & (denominator > 0)
+    # A feature that agrees with itself to ten significant digits does not vary:
+    # what is left is the rounding of its mean, which over itself reads 1, as a
+    # constant 0.1 did until 6 October 2026.
+    varies = spread > 1e-20 * (data * data).sum(axis=(0, 1))
+    usable = np.isfinite(data).all(axis=(0, 1)) & varies & (denominator > 0)
     return np.where(usable, value, np.nan)
 
 

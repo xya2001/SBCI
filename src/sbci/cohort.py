@@ -119,7 +119,8 @@ MISSING = frozenset(
 """Table cells read as missing, after stripping surrounding space: pandas' defaults.
 
 Case matters, as it does to pandas: ``none`` is a value, ``None`` is missing.
-``load_cohort(missing=...)`` takes another set."""
+``load_cohort(missing=...)`` adds to them, and ``keep_default_missing=False``
+reads only the markers it names."""
 
 MISMATCH = ("refuse", "exclude", "report")
 """What :func:`load_cohort` does when files disagree on a setting."""
@@ -267,12 +268,22 @@ def _read_table(table, subject_column, missing=MISSING):
     return subject_column, ids, columns
 
 
+_CODE = re.compile(r"[+-]?0\d")
+"""Text that reads as a number but is a code: a leading zero, as in ``01`` or ``007``."""
+
+
 def _as_column(values, missing=MISSING) -> np.ndarray:
-    """Numbers as float64 with NaN for missing; anything else as strings with None for missing."""
+    """Numbers as float64 with NaN for missing; anything else as strings with None for missing.
+
+    Text that reads as a number is taken as one, except a code written with a
+    leading zero (``01``, ``007``), which no quantity is: such a column stays
+    text, which :func:`sbci.stats.design` makes a factor.
+    """
     cells = [None if _missing(v, missing) else v for v in values]
     present = [v for v in cells if v is not None]
+    coded = any(isinstance(v, str) and _CODE.match(v.strip()) for v in present)
     try:
-        numbers = [float(v) for v in present]
+        numbers = None if coded else [float(v) for v in present]
     except (TypeError, ValueError):
         numbers = None
     if numbers is not None:
@@ -494,7 +505,8 @@ def load_cohort(
     exclude: Mapping | None = None,
     validate: bool = False,
     mismatch: str = "refuse",
-    missing=MISSING,
+    missing: str | Iterable[str] = (),
+    keep_default_missing: bool = True,
 ) -> LoadedCohort:
     """Gather a cohort's files and covariates, check them, and report who is left out and why.
 
@@ -539,7 +551,11 @@ def load_cohort(
         together -- and leaves the rest out; ``"report"`` keeps everyone and
         records the differences.
     missing
-        Table cells read as missing, by default :data:`MISSING`.
+        Further table cells to read as missing, beside pandas' defaults
+        (:data:`MISSING`): ``"-999"`` is one marker, a list several.
+    keep_default_missing
+        ``False`` reads only the markers ``missing=`` names, so that, say, a
+        site coded ``NA`` stays a site.
 
     A refusal is a :class:`CohortError`, which carries the report as far as it
     was built, so that ``sbci cohort --report`` can still write it.
@@ -577,7 +593,10 @@ def load_cohort(
     else:
         wanted = {m: session for m in modalities}
         chosen = session is not None
-    missing = frozenset(missing)
+    named = (missing,) if isinstance(missing, str) else tuple(missing)  # "-999" is one marker
+    missing = frozenset(str(marker).strip() for marker in named)
+    if keep_default_missing:
+        missing |= MISSING
     required = (require,) if isinstance(require, str) else tuple(require)
     reserved = {"subject", "included", "reason"}
     for m in modalities:
@@ -600,19 +619,6 @@ def load_cohort(
         if chosen and not _same_label(ses, wanted[modality]):
             continue
         found.setdefault(subject, {}).setdefault(modality, []).append((path, ses))
-    if not chosen:
-        for subject, by_modality in sorted(found.items()):
-            labels = {
-                m: sorted({"none" if s is None else s for _, s in entries})
-                for m, entries in by_modality.items()
-            }
-            if len({label for each in labels.values() for label in each}) > 1:
-                described = "; ".join(f"{m} from {', '.join(each)}" for m, each in labels.items())
-                raise CohortError(
-                    f"{subject}'s files come from more than one session ({described}): pairing "
-                    "them would compare different visits. Choose with session=, one label for "
-                    "every modality or {modality: label} for each"
-                )
 
     # The tables, joined on the subject: {column: {subject: cell}}.
     covariate_columns: dict[str, dict] = {}
@@ -635,6 +641,35 @@ def load_cohort(
     elif required:
         raise ValueError("require= names table columns, but no table was given")
     in_table = set(table_ids)
+
+    # A file whose id is another subject's with a suffix -- sub-01_old_sc.h5 beside
+    # sub-01_sc.h5 -- is one more of that subject's files, a duplicate to choose
+    # between, rather than a subject of its own; unless a table lists it as one.
+    for subject in sorted(found, key=len, reverse=True):
+        if subject in in_table:
+            continue
+        base = next(
+            (other for other in sorted(found, key=len) if subject.startswith(other + "_")), None
+        )
+        if base is not None:
+            for modality, entries in found.pop(subject).items():
+                found[base].setdefault(modality, []).extend(entries)
+
+    # A subject's files have to come from one visit unless session= says otherwise; a
+    # subject the caller leaves out is not asked.
+    crossed: dict[str, str] = {}
+    if not chosen:
+        for subject, by_modality in sorted(found.items()):
+            if subject in excluded_by_caller:
+                continue
+            labels = {
+                m: sorted({"none" if s is None else s for _, s in entries})
+                for m, entries in by_modality.items()
+            }
+            if len({label for each in labels.values() for label in each}) > 1:
+                crossed[subject] = "; ".join(
+                    f"{m} from {', '.join(labels[m])}" for m in modalities if m in labels
+                )
 
     # Every subject seen, and why each is out.
     everyone = sorted(set(found) | in_table)
@@ -687,6 +722,25 @@ def load_cohort(
                 report[subject]["included"] = False
                 report[subject]["reason"] = "; ".join(reasons[subject])
         return [report[s] for s in everyone]
+
+    if crossed:
+        # In the report, everyone is out with the cohort, and the ones whose files
+        # cross sessions say which.
+        for subject in everyone:
+            if subject in crossed:
+                reasons[subject].append(f"files from more than one session ({crossed[subject]})")
+            elif not reasons[subject]:
+                reasons[subject].append(
+                    "refused with the cohort: some subjects' files come from more than one session"
+                )
+        first = next(iter(crossed))
+        others = f", as do {len(crossed) - 1} other subjects'" if len(crossed) > 1 else ""
+        raise CohortError(
+            f"{first}'s files come from more than one session ({crossed[first]}){others}: pairing "
+            "them would compare different visits. Choose with session=, one label for every "
+            "modality or {modality: label} for each, or leave the subject out with exclude=",
+            report=finished(),
+        )
 
     # How the files were made, every setting of every modality at once, over
     # the subjects not already out.

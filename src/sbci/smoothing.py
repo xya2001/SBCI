@@ -1280,8 +1280,9 @@ def smooth(
     """Re-smooth a connectome from its stored endpoints.
 
     Returns a new connectome of the same type, carrying the same endpoints,
-    mask, areas and coordinates, with ``kernel`` and ``bandwidth`` in its
-    metadata set to what was actually used.
+    mask, areas and coordinates, with ``kernel``, ``bandwidth`` and the
+    streamline count in its metadata set to what was actually used: a half
+    of a subject's streamlines records its own count.
 
     :func:`smooth_endpoints` normalizes its density to sum to one over the
     whole matrix, diagonal included. This renormalizes to the package's
@@ -1438,6 +1439,8 @@ def _finish(
 
     fields = dict(connectome.metadata.fields)
     fields.update(kernel=kernel, bandwidth=float(bandwidth), normalization="unit-mass")
+    if getattr(connectome, "endpoints", None) is not None:
+        fields["streamline_count"] = int(connectome.endpoints.n_streamlines)
     return type(connectome)(
         data=to_condensed(density).astype(np.float32),
         area=connectome.area,
