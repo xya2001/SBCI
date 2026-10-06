@@ -518,6 +518,21 @@ def test_too_large_a_penalty_warns_about_the_inversion(cohort):
         fit_basis(matrices, np.eye(n), _ring_laplacian(n), rank=1, alpha=5.0, seed=0)
 
 
+def test_a_negative_mode_of_the_data_is_not_taken_for_the_penalty(cohort):
+    """On a centred cohort an alternating step can pass through a negative mode of the data.
+
+    The next scores put it right, and alpha has no part in it, so it is no
+    reason to warn about the penalty: the warning used to fire here even with
+    no penalty at all, telling the user to lower an alpha that was not used.
+    """
+    matrices, _ = cohort
+    n = matrices.shape[1]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        fit_basis(matrices, np.eye(n), rank=2, candidates=3)  # no penalty at all
+        fit_basis(matrices, np.eye(n), _ring_laplacian(n), rank=2, alpha=1e-6, candidates=3)
+
+
 def test_reduce_accepts_connectome_like_objects_off_the_ico4_grid(cohort):
     """A connectome on another grid gets the plain inner product, not the ico4 roughness."""
     matrices, _ = cohort

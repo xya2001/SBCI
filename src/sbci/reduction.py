@@ -37,7 +37,11 @@ largest-magnitude eigenvalue is the most negative one and the fit returns the
 happens between ``alpha`` 1 and 5: roughness falls 1.96 -> 1.71 as alpha rises
 to 1, then jumps to 3.98 -- the maximum the penalty admits -- at 5, with the
 explained fraction collapsing from 0.83 to 0.01. The reference's default of
-``1e-10`` is far below the turn, so this only bites someone who raises it.
+``1e-10`` is far below the turn, so this only bites someone who raises it. A
+warning says so when, along a fitted component, the penalty outweighs the data.
+A step that passes through a negative mode of the centred data on the way --
+which the next scores put right, and in which alpha has no part -- does not
+trip it (until 6 October 2026 it did, and told the user to lower alpha).
 
 The fit is a local optimum
 --------------------------
@@ -474,7 +478,6 @@ def fit_basis(
 
     def refine(vector, deflation):
         """The alternating updates from ``vector``: the component, its scores and trajectory."""
-        nonlocal inverted_warning_given
         trajectory = np.zeros(max_outer)
 
         weights = (residual @ vector) @ vector  # v' R_s v for every subject, by BLAS
@@ -509,17 +512,6 @@ def fit_basis(
                 vector = vector / np.linalg.norm(vector)
 
             trajectory[step + 1] = deflation.quadratic(regularized, vector)
-            if trajectory[step + 1] < 0 and not inverted_warning_given:
-                # The trap described in the module docstring: the penalty (or a
-                # dominant negative mode) has taken over and the component is
-                # the roughest direction, not the smoothest.
-                warnings.warn(
-                    f"component {k}: the selected eigenvalue is negative, so the fit "
-                    "is returning the roughest direction; lower alpha",
-                    RuntimeWarning,
-                    stacklevel=3,
-                )
-                inverted_warning_given = True
             if trajectory[0] != 0:
                 change = abs((trajectory[step + 1] - trajectory[step]) / trajectory[0])
             step += 1
@@ -550,6 +542,18 @@ def fit_basis(
             fitted = refine(vector / np.linalg.norm(vector), deflation)
         vector, score, contracted, trajectory, scale = fitted
         objective[k] = trajectory
+        if penalty is not None and not inverted_warning_given:
+            # The trap described in the module docstring, judged on the component
+            # the fit settled on: the penalty outweighs the data along it.
+            roughness = alpha * float(vector @ penalty @ vector)
+            if roughness > abs(scale):
+                warnings.warn(
+                    f"component {k}: the roughness penalty outweighs the data along it, so "
+                    "the fit is returning the roughest direction; lower alpha",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                inverted_warning_given = True
 
         # Deflate subject by subject: one n x n temporary instead of a whole
         # cohort-sized one, which on the ico4 grid is the difference between
