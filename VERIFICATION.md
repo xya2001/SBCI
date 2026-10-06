@@ -190,6 +190,20 @@ module load connectome/1.5.0     # 2.0.1 on Longleaf is missing libglapi.so.0
 wb_command -file-information <the .dconn.nii>
 ```
 
+**A cohort check must account for every subject.** `sbci cohort` read the
+headers of the 946 young adults' 1,892 files in 32 seconds and of the eleven
+released subjects' files in full, with every check of `sbci validate`, in 27
+(`/work/users/x/y/xya/hcp-ya/cohort-check.sbatch`):
+
+```
+the eleven, --validate             11 subjects seen; 11 in the cohort (sc, fc)
+the 946, with the open-access      946 subjects seen; 943 in the cohort (sc, fc)
+  traits and the motion table        left out, 3: no value for fluid_intelligence_pmat24
+```
+
+The 943 are the subjects with a score that docs/RESULTS.md analyses, and
+every SC and every FC file agrees on every setting of `sbci.cohort.SETTINGS`.
+
 **Exported maps must open where they are meant to.**
 `tests/reference/export_probe.py` writes sub-100307's maps with `save_map`
 and reads them back in FreeSurfer 7.4.1 and Workbench 1.5.0, each check

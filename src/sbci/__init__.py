@@ -86,6 +86,8 @@ _LAZY: dict[str, str] = {
     "validate_file": "validate",
     "plot_surface": "plotting",
     "structure_function_coupling": "coupling",
+    "load_cohort": "cohort",
+    "LoadedCohort": "cohort",
     "save_map": "export",
     "save_regions": "export",
     "region_means": "export",
@@ -96,6 +98,7 @@ _SUBMODULES: tuple[str, ...] = (
     "alignment",
     "atlas",
     "cli",
+    "cohort",
     "connectome",
     "conseal",
     "coupling",
@@ -120,6 +123,7 @@ _SUBMODULES: tuple[str, ...] = (
 
 if TYPE_CHECKING:  # pragma: no cover - for type checkers only
     from .alignment import Alignment, Encore, Warp, align
+    from .cohort import LoadedCohort, load_cohort
     from .conseal import EndpointAlignment, EndpointConnectome, EndpointWarp, endpoints_align
     from .coupling import structure_function_coupling
     from .examples import Cohort, example, example_cohort
@@ -163,6 +167,8 @@ __all__ = [
     "example",
     "example_cohort",
     "Cohort",
+    "load_cohort",
+    "LoadedCohort",
     # parcellations and surfaces
     "Atlas",
     "load_atlas",

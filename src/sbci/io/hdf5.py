@@ -191,6 +191,37 @@ def read_hdf5(path: str | Path) -> dict[str, Any]:
     return parts
 
 
+def read_header(path: str | Path) -> dict[str, Any]:
+    """A computational file's metadata and the sizes of its arrays, without reading the arrays.
+
+    What :func:`sbci.load_cohort` reads of every file: enough to say whether it
+    would load and how it was made, at a small fraction of a full read. Returns
+    ``metadata`` (unvalidated), ``n_connectivity``, ``n_vertices`` (the area's
+    length), ``n_mask`` and ``n_endpoints`` (0 without the endpoints group).
+    """
+    path = Path(path)
+    try:
+        handle = h5py.File(path, "r")
+    except OSError as exc:  # h5py's wording names C-level details; say what matters
+        raise InvalidFileError(f"{path.name} cannot be opened as an HDF5 file") from exc
+    with handle:
+        for required in (CONNECTIVITY, AREA, MASK, METADATA):
+            if required not in handle:
+                raise FormatError(f"{path.name} has no /{required} dataset")
+        raw = handle[METADATA][()]
+        if not isinstance(raw, (str, bytes)):
+            raise InvalidFileError(f"{path.name}: /{METADATA} is not a JSON string")
+        first = spec.ENDPOINT_DATASETS[0]
+        group = handle[ENDPOINTS] if ENDPOINTS in handle else None
+        return {
+            "metadata": Metadata.from_json(raw),
+            "n_connectivity": int(handle[CONNECTIVITY].size),
+            "n_vertices": int(handle[AREA].size),
+            "n_mask": int(handle[MASK].size),
+            "n_endpoints": int(group[first].size) if group is not None and first in group else 0,
+        }
+
+
 def write_hdf5(
     path: str | Path,
     data: np.ndarray,

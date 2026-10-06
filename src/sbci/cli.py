@@ -61,6 +61,44 @@ def build_parser() -> argparse.ArgumentParser:
         "--out", default=None, help="destination file (default: sub-example_<modality>.h5)"
     )
 
+    cohort = subparsers.add_parser(
+        "cohort",
+        help="check a folder of sub-<id>_<sc|fc>.h5 files against a subject table: who is in, "
+        "who is left out, and why",
+    )
+    cohort.add_argument(
+        "folder", nargs="+", help="folders of computational files, searched with subfolders"
+    )
+    cohort.add_argument(
+        "--table",
+        action="append",
+        help="a .csv or .tsv with one row per subject, and a subject or participant_id column; "
+        "repeatable, the tables joined on the subject",
+    )
+    cohort.add_argument(
+        "--modalities", default="sc", help="what every subject needs: sc, fc or sc,fc (default sc)"
+    )
+    cohort.add_argument("--session", help="use only the files of this ses- label")
+    cohort.add_argument(
+        "--require",
+        action="append",
+        default=[],
+        help="a table column every subject needs a value in; repeatable",
+    )
+    cohort.add_argument(
+        "--validate",
+        action="store_true",
+        help="run every check of sbci validate on every file, reading each in full",
+    )
+    cohort.add_argument(
+        "--mismatch",
+        default="refuse",
+        choices=("refuse", "exclude", "report"),
+        help="when files disagree on how they were made: refuse (default), exclude the minority, "
+        "or report and keep everyone",
+    )
+    cohort.add_argument("--report", help="write the per-subject report here (.csv or .tsv)")
+
     atlases = subparsers.add_parser("atlases", help="list the bundled atlases")
     atlases.add_argument("--match", help="only names containing this text")
 
@@ -100,6 +138,28 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"  carries {connectome.endpoints.n_streamlines:,} synthetic streamline "
                 "endpoints, so smooth() and endpoints_align() run on it"
             )
+        return 0
+
+    if args.command == "cohort":
+        from .cohort import load_cohort
+
+        modalities = tuple(m.strip() for m in args.modalities.split(",") if m.strip())
+        try:
+            loaded = load_cohort(
+                args.folder,
+                table=args.table,
+                modalities=modalities,
+                session=args.session,
+                require=args.require,
+                validate=args.validate,
+                mismatch=args.mismatch,
+            )
+            print(loaded.summary())
+            if args.report:
+                print(f"report written to {loaded.save_report(args.report)}")
+        except (ValueError, OSError, SbciError) as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
         return 0
 
     if args.command == "atlases":

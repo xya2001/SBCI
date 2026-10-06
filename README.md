@@ -74,6 +74,7 @@ vertex, relative to the strongest.*
 | | Call | Verified against |
 | --- | --- | --- |
 | Load and save | `sbci.load(path)`, `cc.save(path)` | the format's own checks (`sbci validate`) |
+| A cohort | `sbci.load_cohort(folder, table=..., modalities=("sc", "fc"))`, `sbci cohort`: files matched to a subject table, SC paired with FC, settings checked, a report of who is left out and why | the 946 young adults: 943 in, the 3 without a fluid-intelligence score out |
 | Parcellate | `cc.to_atlas("Schaefer200")`, 44 atlases bundled | `parcellate_sc.m`, to float64 rounding |
 | Seed profile | `cc.seed(vertex=...)`, `cc.seed(region=...)` | the MATLAB seed rows, to float64 rounding |
 | Structure-function coupling | `sc.coupling(fc, scope=...)`, three forms | the three MATLAB functions, to float64 rounding |

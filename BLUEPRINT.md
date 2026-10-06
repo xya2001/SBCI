@@ -58,7 +58,10 @@ ported numerical methods.
 (WP3), the container and documentation site (WP4), the notebooks and benchmark
 (WP5), and the Wanda skills (WP6). WP2 is on the critical path for all four,
 which is the main reason its interfaces must be frozen early and its numbers
-must be right.
+must be right. The handoff from processing into the package is
+`sbci.load_cohort` (USAGE.md, *Checking a cohort before an analysis*): a
+folder of `sub-<id>[_ses-<session>]_<sc|fc>.h5` files and a table of
+subjects, checked file by file and against each other.
 
 ## 2. Definition of done
 

@@ -115,6 +115,67 @@ requested subjects need and resuming an interrupted one
 (`tools/bundle_hcp_cohort.py` writes them). No cohort is released that way at
 present.
 
+## Checking a cohort before an analysis
+
+```python
+import sbci
+
+cohort = sbci.load_cohort("hcp-ya", table="hcp-ya/manifest.csv", modalities=("sc", "fc"))
+print(cohort.summary())
+cohort.subjects                      # ['sub-100307', ...], sorted
+cohort.paths("sc")                   # one file a subject, in that order: what sbci.reduce takes
+cohort.column("sex")                 # a table column, in the same order
+cohort.save_report("hcp-ya/qc.tsv")  # one row a subject seen: in or out, and why
+```
+
+```bash
+sbci cohort hcp-ya --table hcp-ya/manifest.csv --modalities sc,fc --validate --report qc.tsv
+```
+
+`load_cohort` is the handoff into the package. It takes the computational
+files, named `sub-<id>[_ses-<session>]_<sc|fc>.h5` as `sbci download` and the
+lab's builders write them (other `key-value` parts are allowed, and folders
+are searched with their subfolders, so a BIDS-style tree works), and a table
+with a `subject` or BIDS `participant_id` column, whose ids match with or
+without the `sub-` prefix. Several folders and several tables can be given;
+the tables are joined on the subject. It returns the subjects that have a
+usable file of every modality asked for and a value in every column
+`require=` names, with their files and covariates in one order, and a report
+with a row for every subject seen in the files or the tables, saying who was
+left out and why.
+
+Each file's header is read -- its metadata and array sizes, not the
+connectivity -- and has to load as `sbci.load` would accept it; `validate=True`
+(`--validate`) runs every check of `sbci validate` as well, reading each file
+in full. The files of a modality then have to agree on how they were made:
+the kernel, the bandwidth, the normalization, the nuisance model, the pipeline
+and container versions and the rest of `sbci.cohort.SETTINGS`. A cohort that
+mixes two is refused, naming who differs; `mismatch="exclude"` keeps what most
+files share and leaves the rest out, and `mismatch="report"` keeps everyone.
+Subjects with files from several sessions are refused until `session=`
+chooses one. `exclude={"sub-01": "motion"}` leaves out subjects on grounds
+decided upstream, and the reason stands in the report.
+
+On the lab's 946, in 32 seconds:
+
+```bash
+sbci cohort /work/users/x/y/xya/hcp-ya/full/data /work/users/x/y/xya/hcp-ya/full/fc \
+    --table /work/users/x/y/xya/hcp-ya/open_access_traits.csv \
+    --table /work/users/x/y/xya/hcp-ya/fc/covariates.csv \
+    --modalities sc,fc --require fluid_intelligence_pmat24 --report full.tsv
+```
+
+```
+946 subjects seen; 943 in the cohort (sc, fc).
+  left out, 3: no value for fluid_intelligence_pmat24
+  sc files share: ... kernel 'shk', bandwidth 0.005, ...
+```
+
+The report carries what is worth a look before deciding who to keep, without
+excluding anyone on it: each SC file's streamline count and whether it stores
+its endpoints, and each FC file's frames and runs. Among the 946, all store
+their endpoints, and 30 have fewer than the four resting-state runs: 8 have
+three, 21 two and one a single run.
 
 ## Loading
 
