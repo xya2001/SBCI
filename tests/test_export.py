@@ -250,7 +250,8 @@ def test_a_local_test_writes_one_row_per_component(tmp_path):
     result = sbci.local_test(scores, covariate)
     path = result.to_table(tmp_path / "test.csv", names=["intercept", "age"])
     header, rows = _read_table(path)
-    assert header == ["component", "statistic", "pvalue", "adjusted", "coef_intercept", "coef_age"]
+    assert header[:5] == ["component", "statistic", "pvalue", "adjusted", "partial_r2"]
+    assert header[5:] == ["estimate", "se", "ci_low", "ci_high", "coef_intercept", "coef_age"]
     assert [row[0] for row in rows] == ["0", "1", "2"]
     assert float(rows[0][2]) == pytest.approx(result.pvalue[0], rel=1e-9)
     assert rows[2][1:4] == ["", "", ""]

@@ -665,6 +665,71 @@ basis and sums over one endpoint, giving one value per vertex -- it describes
 where the fitted effect lives; the p-values belong to the components, not to
 individual vertices.
 
+**Named designs, contrasts and intervals.** `sbci.stats.design` builds the
+design from named covariates, text coded as factors against a reference
+level, so that a hypothesis can be written by name; every result carries the
+tested estimates with standard errors, confidence intervals and an effect
+size.
+
+```python
+import numpy as np
+from sbci.stats import design
+
+d = design({"fluid_intelligence": score, "female": female, "age_band": band, "streamlines": count})
+sex = sbci.local_test(reduction.scores, d, terms=["female"], groups=families)
+sex.estimate[:, 0]                # the sex coefficient, component by component
+low, high = sex.interval(0.95)    # its 95% interval, cluster-robust with groups=
+sex.partial_r2                    # the share of the residual the tested part explains
+sex.to_table("sex.csv")           # all of it, one row a component, named by the design
+
+labels = {23.5: "22-25", 28: "26-30", 33: "31-35", 37: "36+"}
+banded = design(
+    {"fluid_intelligence": score, "female": female, "streamlines": count,
+     "age_band": [labels[b] for b in band]},
+    reference={"age_band": "22-25"},
+)
+sbci.local_test(reduction.scores, banded, terms=["age_band"], groups=families)   # the factor, 3 df
+sbci.local_test(reduction.scores, banded, groups=families,
+                contrast={"age_band[31-35]": 1, "age_band[26-30]": -1})        # two levels
+```
+
+On the 943 young adults (`tests/reference/inference_probe.py`) the named
+design gives the published 11 of 20 components for sex, identical to the
+index-based call. The strongest, component 15, has an estimate of -0.0137 with
+a 95% interval of -0.018 to -0.0094, on 421 degrees of freedom (one fewer than
+the families), and a partial R-squared of 0.037; across the eleven it runs
+from 0.009 to 0.039. The age band as a factor shows in 3 of the 20 components,
+and 31-35 against 26-30 in one (component 4: -0.009, interval -0.014 to
+-0.004). The 36+ band holds 9 subjects, and a contrast against so small a level
+leans on cluster-robust errors from a handful of families: better not read.
+The intervals agree with statsmodels' to 1e-9, cluster-robust ones included,
+as do the F tests of contrasts (`tests/test_stats_design.py`).
+
+**Vertex by vertex.** The columns of `scores` need not be components. Given
+each subject's value at every vertex -- the strength of its connectivity, a
+coupling map -- `local_test` tests each vertex and corrects across them all,
+and its estimate is the effect at each vertex. That is another question from
+the component test's: where on the cortex the covariate shows, vertex by
+vertex, rather than which of the connectome's leading directions carries it.
+Its p-values do belong to vertices, where an effect map only describes where a
+significant component's fitted effect lies.
+
+```python
+def strength(path):
+    connectome = sbci.load(path)
+    return connectome.dense(np.float64) @ connectome.area
+
+maps = np.vstack([strength(path) for path in cohort.paths("sc")])   # (n_subjects, 5124)
+sex = sbci.local_test(maps, d, terms=["female"], groups=families)
+sbci.save_map({"estimate": sex.estimate[:, 0], "adjusted": sex.adjusted}, "sex.dscalar.nii")
+sex.to_table("sex_strength.csv", index="vertex")
+```
+
+On the 943, sex alone shows in the strength of 1,020 of the 4,685 cortical
+vertices and fluid intelligence alone in 113, the counts docs/RESULTS.md
+reports from `tools/age_probe.py`; with the other three covariates in the
+model, sex shows in 855, with a partial R-squared up to 0.108.
+
 **Related subjects.** The test assumes the subjects are independent. Twins
 and siblings are not, and a cohort with families in it, such as the HCP Young
 Adults, gives p-values that are too small. With `groups=`, one label per

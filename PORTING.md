@@ -703,6 +703,28 @@ component at -0.12 and with no other beyond 0.18. The fit read the cohort one
 file at a time, held it as 199 GB of float64 and peaked at 196 GiB, and took
 5.4 hours on eight threads, loading included.
 
+### Estimates, intervals and contrasts (6 October 2026)
+
+The third of five adoption suggestions asked for effect estimates with
+confidence intervals, and for designs and contrasts written by name.
+`sbci.stats.design` codes named covariates, text as factors against a
+reference level, into a `Design`; `local_test` takes names in `terms=` and a
+`contrast=` of the coefficients. Both are one linear hypothesis, ``C beta =
+0``, whose reduced model is the design restricted to the null space of ``C``,
+so the F test, its permutation version and the cluster-robust Wald test serve
+both. The result carries the tested estimates with classical or cluster-robust
+standard errors, t intervals, and the partial R-squared. The `terms=`
+arithmetic is unchanged: index-based results are identical.
+
+Checked against statsmodels (`tests/test_stats_design.py`): coefficients,
+standard errors and intervals, cluster-robust ones included, to 1e-9; the F
+tests of single and joint contrasts, classical and robust, to 1e-8. On the 943
+young adults (`tests/reference/inference_probe.py`), the named design gives
+the published 11 of 20 components for sex bit for bit, and the published 1,020
+and 113 vertices of the per-vertex tests of sex and fluid intelligence. A
+contrast against a level as small as the 36+ age band, 9 subjects, leans on
+cluster-robust errors from a handful of families; USAGE.md says so.
+
 ### Measured earlier on HCP-Aging subjects, whose files are not distributed
 
 A rank-4 fit of all 528 HCP-Aging subjects with complete pipeline output
