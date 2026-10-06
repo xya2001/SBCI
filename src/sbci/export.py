@@ -8,9 +8,15 @@ for:
   Workbench, the HCP's tools and plain ``nibabel``. The map moves by the same
   area-weighted operator as the exchange connectome (:mod:`sbci.io.cifti`):
   each fsLR vertex takes the area-weighted mean of the ico4 values covering
-  it, so the area-weighted mean over the cortex is unchanged.
+  it. A map written whole (``mask=None``, nothing missing) keeps its
+  area-weighted mean exactly; with the medial wall left out, an fsLR vertex
+  along its edge takes the mean of its cortical part, which moves the mean of
+  a map concentrated beside the wall slightly (2.5e-5 for a uniform random
+  map; 1.5% in one review's map against the wall).
 * ``.func.gii``: GIFTI, one file a hemisphere, ``<stem>.L.func.gii`` and
-  ``<stem>.R.func.gii``, in **FreeSurfer's fsaverage4 vertex order**. The ico4
+  ``<stem>.R.func.gii`` -- or, for a BIDS name holding ``hemi-L`` or
+  ``hemi-R``, the name with that entity set per hemisphere -- in
+  **FreeSurfer's fsaverage4 vertex order**. The ico4
   grid is fsaverage4 -- the same 2,562 vertices a hemisphere and the same
   triangles -- numbered differently (:func:`fsaverage4_order`), so these
   files open on FreeSurfer's own ``fsaverage4`` surfaces and resample to
@@ -21,7 +27,11 @@ for:
   ``atlas=``, its region in any bundled atlas.
 
 Values on the medial wall, which carries no connectivity, are written as
-missing by default: ``NaN`` in the surface files, an empty cell in a table.
+missing by default: ``NaN`` in the surface files, an empty cell in a table. A
+masked array's masked entries are missing too; an infinite value is refused
+rather than written in one form and dropped in another. Every file is written
+under a temporary name and moved into place once complete, so a refusal or
+failure part way leaves nothing behind.
 
 Region-level results -- a :meth:`~sbci.ContinuousConnectome.to_atlas` matrix,
 discrete coupling, or a map's regional means from :func:`region_means` -- go
@@ -33,7 +43,9 @@ from __future__ import annotations
 
 import csv
 import os
+import re
 from collections.abc import Mapping
+from contextlib import contextmanager
 from functools import lru_cache
 from importlib import resources
 from pathlib import Path
@@ -83,6 +95,31 @@ def fsaverage4_order() -> tuple[np.ndarray, np.ndarray]:
     return orders
 
 
+def _floats(values, what: str = "the maps") -> np.ndarray:
+    """Values as float64, a masked entry as NaN; an infinite one refused."""
+    array = np.asarray(np.ma.filled(np.ma.asarray(values, dtype=np.float64), np.nan))
+    infinite = int(np.isinf(array).sum())
+    if infinite:
+        raise ValueError(
+            f"{what} hold {infinite} infinite value{'s' if infinite > 1 else ''}; write a missing "
+            "value as NaN"
+        )
+    return array
+
+
+@contextmanager
+def _atomic(path: Path):
+    """A temporary name beside ``path``, with its ending; moved onto it once written."""
+    temporary = path.parent / f".partial-{os.getpid()}-{path.name}"
+    try:
+        yield temporary
+        os.replace(temporary, path)
+    except BaseException:
+        if temporary.exists():
+            temporary.unlink()
+        raise
+
+
 def _as_maps(values, names=None) -> tuple[list[str], np.ndarray]:
     """Map names and a ``(k, 5124)`` float64 array from whatever form the maps came in."""
     n = spec.N_VERTICES
@@ -92,7 +129,7 @@ def _as_maps(values, names=None) -> tuple[list[str], np.ndarray]:
         labels = [str(key) for key in values]
         rows = []
         for label, value in zip(labels, values.values(), strict=True):
-            row = np.asarray(value, dtype=np.float64)
+            row = _floats(value, f"map {label!r}")
             if row.shape != (n,):
                 raise ValueError(
                     f"map {label!r} has shape {row.shape}; a map is one value per grid vertex, "
@@ -101,7 +138,7 @@ def _as_maps(values, names=None) -> tuple[list[str], np.ndarray]:
             rows.append(row)
         maps = np.vstack(rows) if rows else np.empty((0, n))
     else:
-        array = np.asarray(values, dtype=np.float64)
+        array = _floats(values)
         if array.ndim == 1 and array.size == n:
             maps = array[None, :]
         elif array.ndim == 2 and array.shape == (n, n):
@@ -246,7 +283,8 @@ def _write_dscalar(path: Path, labels, maps) -> Path:
         moved.astype(np.float32), (cifti2.ScalarAxis(labels), cifti._brain_model_axis())
     )
     image.nifti_header.set_intent(cifti.INTENT_DENSE_SCALARS)
-    image.to_filename(str(path))
+    with _atomic(path) as temporary:
+        image.to_filename(str(temporary))
     return path
 
 
@@ -261,8 +299,15 @@ def _write_gifti(path: Path, labels, maps) -> tuple[Path, Path]:
             f"{path.name!r} already names a hemisphere; give the name without it, as "
             f"{stem[:-2]}.func.gii, and both hemispheres are written"
         )
+    entity = re.search(r"(?:^|[_.])hemi-([LR])(?=$|[_.])", stem)
+
+    def named(letter: str) -> str:
+        if entity is None:
+            return f"{stem}.{letter}.func.gii"
+        return f"{stem[: entity.start(1)]}{letter}{stem[entity.end(1) :]}.func.gii"
+
     half = spec.N_VERTICES_PER_HEMI
-    written = []
+    images = []
     for side, (letter, structure) in enumerate((("L", "CortexLeft"), ("R", "CortexRight"))):
         ordered = np.empty((maps.shape[0], half))
         ordered[:, fsaverage4_order()[side]] = maps[:, side * half : (side + 1) * half]
@@ -278,10 +323,12 @@ def _write_gifti(path: Path, labels, maps) -> tuple[Path, Path]:
         image = gifti.GiftiImage(
             darrays=arrays, meta=gifti.GiftiMetaData({"AnatomicalStructurePrimary": structure})
         )
-        target = path.parent / f"{stem}.{letter}.func.gii"
-        nib.save(image, str(target))
-        written.append(target)
-    return tuple(written)
+        images.append((path.parent / named(letter), image))
+    # Both written under temporary names first: a failure leaves neither hemisphere.
+    with _atomic(images[0][0]) as left, _atomic(images[1][0]) as right:
+        nib.save(images[0][1], str(left))
+        nib.save(images[1][1], str(right))
+    return tuple(target for target, _ in images)
 
 
 def _write_vertex_table(path: Path, labels, maps, atlases) -> Path:
@@ -290,6 +337,12 @@ def _write_vertex_table(path: Path, labels, maps, atlases) -> Path:
     for atlas in loaded:
         if not isinstance(atlas, Atlas):
             raise TypeError(f"atlas= takes bundled atlas names or Atlas objects, got {atlas!r}")
+        size = np.asarray(atlas.labels).size
+        if size != spec.N_VERTICES:
+            raise ValueError(
+                f"the atlas {atlas.name!r} labels {size} vertices, but the grid has "
+                f"{spec.N_VERTICES}: a label per grid vertex, left hemisphere first"
+            )
     half = spec.N_VERTICES_PER_HEMI
     hemisphere = np.repeat(["L", "R"], half)
     fsaverage4 = np.concatenate(fsaverage4_order())
@@ -320,13 +373,20 @@ def _write_vertex_table(path: Path, labels, maps, atlases) -> Path:
 
 
 def _cell(value):
-    """A table cell: numbers to ten significant digits, a missing number as an empty cell."""
+    """A table cell: numbers to ten significant digits, a missing value as an empty cell."""
+    if value is None:
+        return ""
     if isinstance(value, (bool, np.bool_)):
         return int(value)
     if isinstance(value, (int, np.integer, str)):
         return value
-    value = float(value)
-    return "" if np.isnan(value) else format(value, ".10g")
+    if isinstance(value, (list, tuple)):
+        return ";".join(str(_cell(item)) for item in value)
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    return "" if np.isnan(number) else format(number, ".10g")
 
 
 def _write_table(path, header, rows) -> Path:
@@ -337,7 +397,7 @@ def _write_table(path, header, rows) -> Path:
     if len(set(header)) != len(header):
         repeated = sorted({h for h in header if list(header).count(h) > 1})
         raise ValueError(f"the table would have two columns named {repeated}; rename the maps")
-    with open(path, "w", newline="", encoding="utf-8") as handle:
+    with _atomic(path) as temporary, open(temporary, "w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle, delimiter="\t" if form == ".tsv" else ",", lineterminator="\n")
         writer.writerow(header)
         for row in rows:
@@ -372,8 +432,11 @@ def region_means(values, atlas, area=None, mask="cortex", fisher_z: bool = False
     ``atlas.names[j]``. A vertex whose value is ``NaN`` is left out of its
     region's mean, and a region with no vertex left is ``NaN``.
 
-    A region profile from :meth:`~sbci.ContinuousConnectome.seed` averaged
-    over another region gives the ``to_atlas(how="mean")`` entry for the two.
+    For a structural connectome, a region profile from
+    :meth:`~sbci.ContinuousConnectome.seed` averaged over another region gives
+    the ``to_atlas(how="mean")`` entry for the two. Not for a functional one:
+    ``to_atlas`` averages FC through Fisher z pair by pair, which no mean of a
+    seed profile reproduces (they differed by up to 0.04 in a review's test).
 
     Examples
     --------
@@ -447,14 +510,17 @@ def save_regions(values, atlas, path, names=None) -> Path:
         labels = [str(key) for key in values]
         if not labels:
             raise ValueError("no columns to save")
-        columns = [np.asarray(value, dtype=np.float64) for value in values.values()]
+        columns = [
+            _floats(value, f"{label!r}")
+            for label, value in zip(labels, values.values(), strict=True)
+        ]
         for label, column in zip(labels, columns, strict=True):
             if column.shape != (count,):
                 raise ValueError(
                     f"{label!r} has shape {column.shape}; {atlas.name} has {count} regions"
                 )
         return _region_vectors(path, atlas, labels, np.vstack(columns))
-    array = np.asarray(values, dtype=np.float64)
+    array = _floats(values, "the values")
     if array.ndim == 2 and array.shape == (count, count):
         if names is not None:
             raise ValueError("a region-by-region matrix is labelled by the regions; drop names=")

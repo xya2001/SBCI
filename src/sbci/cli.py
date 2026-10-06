@@ -97,7 +97,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="when files disagree on how they were made: refuse (default), exclude the minority, "
         "or report and keep everyone",
     )
-    cohort.add_argument("--report", help="write the per-subject report here (.csv or .tsv)")
+    cohort.add_argument(
+        "--subject-column", help="the tables' id column, if not subject or the like"
+    )
+    cohort.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="SUBJECT=REASON",
+        help="leave a subject out on grounds decided upstream; repeatable",
+    )
+    cohort.add_argument(
+        "--report",
+        help="write the per-subject report here (.csv or .tsv), the cohort refused or not",
+    )
 
     atlases = subparsers.add_parser("atlases", help="list the bundled atlases")
     atlases.add_argument("--match", help="only names containing this text")
@@ -141,9 +154,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "cohort":
-        from .cohort import load_cohort
+        from .cohort import CohortError, _write_report, load_cohort
 
         modalities = tuple(m.strip() for m in args.modalities.split(",") if m.strip())
+        exclude = {}
+        for item in args.exclude:
+            subject, sep, reason = item.partition("=")
+            if not sep or not subject.strip():
+                print(f"error: --exclude takes SUBJECT=REASON, got {item!r}", file=sys.stderr)
+                return 1
+            exclude[subject.strip()] = reason.strip() or "excluded"
         try:
             loaded = load_cohort(
                 args.folder,
@@ -151,12 +171,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                 modalities=modalities,
                 session=args.session,
                 require=args.require,
+                subject_column=args.subject_column,
+                exclude=exclude,
                 validate=args.validate,
                 mismatch=args.mismatch,
             )
             print(loaded.summary())
             if args.report:
                 print(f"report written to {loaded.save_report(args.report)}")
+        except CohortError as error:
+            print(f"error: {error}", file=sys.stderr)
+            if args.report and error.report:
+                print(f"report written to {_write_report(error.report, args.report)}")
+            return 1
         except (ValueError, OSError, SbciError) as error:
             print(f"error: {error}", file=sys.stderr)
             return 1

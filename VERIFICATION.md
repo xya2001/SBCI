@@ -190,10 +190,10 @@ module load connectome/1.5.0     # 2.0.1 on Longleaf is missing libglapi.so.0
 wb_command -file-information <the .dconn.nii>
 ```
 
-**A cohort check must account for every subject.** `sbci cohort` read the
-headers of the 946 young adults' 1,892 files in 32 seconds and of the eleven
-released subjects' files in full, with every check of `sbci validate`, in 27
-(`/work/users/x/y/xya/hcp-ya/cohort-check.sbatch`):
+**A cohort check must account for every subject.** `sbci cohort` checked the
+structure of the 946 young adults' 1,892 files in 37 seconds, and read the
+eleven released subjects' files in full, with every check of `sbci validate`,
+in 34 (`/work/users/x/y/xya/hcp-ya/cohort-check.sbatch`):
 
 ```
 the eleven, --validate             11 subjects seen; 11 in the cohort (sc, fc)
@@ -213,11 +213,14 @@ beside a control, the same values in the grid's own order, that has to fail:
 GIFTI Desikan labels against FreeSurfer's fsaverage4 aparc.annot   lh 0.969, rh 0.964 agree   (control 0.062, 0.060)
 mri_surf2surf fsaverage4 -> fsaverage, against the grid's correspondence   r = 1.0000   (control r = 0.054)
 wb_command -cifti-separate on the .dscalar.nii   the file's own values; 2,874 of 32,492 left vertices missing (the wall)
-area-weighted mean over the cortex   grid 7.993534e-12, fsLR 7.993534e-12
+area-weighted mean, map written whole   grid 7.993534e-12, fsLR 7.993534e-12
 region_means of each region's seed, against to_atlas(how="mean")   all 68: 1.8e-15 relative; 340 empty pairs read 0
 ```
 
-The labels agree on 96% rather than on every vertex because the bundled
+With the medial wall left out, the default, the mean moves slightly instead:
+the fsLR vertices along the wall's edge take the mean of their cortical part
+(USAGE.md, *Exporting maps and tables*). The labels agree on 96% rather than
+on every vertex because the bundled
 atlas gives each grid vertex the majority label of the fsaverage vertices it
 stands for, and FreeSurfer's fsaverage4 annotation gives the label at the
 vertex itself; the two differ along region borders. The order is bundled by

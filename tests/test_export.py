@@ -304,3 +304,105 @@ def test_an_uppercase_ending_names_the_form_too(tmp_path):
     (path,) = save_map(np.ones(N), tmp_path / "ONES.CSV", mask=None)
     header, rows = _read_table(path)
     assert header[-1] == "value" and len(rows) == N
+
+
+# --- the fifth review -------------------------------------------------------------
+
+# FreeSurfer's fsaverage4 sphere, its first twelve vertices: the icosahedron's
+# corners, in FreeSurfer's order, at radius 100 (from FreeSurfer 7.4.1).
+FSAVERAGE4_CORNERS = np.array(
+    [
+        [0.0, 0.0, 100.0],
+        [89.44, 0.0, 44.72],
+        [27.64, 85.07, 44.72],
+        [-72.36, 52.57, 44.72],
+        [-72.36, -52.57, 44.72],
+        [27.64, -85.07, 44.72],
+        [72.36, -52.57, -44.72],
+        [72.36, 52.57, -44.72],
+        [-27.64, 85.07, -44.72],
+        [-89.44, 0.0, -44.72],
+        [-27.64, -85.07, -44.72],
+        [0.0, 0.0, -100.0],
+    ]
+)
+
+
+def test_the_order_puts_the_icosahedrons_corners_where_freesurfer_has_them():
+    """The face digest fixes the order up to a symmetry of the mesh; the corners fix the symmetry.
+
+    The bundled standard-sphere position of each grid vertex, placed in the
+    fsaverage4 order, has to put fsaverage4's first twelve vertices at the
+    icosahedron's corners as FreeSurfer numbers them: a rotated relabeling,
+    which carries triangles onto triangles as well, would not.
+    """
+    from importlib import resources
+
+    with np.load(resources.files("sbci.data.surfaces") / "fsaverage_sphere_ico4.npz") as data:
+        positions = np.asarray(data["vertices"], dtype=np.float64)
+    for side, order in enumerate(fsaverage4_order()):
+        block = positions[side * HALF : (side + 1) * HALF]
+        placed = np.empty_like(block)
+        placed[order] = 100.0 * block / np.linalg.norm(block, axis=1, keepdims=True)
+        assert np.abs(placed[:12] - FSAVERAGE4_CORNERS).max() < 2.0  # neighbours lie ~7 apart
+        rolled = np.roll(order, 1)  # any other numbering puts other vertices there
+        wrong = np.empty_like(block)
+        wrong[rolled] = block
+        assert np.abs(100.0 * wrong[:12] - FSAVERAGE4_CORNERS).max() > 2.0
+
+
+def test_an_atlas_of_another_size_is_refused_and_nothing_is_left(tmp_path):
+    from sbci.atlas import Atlas
+
+    desikan = load_atlas("Desikan")
+    for labels in (desikan.labels[:5000], np.concatenate([desikan.labels, desikan.labels[:10]])):
+        atlas = Atlas("odd", labels, desikan.names)
+        with pytest.raises(ValueError, match=f"labels {labels.size} vertices, but the grid has"):
+            save_map(np.zeros(N), tmp_path / "odd.csv", atlas=atlas)
+    assert not list(tmp_path.iterdir())
+
+
+def test_a_write_that_fails_part_way_leaves_nothing(tmp_path, monkeypatch):
+    from sbci import export
+
+    calls = {"n": 0}
+    original = export._cell
+
+    def failing(value):
+        calls["n"] += 1
+        if calls["n"] > 500:
+            raise RuntimeError("disk full")
+        return original(value)
+
+    monkeypatch.setattr(export, "_cell", failing)
+    with pytest.raises(RuntimeError, match="disk full"):
+        save_map(np.zeros(N), tmp_path / "half.csv")
+    assert not list(tmp_path.iterdir())
+
+
+def test_a_bids_hemisphere_entity_is_set_per_hemisphere(tmp_path):
+    left, right = save_map(np.zeros(N), tmp_path / "sub-01_hemi-L_space-fsaverage4_map.func.gii")
+    assert left.name == "sub-01_hemi-L_space-fsaverage4_map.func.gii"
+    assert right.name == "sub-01_hemi-R_space-fsaverage4_map.func.gii"
+    assert nib.load(right).meta["AnatomicalStructurePrimary"] == "CortexRight"
+
+
+def test_infinities_are_refused_and_masked_entries_are_missing(tmp_path):
+    values = np.ones(N)
+    values[7] = np.inf
+    with pytest.raises(ValueError, match="1 infinite value"):
+        save_map(values, tmp_path / "inf.csv")
+    with pytest.raises(ValueError, match="infinite"):
+        region_means(values, "Desikan")
+    masked = np.ma.masked_array(np.ones(N), mask=np.arange(N) < 3)
+    (path,) = save_map(masked, tmp_path / "masked.csv", mask=None)
+    _, rows = _read_table(path)
+    assert [row[-1] for row in rows[:4]] == ["", "", "", "1"]
+
+
+def test_a_string_of_names_is_one_name_not_its_letters(tmp_path):
+    rng = np.random.default_rng(6)
+    covariate = rng.standard_normal(30)
+    result = sbci.local_test(rng.standard_normal((30, 2)), covariate)
+    with pytest.raises(ValueError, match="1 names for the design's 2 columns"):
+        result.to_table(tmp_path / "t.csv", names="ab")

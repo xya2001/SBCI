@@ -235,7 +235,7 @@ class LocalTest:
         if names is None:
             labels = [str(j) for j in range(coefficients.shape[1])]
         else:
-            labels = [str(name) for name in names]
+            labels = [names] if isinstance(names, str) else [str(name) for name in names]
             if len(labels) != coefficients.shape[1]:
                 raise ValueError(
                     f"{len(labels)} names for the design's {coefficients.shape[1]} columns "

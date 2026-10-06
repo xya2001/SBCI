@@ -79,6 +79,32 @@ def faces_per_hemisphere(n_per_hemi: int) -> int:
     return 2 * int(n_per_hemi) - 4
 
 
+def _endpoint_layout(group) -> tuple[int, list]:
+    """The streamline count and the position datasets present, from the group's shapes alone.
+
+    Every structural check of the endpoint group, made without reading it:
+    the vertex datasets present, the positions all present or none, every
+    dataset an array of the one streamline count.
+    """
+    missing = [name for name in spec.ENDPOINT_DATASETS if name not in group]
+    if missing:
+        raise FormatError(f"/{ENDPOINTS} is present but has no {', '.join(missing)}")
+    present = [name for name in spec.ENDPOINT_OPTIONAL_DATASETS if name in group]
+    if present and len(present) != len(spec.ENDPOINT_OPTIONAL_DATASETS):
+        raise InvalidFileError(
+            f"/{ENDPOINTS} carries {present} but positions need all of "
+            f"{list(spec.ENDPOINT_OPTIONAL_DATASETS)}"
+        )
+    shapes = {name: group[name].shape for name in (*spec.ENDPOINT_DATASETS, *present)}
+    flat = [name for name, shape in shapes.items() if not shape]
+    if flat:
+        raise InvalidFileError(f"/{ENDPOINTS}/{flat[0]} is not an array")
+    sizes = {name: shape[0] for name, shape in shapes.items()}
+    if len(set(sizes.values())) != 1:
+        raise InvalidFileError(f"/{ENDPOINTS} datasets disagree on the streamline count: {sizes}")
+    return int(sizes[spec.ENDPOINT_DATASETS[0]]), present
+
+
 def _read_endpoints(handle) -> Any:
     """Rebuild :class:`sbci.smoothing.Endpoints` from the optional group."""
     if ENDPOINTS not in handle:
@@ -86,27 +112,8 @@ def _read_endpoints(handle) -> Any:
     from ..smoothing import Endpoints
 
     group = handle[ENDPOINTS]
-    missing = [name for name in spec.ENDPOINT_DATASETS if name not in group]
-    if missing:
-        raise FormatError(f"/{ENDPOINTS} is present but has no {', '.join(missing)}")
-
-    sizes = {name: group[name].shape[0] for name in spec.ENDPOINT_DATASETS}
-    if len(set(sizes.values())) != 1:
-        raise InvalidFileError(f"/{ENDPOINTS} datasets disagree on the streamline count: {sizes}")
-
-    optional: dict[str, np.ndarray] = {}
-    present = [name for name in spec.ENDPOINT_OPTIONAL_DATASETS if name in group]
-    if present and len(present) != len(spec.ENDPOINT_OPTIONAL_DATASETS):
-        raise InvalidFileError(
-            f"/{ENDPOINTS} carries {present} but positions need all of "
-            f"{list(spec.ENDPOINT_OPTIONAL_DATASETS)}"
-        )
-    if present:
-        optional = {name: np.asarray(group[name][()]) for name in present}
-        for name in spec.ENDPOINT_OPTIONAL_DATASETS:
-            if optional[name].shape[0] != sizes["vertex_in"]:
-                raise InvalidFileError(f"/{ENDPOINTS}/{name} disagrees on the streamline count")
-
+    _, present = _endpoint_layout(group)
+    optional = {name: np.asarray(group[name][()]) for name in present}
     n_per_hemi = _vertices_per_hemisphere(handle)
     try:
         return Endpoints.from_global(
@@ -196,12 +203,16 @@ def read_hdf5(path: str | Path) -> dict[str, Any]:
 
 
 def read_header(path: str | Path) -> dict[str, Any]:
-    """A computational file's metadata and the sizes of its arrays, without reading the arrays.
+    """A computational file's structure, as ``load`` checks it, without reading its arrays.
 
-    What :func:`sbci.load_cohort` reads of every file: enough to say whether it
-    would load and how it was made, at a small fraction of a full read. Returns
+    What :func:`sbci.load_cohort` reads of every file: the metadata, the sizes
+    and shapes of the connectivity, area, mask and coordinates, and the
+    endpoint group's datasets -- all there, all of one streamline count. The
+    values, the endpoints' indices among them, are read and checked by
+    :func:`read_hdf5`, as ``load`` and ``sbci validate`` read them. Returns
     ``metadata`` (unvalidated), ``n_connectivity``, ``n_vertices`` (the area's
-    length), ``n_mask`` and ``n_endpoints`` (0 without the endpoints group).
+    length), ``n_mask``, ``coordinates`` (their shape, or ``None``) and
+    ``n_endpoints`` (0 without the group).
     """
     path = Path(path)
     try:
@@ -215,14 +226,15 @@ def read_header(path: str | Path) -> dict[str, Any]:
         raw = handle[METADATA][()]
         if not isinstance(raw, (str, bytes)):
             raise InvalidFileError(f"{path.name}: /{METADATA} is not a JSON string")
-        first = spec.ENDPOINT_DATASETS[0]
-        group = handle[ENDPOINTS] if ENDPOINTS in handle else None
+        metadata = Metadata.from_json(raw)
+        n_endpoints = _endpoint_layout(handle[ENDPOINTS])[0] if ENDPOINTS in handle else 0
         return {
-            "metadata": Metadata.from_json(raw),
+            "metadata": metadata,
             "n_connectivity": int(handle[CONNECTIVITY].size),
             "n_vertices": int(handle[AREA].size),
             "n_mask": int(handle[MASK].size),
-            "n_endpoints": int(group[first].size) if group is not None and first in group else 0,
+            "coordinates": tuple(handle[COORDINATES].shape) if COORDINATES in handle else None,
+            "n_endpoints": n_endpoints,
         }
 
 

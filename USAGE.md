@@ -133,30 +133,43 @@ sbci cohort hcp-ya --table hcp-ya/manifest.csv --modalities sc,fc --validate --r
 ```
 
 `load_cohort` is the handoff into the package. It takes the computational
-files, named `sub-<id>[_ses-<session>]_<sc|fc>.h5` as `sbci download` and the
-lab's builders write them (other `key-value` parts are allowed, and folders
-are searched with their subfolders, so a BIDS-style tree works), and a table
-with a `subject` or BIDS `participant_id` column, whose ids match with or
-without the `sub-` prefix. Several folders and several tables can be given;
-the tables are joined on the subject. It returns the subjects that have a
-usable file of every modality asked for and a value in every column
-`require=` names, with their files and covariates in one order, and a report
-with a row for every subject seen in the files or the tables, saying who was
-left out and why.
+files, named `sub-<id>[_<key>-<value>...]_<sc|fc>.h5` as `sbci download` and
+the lab's builders write them -- in any case, with an id that may hold
+underscores (`sub-NDAR_INV1`) and values that may hold hyphens
+(`acq-multi-shell`) -- searching folders with their subfolders and following
+symbolic links, so a BIDS-style tree works; a `.h5` file whose name says no
+subject and modality is listed in the summary as not read. It takes tables
+with a `subject` or BIDS `participant_id` column too, whose ids match with or
+without the `sub-` prefix. Several folders and several tables can be given,
+the tables joined on the subject; a table with two columns of one name is
+refused. It returns the subjects that have a usable file of every modality
+asked for and a value in every column `require=` names, with their files and
+covariates in one order, and a report with a row for every subject seen in
+the files or the tables, saying who was left out and why. Cells read as
+missing are pandas' defaults -- empty, `NA`, `NaN`, `None` and the like, case
+and all, so `none` is a value -- unless `missing=` says otherwise.
 
-Each file's header is read -- its metadata and array sizes, not the
-connectivity -- and has to load as `sbci.load` would accept it; `validate=True`
-(`--validate`) runs every check of `sbci validate` as well, reading each file
-in full. The files of a modality then have to agree on how they were made:
-the kernel, the bandwidth, the normalization, the nuisance model, the pipeline
-and container versions and the rest of `sbci.cohort.SETTINGS`. A cohort that
-mixes two is refused, naming who differs; `mismatch="exclude"` keeps what most
-files share and leaves the rest out, and `mismatch="report"` keeps everyone.
-Subjects with files from several sessions are refused until `session=`
-chooses one. `exclude={"sub-01": "motion"}` leaves out subjects on grounds
-decided upstream, and the reason stands in the report.
+Each file's structure is checked as `sbci.load` checks it, without reading its
+arrays -- the metadata, the sizes and shapes of the area, mask and coordinates,
+every dataset of the endpoint group present and of one length; `validate=True`
+(`--validate`) reads each file in full and runs every check of `sbci
+validate`, the values among them, endpoint indices on the grid included. The
+files then have to
+agree on how they were made: the kernel, the bandwidth, the normalization, the
+nuisance model, the pipeline and container versions and the rest of
+`sbci.cohort.SETTINGS`, numbers compared as numbers. A cohort that mixes two
+ways is refused, naming who differs; `mismatch="exclude"` keeps the subjects
+made the most common way -- every setting of every modality together -- and
+leaves the rest out, and `mismatch="report"` keeps everyone. A subject's files
+have to come from one session: several for one modality, or SC from one visit
+and FC from another, are refused until `session=` chooses (`1` matches
+`ses-01`), one label for every modality or `{"sc": "1", "fc": "2"}` to pair two
+visits on purpose. `exclude={"sub-01": "motion"}` leaves out subjects on
+grounds decided upstream, and the reason stands in the report. A refusal is a
+`sbci.cohort.CohortError` that carries the report as far as it was built,
+which `sbci cohort --report` writes all the same.
 
-On the lab's 946, in 32 seconds:
+On the lab's 946, in 37 seconds:
 
 ```bash
 sbci cohort /work/users/x/y/xya/hcp-ya/full/data /work/users/x/y/xya/hcp-ya/full/fc \
@@ -370,9 +383,13 @@ sbci.save_regions(sc.to_atlas("Desikan"), "Desikan", "sc_desikan.csv")   # 68 x 
 
 The ending of the name picks the form. A `.dscalar.nii` is CIFTI-2 dense
 scalars on fsLR-32k, moved by the operator the exchange file uses: each fsLR
-vertex takes the area-weighted mean of the ico4 values covering it, so a map's
-area-weighted mean over the cortex is unchanged. A `.func.gii` is written as
-two GIFTI files, one a hemisphere, in FreeSurfer's fsaverage4 vertex order:
+vertex takes the area-weighted mean of the ico4 values covering it. A map
+written whole (`mask=None`, nothing missing) keeps its area-weighted mean
+exactly; with the medial wall left out, the fsLR vertices along its edge take
+the mean of their cortical part, which moves the mean of a map concentrated
+beside the wall slightly. A `.func.gii` is written as two GIFTI files, one a
+hemisphere (`<stem>.L.func.gii` and `.R.`, or a BIDS name's `hemi-L` set per
+hemisphere), in FreeSurfer's fsaverage4 vertex order:
 the ico4 grid is fsaverage4, the same vertices and triangles numbered
 differently, so the files open on FreeSurfer's own fsaverage4 surfaces, and
 FreeSurfer's tools move them to a finer fsaverage, with no interpolation on
@@ -389,12 +406,16 @@ mri_surf2surf --srcsubject fsaverage4 --sval precuneus.L.func.gii \
 
 The medial wall is written as missing, `NaN` in the surface files and an
 empty cell in a table, since it carries no connectivity; `mask=None` writes
-every vertex. `region_means` leaves missing values out and counts cortex only,
-as `to_atlas` does, so a region seed averaged over another region is the
-`to_atlas(how="mean")` entry for the two; for a map of correlations,
-`fisher_z=True` averages them as `to_atlas` averages FC. The fsLR move
-averages, which suits continuous values; a map of labels keeps its values
-exactly in the GIFTI and table forms.
+every vertex. A masked array's masked entries are missing too, and an
+infinite value is refused rather than written in one form and dropped in
+another; every file is written under a temporary name and moved into place
+once complete. `region_means` leaves missing values out and counts cortex
+only, as `to_atlas` does, so for SC a region seed averaged over another region
+is the `to_atlas(how="mean")` entry for the two -- not for FC, which `to_atlas`
+averages through Fisher z pair by pair; for a map of correlations,
+`fisher_z=True` averages its values that way. The fsLR move averages, which
+suits continuous values; a map of labels keeps its values exactly in the GIFTI
+and table forms.
 
 A test's results go out the same way: `result.to_table("sex.csv",
 names=[...])` writes one row per component, with its statistic, p-values and

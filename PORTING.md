@@ -1930,10 +1930,37 @@ subjects with `tests/reference/record_outputs.py` before and after, on the
 same AMD EPYC 7702 nodes, all 32 arrays are identical, bit for bit
 (`outputs-base4.npz` against `outputs-review4.npz`).
 
+## 12. The fifth list, 6 October 2026 -- THE COHORT LOADER AND THE EXPORT
+
+A fifth list re-checked the fourth's items against 6bf5ff0, before 0073e24
+answered them, so its "still present" items are the ones 0073e24 fixes; and it
+audited the two modules new that day, `sbci.cohort` (6bf5ff0) and
+`sbci.export` (168bc87). Each finding was checked with a probe first; all
+hold.
+
+| # | Finding | Verdict | Fixed by |
+| --- | --- | --- | --- |
+| 1 | (high) SC and FC from different sessions are paired silently | **confirmed**: sessions were checked one modality at a time, so a subject with SC only from session 1 and FC only from session 2 was paired across visits | a subject's files have to share a session across the modalities; `session=` takes one label for all, or `{modality: label}` to pair two visits on purpose, and the report gives each file's session |
+| 2 | files `sbci.load` reads are invisible to the loader | **confirmed** for all four: an id holding underscores, a value holding hyphens, `_SC` and `.H5`, a folder behind a symbolic link; with a table they read "no sc file" | names parsed by their parts, the id running to the first `key-value` part, values free to hold hyphens, case ignored in the modality and the ending; folders walked following links, each real folder once; a `.h5` file whose name says no subject is listed as not read |
+| 3 | the check accepts files `load` refuses | **confirmed**: coordinates of the wrong shape; an endpoints group without `vertex_out` | the structure `load` checks is checked, without reading the arrays: the coordinates' shape, every dataset of the endpoint group present and of one streamline count; `validate=True` reads the values, endpoint indices among them |
+| 4 | `mismatch="exclude"` takes a majority per setting | **confirmed**: majorities taken one setting at a time can name a combination no file has, keeping no one, and the outcome depended on the order of the modalities | the most common way of making the files -- every setting of every modality together -- is kept; a tie is refused |
+| 5 | a table with two columns of one name uses the last | **confirmed** | refused |
+| 6 | the small ones: `session=1` and `ses-01`; a bandwidth of 2 and 2.0; `none` read as missing; a required column named like a report field; frames recorded run by run; the command line | **confirmed** | labels compared as numbers where both are; settings compared as numbers; missing cells are pandas' defaults, case and all, and `missing=` sets others; a clashing column refused; frames summed; `--subject-column` and `--exclude`, and the report written when the cohort is refused (a `CohortError` carries it, marking everyone out and the odd ones' settings) |
+| 7 | (export) an atlas of the wrong size is used, and a short one leaves a partial file | **confirmed** | refused before anything is written, and every file written under a temporary name, moved into place once complete |
+| 8 | (export) the CIFTI map's area-weighted mean is not "unchanged" | **confirmed** with the wall masked: 2.5e-5 for a uniform random map, 4e-4 and 1.5% in the review's | the documents say it holds exactly for a map written whole |
+| 9 | (export) a region seed's regional means equal `to_atlas(how="mean")` for SC only | **confirmed**: FC is averaged through Fisher z pair by pair (0.010 and 0.040 in the review's tests) | the documents say so |
+| 10 | (export) the small ones: `to_table(names="ab")`; a BIDS `hemi-L` name; infinite values; masked arrays; the test of the bundled order | **confirmed** | a string is one name; a `hemi-` entity is set per hemisphere; infinite values refused; masked entries missing; the test now also places the icosahedron's twelve corners where FreeSurfer's fsaverage4 has them, which a symmetric relabeling, carrying triangles onto triangles too, cannot |
+
+On the lab's data the loader still takes all eleven released subjects and 943
+of the 946, the three without a fluid-intelligence score out, in 37 seconds
+for the 946: the endpoint groups are checked by their structure, as `load`
+checks it, since reading their values as well, which `validate=True` does,
+took six minutes.
+
 ## Status
 
-All seven ports are done and verified, and the four reviews of 5 and 6
-October 2026 (items 8 to 11) have been answered in full; what is left is
+All seven ports are done and verified, and the five reviews of 5 and 6
+October 2026 (items 8 to 12) have been answered in full; what is left is
 under each item's *Still open*. They were done in the order 3, 1, 2, 5, 4, 6, 7: parcellation
 unblocked the first notebook, kernel smoothing the WP3 speed target, and the
 two alignments came last because nothing else depends on them.
