@@ -177,6 +177,7 @@ def _toy_export(monkeypatch, modality):
 
     toy = Toy()
     toy.metadata = metadata
+    toy.mask = np.ones(7, dtype=bool)
     return toy
 
 
@@ -252,6 +253,92 @@ def test_fc_pairs_within_one_ico4_cell_read_the_self_correlation(tmp_path, monke
     np.testing.assert_allclose(out, operator @ dense @ operator.T, rtol=1e-5, atol=1e-6)
     fslr_area, ico4_area = cifti.vertex_areas()
     assert fslr_area @ out @ fslr_area == pytest.approx(ico4_area @ dense @ ico4_area, rel=1e-5)
+
+
+def test_the_medial_wall_keeps_a_zero_diagonal_in_the_fc_exchange_file(tmp_path, monkeypatch):
+    """The self-correlation goes on cortex only: the medial wall has no FC to correlate.
+
+    Set on every vertex, it made fsLR vertices in one medial-wall cell read a
+    correlation of 1 with each other, where FC has no data at all.
+    """
+    import nibabel as nib
+
+    wall = 6
+    toy = _toy_export(monkeypatch, "fc")
+    dense = toy.dense().astype(np.float64)
+    dense[wall, :] = 0.0  # no FC on the medial wall, as in a real file
+    dense[:, wall] = 0.0
+    np.fill_diagonal(dense, 0.0)
+    toy.dense = lambda: dense.copy()
+    toy.mask = np.arange(7) != wall
+    resampled = []
+    real = cifti.resample
+
+    def keeping(matrix, block):
+        resampled.append(matrix.copy())
+        return real(matrix, block=block)
+
+    monkeypatch.setattr(cifti, "resample", keeping)
+    path = cifti.write_cifti(tmp_path / "sub-toy_fc.dconn.nii", toy, block=16)
+
+    (given,) = resampled
+    assert given[wall, wall] == 0.0
+    np.testing.assert_array_equal(np.diagonal(given)[toy.mask], 1.0)
+    expected = dense.copy()
+    expected[toy.mask, toy.mask] = 1.0
+    np.testing.assert_array_equal(given, expected)
+    operator = cifti.transfer().toarray()
+    out = np.asarray(nib.load(str(path)).get_fdata())
+    np.testing.assert_allclose(out, operator @ expected @ operator.T, rtol=1e-5, atol=1e-6)
+    walled = np.flatnonzero(operator[:, wall] == 1.0)  # fsLR vertices on the medial wall alone
+    assert walled.size > 1, "the toy overlap has to put two fsLR vertices on the medial wall"
+    np.testing.assert_array_equal(out[np.ix_(walled, walled)], 0.0)
+
+
+def _refuse_to_resample(*_args, **_kwargs):
+    raise AssertionError("resample ran before the name and the metadata were checked")
+
+
+def test_a_wrong_name_is_refused_before_the_resampling(tmp_path, monkeypatch):
+    """A name nibabel would refuse is refused first, not at ``to_filename`` after the resample.
+
+    On the real grid that is the 16.9 GB product. A dense connectome ends in
+    ``.dconn.nii``, uncompressed, since nibabel writes CIFTI under no suffix
+    but ``.nii``; another ``.nii`` name would be written, but would not say
+    what the file holds.
+    """
+    toy = _toy_export(monkeypatch, "sc")
+    monkeypatch.setattr(cifti, "resample", _refuse_to_resample)
+    for name in ("sub-toy_sc.dconn.nii.gz", "sub-toy_sc.nii", "sub-toy_sc.dscalar.nii", "x.h5"):
+        with pytest.raises(ValueError, match="does not end in .dconn.nii"):
+            cifti.write_cifti(tmp_path / name, toy, block=16)
+    assert not list(tmp_path.iterdir())
+
+
+def test_invalid_metadata_is_refused_before_the_resampling(tmp_path, monkeypatch, connectome):
+    """Validated as ``load`` validates it, through ``write_cifti`` and through ``to_cifti``.
+
+    The constructor does not validate, so a connectome built in memory could
+    carry an unfilled bandwidth or another grid into the sidecar.
+    """
+    from sbci.metadata import MetadataError
+
+    toy = _toy_export(monkeypatch, "sc")
+    monkeypatch.setattr(cifti, "resample", _refuse_to_resample)
+    toy.metadata.fields["bandwidth"] = None
+    with pytest.raises(MetadataError, match="bandwidth"):
+        cifti.write_cifti(tmp_path / "sub-toy_sc.dconn.nii", toy, block=16)
+    toy.metadata.fields["bandwidth"] = 0.005
+    toy.metadata.fields["grid"] = "fsaverage5"
+    with pytest.raises(MetadataError, match="grid"):
+        cifti.write_cifti(tmp_path / "sub-toy_sc.dconn.nii", toy, block=16)
+
+    connectome.metadata.fields["kernel"] = None
+    with pytest.raises(MetadataError, match="kernel"):
+        connectome.to_cifti(tmp_path / "sub-toy_sc.dconn.nii")
+    with pytest.raises(ValueError, match="does not end in .dconn.nii"):
+        connectome.to_cifti(tmp_path / "sub-toy_sc.h5")
+    assert not list(tmp_path.iterdir())
 
 
 def test_companion_files_keep_a_dotted_name(tmp_path, monkeypatch):

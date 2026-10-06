@@ -27,8 +27,12 @@ class Precomputed:
         self.q = q
 
     def q_transform(self, kernel, *args, **kwargs):
-        """The density computed beforehand, whatever the kernel."""
-        return self.q
+        """A copy of the density computed beforehand, whatever the kernel.
+
+        The default template normalizes what it is handed in place; the
+        original must reach the strict estimate unnormalized.
+        """
+        return self.q.copy()
 
 
 def angles(template, qs):

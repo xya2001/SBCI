@@ -56,11 +56,13 @@ it -- taken directly, not through Fisher z. The stored ico4 diagonal is zero
 by the file format, and ``P D P'`` would spread that zero to every pair of
 fsLR vertices falling in the same ico4 cell -- with 12.7 fsLR vertices to a
 cell, most share theirs with another -- so those pairs would read a
-correlation of exactly 0 beside neighbours at 0.6-0.8. The diagonal is
-therefore set to the self-correlation, 1, before an FC resampling, and a
-same-cell pair then carries 1. A density's diagonal stays zero, as the format
-has it. The sidecar's ``exchange_values`` says which of the two a file holds
-(:data:`EXCHANGE_VALUES`).
+correlation of exactly 0 beside neighbours at 0.6-0.8. The diagonal of cortex
+is therefore set to the self-correlation, 1, before an FC resampling, and a
+same-cell pair then carries 1. The medial wall has no FC, so its diagonal stays
+zero with the rest of its rows; set to 1 there too, its fsLR vertices would
+read a correlation of 1 with each other. A density's diagonal stays zero, as
+the format has it. The sidecar's ``exchange_values`` says which of the two a
+file holds (:data:`EXCHANGE_VALUES`).
 """
 
 from __future__ import annotations
@@ -89,7 +91,8 @@ EXCHANGE_VALUES = {
     "fc": (
         "Pearson correlation, unitless; each fsLR vertex pair carries the area-weighted "
         "mean of the ico4 correlations covering it, averaged directly (no Fisher z), with "
-        "the ico4 self-correlation taken as 1, so two fsLR vertices in one ico4 cell read 1"
+        "the ico4 self-correlation taken as 1 on cortex, so two fsLR vertices in one cortical "
+        "ico4 cell read 1; the medial wall has no FC and reads 0"
     ),
 }
 """What the ``.dconn.nii`` entries are, by modality: the sidecar's ``exchange_values``."""
@@ -219,14 +222,26 @@ def write_cifti(path: str | Path, connectome: Any, block: int = 8192) -> Path:
     integrated. The two companions take the file's name with its
     ``.dconn.nii`` removed (:func:`companion_stem`).
 
-    A functional connectome's diagonal is set to 1, the self-correlation,
-    before resampling; see the module notes.
+    A functional connectome's diagonal is set to 1, the self-correlation, on
+    its cortical vertices before resampling; see the module notes.
+
+    The name, the directory and the metadata are checked before anything is
+    computed: on the real grid the resampling takes the time and the memory,
+    and nibabel would refuse a name only once it was done. The name has to
+    end in ``.dconn.nii``, uncompressed, as nibabel writes CIFTI; the metadata
+    is validated as :meth:`~sbci.ContinuousConnectome.load` validates it.
     """
     from nibabel import cifti2
 
     path = Path(path)
+    if not path.name.endswith(".dconn.nii"):
+        raise ValueError(
+            f"{path.name!r} does not end in .dconn.nii, the name of a CIFTI dense connectome; "
+            "CIFTI is written uncompressed, so not .dconn.nii.gz either"
+        )
     if not os.access(path.parent, os.W_OK):
         raise OSError(f"cannot write to {path.parent}")
+    connectome.metadata.validate()
     stem = companion_stem(path.name)
     # Built first: metadata the sidecar cannot describe should fail here, not
     # after the dense file has gone to disk.
@@ -235,7 +250,9 @@ def write_cifti(path: str | Path, connectome: Any, block: int = 8192) -> Path:
     if connectome.metadata.fields["included_connections"] == "fc":
         # Zero is the format's placeholder, not a correlation: left in, every
         # fsLR pair inside one ico4 cell would read 0 beside neighbours at 0.7.
-        np.fill_diagonal(dense, 1.0)
+        # Cortex only: the medial wall has no FC, and keeps its zeros.
+        cortex = np.flatnonzero(connectome.mask)
+        dense[cortex, cortex] = 1.0
     resampled = resample(dense, block=block)
 
     axis = _brain_model_axis()

@@ -164,7 +164,9 @@ def _check_request(manifest: dict, subjects, modalities) -> tuple[set | None, tu
         raise ValueError(
             f"unknown subjects {sorted(wanted - known)}; the cohort has {len(known)} subjects"
         )
-    modalities = tuple(modalities)
+    # One modality may come as a plain string, as one subject may; tuple("sc")
+    # would read it letter by letter.
+    modalities = (modalities,) if isinstance(modalities, str) else tuple(modalities)
     for modality in modalities:
         if modality not in ("sc", "fc"):
             raise ValueError(f"modalities are 'sc' and 'fc', got {modality!r}")

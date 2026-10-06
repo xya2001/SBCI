@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 
 from sbci.alignment import (
+    AXIS_CLEARANCE,
     Alignment,
     Concon,
     Encore,
@@ -21,6 +22,7 @@ from sbci.alignment import (
     SphericalGrid,
     SphericalWarp,
     Warp,
+    _harmonic_derivatives,
     _legendre_derivatives,
     align,
     cart_to_sphere,
@@ -212,9 +214,11 @@ def test_evaluate_conserves_the_mass_of_a_density_on_the_bundled_grid(ico4_grids
 
     :meth:`Concon.evaluate` transports with the product of the two
     hemispheres' Jacobians, so the identity's bias of 0.9965 on each costs
-    ``1 - 0.9965^2``, about 0.7% of the mass, on every accepted step (second
-    review, finding A). Interpolation alone moves the mass of this smooth
-    density by 2e-5, so the rest is the Jacobian's.
+    ``1 - 0.9965^2``, about 0.7% of the mass (second review, finding A). That
+    is a loss of the aligned density's, once, when the final warps are
+    applied; the registration's own transport (:meth:`Concon.evaluate_root`)
+    renormalizes every trial. Interpolation alone moves the mass of this
+    smooth density by 2e-5, so the rest is the Jacobian's.
     """
     lh_grid, rh_grid = ico4_grids
     concon = Concon(lh_grid, rh_grid, delta=1e-5)
@@ -967,3 +971,272 @@ def test_reference_mode_reaches_the_grids_and_the_estimator(pair):
         delta=1e-5,
     )
     assert result.costs[0] == cost
+
+
+# --- the third review: the basis on the axis, the clearance from it, empty densities ------
+
+
+@pytest.mark.parametrize("degree", [1, 2, 3, 6, 15])
+def test_the_m1_fields_at_a_pole_are_the_gradient_of_a_smooth_function(degree):
+    """``P~_l^1(cos theta) cos(phi)`` is ``-N x P_l'(z)``, so its gradient at ``z = +-1`` is fixed.
+
+    It is ``-N P_l'(+-1)`` times the x axis, and the sine field's the same
+    times the y axis, whatever phi the pole was given: equal in size and
+    orthogonal. The reference's clamp on ``sin(theta)`` drops their
+    phi-components there instead; at ``phi = pi``, which atan2 gives the
+    bundled sphere's poles, the sine field vanishes and the cosine field
+    keeps its size (third review).
+    """
+    theta = np.array([0.0, 0.0, 0.0, 0.0, np.pi, np.pi, np.pi])
+    phi = np.array([np.pi, 0.0, np.pi / 2, 4.0, np.pi, 0.0, 2.0])
+    e1 = np.stack(
+        [np.cos(theta) * np.cos(phi), np.cos(theta) * np.sin(phi), -np.sin(theta)], axis=1
+    )
+    e2 = np.stack([-np.sin(phi), np.cos(phi), np.zeros_like(phi)], axis=1)
+    z = np.cos(theta)  # exactly +1 or -1, where P_l'(z) = z^(l+1) l(l+1)/2
+    normalization = np.sqrt((2 * degree + 1) / (4 * np.pi * degree * (degree + 1)))
+    slope = normalization * z ** (degree + 1) * degree * (degree + 1) / 2
+
+    def vectors(gradient):
+        return [gradient[0, k][:, None] * e1 + gradient[1, k][:, None] * e2 for k in (1, 2)]
+
+    gradient, _ = _harmonic_derivatives(degree, theta, phi)
+    cosine, sine = vectors(gradient)
+    tolerance = 1e-12 * np.abs(slope).max()
+    np.testing.assert_allclose(cosine, -slope[:, None] * np.eye(3)[0], rtol=0, atol=tolerance)
+    np.testing.assert_allclose(sine, -slope[:, None] * np.eye(3)[1], rtol=0, atol=tolerance)
+    np.testing.assert_allclose(
+        np.linalg.norm(sine, axis=1), np.linalg.norm(cosine, axis=1), rtol=1e-9
+    )
+    assert np.abs((cosine * sine).sum(axis=1)).max() <= tolerance * np.abs(slope).max()
+    # every other field of the degree has no gradient on the axis
+    assert np.abs(gradient[:, [0, *range(3, 2 * degree + 1)]]).max() <= tolerance
+
+    reference, _ = _harmonic_derivatives(degree, theta, phi, reference=True)
+    reference_cosine, reference_sine = vectors(reference)
+    at_pi = [0, 4]  # both poles with phi = pi
+    np.testing.assert_allclose(reference_cosine[at_pi], cosine[at_pi], rtol=0, atol=tolerance)
+    assert np.abs(reference_sine[at_pi]).max() <= tolerance
+
+
+@pytest.mark.parametrize("degree", [1, 6, 15])
+def test_the_phi_component_is_right_at_any_distance_from_the_axis(degree):
+    """Near the axis ``P_l^1 / sin(theta)`` loses digits to ``cos(theta)`` rounding towards 1.
+
+    Checked against ``P~_l^1 / sin = -N P_l'(cos)`` and ``P~_l^2 / sin =
+    N sin P_l''(cos)``, which have no 0/0: the quotient alone is 5% off for
+    ``m = 1`` 2e-8 from the axis, and the reference's clamp 90% off 1e-6
+    from it, so within 1e-5 the ``m = 1`` term is the limit instead. Just
+    outside, the quotient is good to about 1e-6, ``eps / sin(theta)^2``.
+    """
+    from numpy.polynomial.legendre import Legendre
+    from scipy.special import factorial
+
+    distance = np.array([0.0, 1e-9, 2e-8, 1e-7, 1e-6, 9e-6, 1.1e-5, 1e-4, 1e-2, 0.5])
+    theta = np.concatenate([distance, np.pi - distance])
+    gradient, _ = _harmonic_derivatives(degree, theta, np.zeros_like(theta))
+    # at phi = 0 the sine slot 2m carries m P~_l^m / sin(theta) as its phi-component
+    for m, tolerance in ((1, 1e-5), (2, 1e-6)):
+        if m > degree:
+            continue
+        normalization = np.sqrt(
+            (2 * degree + 1) / (4 * np.pi) * factorial(degree - m) / factorial(degree + m)
+        )
+        derivative = Legendre.basis(degree).deriv(m)(np.cos(theta))
+        exact = m * normalization * derivative * (-1.0 if m == 1 else np.sin(theta))
+        np.testing.assert_allclose(
+            gradient[1, 2 * m], exact, rtol=tolerance, atol=tolerance * np.abs(exact).max()
+        )
+
+
+def test_the_basis_at_a_pole_does_not_depend_on_the_phi_it_was_given():
+    """The bundled sphere unrotated, as ConSEAL's default grids are, puts a vertex on each pole.
+
+    atan2 gives those vertices, ``(-0, -0, +-1)``, ``phi = pi``; ``(0, 0,
+    +-1)`` would get 0, and a y of 1e-300 pi/2 -- the same points. With the
+    reference's clamp the 15 ``m = 1`` sine fields and their 15 rotated
+    partners, 30 of the 510, vanished at the poles while their cosine
+    partners kept their size, and which ones vanished depended on phi (third
+    review). Now every field is one vector there whatever phi the pole has,
+    and the two ``m = 1`` fields of a degree are orthogonal and of one size --
+    up to the grid's own quadrature, which tells their norms apart by 1e-5:
+    the file's ico4 sphere is five-fold symmetric about the axis only to
+    1e-4.
+    """
+    from sbci.alignment import _hemisphere_grids
+
+    bundled = _hemisphere_grids(1, rotate=False)[0]
+    poles = np.flatnonzero(np.sin(bundled.theta) < 1e-8)
+    assert poles.tolist() == [0, 11] and np.all(bundled.phi[poles] == np.pi)
+    cosine = np.array([degree**2 for degree in range(1, 16)])  # (degree, m = 1) cosine fields
+    sine = cosine + 1
+    rotated = 255  # the rotated partner of field k is field k + 255
+
+    def at_poles(x, y, reference):
+        vertices = bundled.vertices.copy()
+        vertices[poles, 0], vertices[poles, 1] = x, y
+        grid = SphericalGrid(vertices, bundled.faces, order=15, reference=reference)
+        basis, e1, e2 = grid.basis[poles], grid.e1[poles][:, None], grid.e2[poles][:, None]
+        return grid.phi[poles], basis[..., :1] * e1 + basis[..., 1:] * e2
+
+    _, vectors = at_poles(-0.0, -0.0, reference=False)
+    for x, y, expected in ((0.0, 0.0, 0.0), (0.0, 1e-300, np.pi / 2)):
+        other_phi, other = at_poles(x, y, reference=False)
+        np.testing.assert_array_equal(other_phi, expected)
+        np.testing.assert_allclose(other, vectors, rtol=0, atol=1e-12)
+
+    for first, second in ((cosine, sine), (cosine + rotated, sine + rotated)):
+        size = np.linalg.norm(vectors[:, first], axis=-1)
+        assert size.min() > 0.3
+        np.testing.assert_allclose(np.linalg.norm(vectors[:, second], axis=-1), size, rtol=2e-5)
+        assert np.abs((vectors[:, first] * vectors[:, second]).sum(axis=-1)).max() < 1e-12
+
+    _, clamped = at_poles(-0.0, -0.0, reference=True)
+    sizes = np.linalg.norm(clamped, axis=-1)
+    assert sizes[:, np.concatenate([sine, sine + rotated])].max() < 1e-12
+    np.testing.assert_allclose(sizes[:, cosine], np.linalg.norm(vectors[:, cosine], axis=-1))
+    _, turned = at_poles(0.0, 1e-300, reference=True)
+    assert np.abs(turned - clamped).max() > 0.3  # with the clamp, the basis there depends on phi
+
+
+def test_the_pole_limit_changes_nothing_on_a_grid_clear_of_the_axis(ico4_grids):
+    """ENCORE's grids are rotated off the axis, so their basis keeps every bit it had.
+
+    Off the axis the phi-component is still the reference's expression,
+    ``max(sin(theta), 1e-5)`` and all -- the clamp never binds 0.023 from the
+    axis, where the bundled grids' nearest vertex sits -- so the default and
+    reference bases differ only where the recurrence does, at ``m = 0``.
+    """
+    for grid in ico4_grids:
+        theta, phi = grid.theta, grid.phi
+        assert np.sin(theta).min() > AXIS_CLEARANCE
+        clamped = np.maximum(np.sin(theta), 1e-5)
+        for degree in (1, 2, 6, 15):
+            gradient, _ = _harmonic_derivatives(degree, theta, phi)
+            _, _, values = _legendre_derivatives(degree, theta)
+            order = np.arange(degree + 1)[:, None]
+            cosine_slots = np.concatenate([[0], np.arange(1, 2 * degree, 2)])
+            sine_slots = np.arange(2, 2 * degree + 1, 2)
+            sin_phi, cos_phi = np.sin(order * phi), np.cos(order * phi)
+            np.testing.assert_array_equal(
+                gradient[1, cosine_slots], values * -(order * sin_phi) / clamped
+            )
+            np.testing.assert_array_equal(
+                gradient[1, sine_slots], values[1:] * (order[1:] * cos_phi[1:]) / clamped
+            )
+
+        default = SphericalGrid(grid.vertices, grid.faces, order=6)
+        reference = SphericalGrid(grid.vertices, grid.faces, order=6, reference=True)
+        fields = default.basis.shape[1] // 2
+        zonal = [degree**2 - 1 for degree in range(1, 7)]
+        others = np.setdiff1d(np.arange(2 * fields), zonal + [k + fields for k in zonal])
+        np.testing.assert_array_equal(default.basis[:, others], reference.basis[:, others])
+
+
+def test_align_refuses_a_grid_with_a_vertex_beside_the_axis():
+    """Near the axis the ``(theta, phi)`` Jacobian is unreliable, not only on it.
+
+    1e-5 rad from the axis the identity's comes out 0.74 on this mesh and a
+    rigid rotation's, calibrated against it, 1.27. The check used to look
+    only for vertices on the axis, ``sin(theta) < 1e-8``, and let such a grid
+    through (third review); it now asks for the clearance that
+    :func:`rotate_off_poles` guarantees, and the rotated grid passes.
+    """
+    vertices, faces = icosphere(2)
+    n = 2 * vertices.shape[0]
+    matrix = np.random.default_rng(3).random((n, n))
+    matrix = matrix + matrix.T
+    for offset in (1e-5, 5e-4):
+        near = SphericalGrid(vertices @ _rotation_about_y(offset).T, faces, order=2)
+        assert near.pole_vertices(tolerance=1e-8).size == 0  # none on the axis itself
+        assert near.pole_vertices().size == 2
+        with pytest.raises(ValueError, match="coordinate axis.*rotate_off_poles"):
+            align([matrix, matrix], grids=(near, near), order=2)
+
+    clear = SphericalGrid(rotate_off_poles(vertices @ _rotation_about_y(1e-5).T), faces, order=2)
+    assert clear.pole_vertices().size == 0
+    result = align(
+        [matrix, matrix], grids=(clear, clear), order=2, max_iterations=1, template_iterations=1
+    )
+    assert len(result.warps) == 2
+
+
+def test_rotate_off_poles_clears_the_axis_as_the_grid_measures_it():
+    """The clearance is ``sin(theta)`` on the unit sphere on both sides, whatever the radius.
+
+    Measured on the raw coordinates, a sphere of radius 100 (FreeSurfer's)
+    could not be rotated at all, and one of radius 0.5 was passed unrotated
+    with its poles on the axis.
+    """
+    vertices, faces = icosphere(2)
+    for radius in (1.0, 100.0, 0.5):
+        grid = SphericalGrid(rotate_off_poles(radius * vertices), faces, order=1)
+        assert grid.pole_vertices().size == 0
+        assert np.sin(grid.theta).min() > AXIS_CLEARANCE
+        np.testing.assert_array_equal(pole_rotation(radius * vertices), pole_rotation(vertices))
+
+
+def test_the_jacobian_is_not_calibrated_against_a_vertex_beside_the_axis():
+    """3e-6 rad from the axis the scheme's identity value is 0.03, which says nothing of the mesh.
+
+    Divided out, it turned a rigid rotation's Jacobian there into 34 and 37
+    (third review). Left alone, the two vertices read the scheme's own
+    value, 0.945 on this coarse mesh, as the vertices on the axis always
+    have; everywhere else the calibration is what it was.
+    """
+    vertices, faces = icosphere(2)
+    grid = SphericalGrid(vertices @ _rotation_about_y(3e-6).T, faces, order=2)
+    beside = np.flatnonzero(np.sin(grid.theta) < 1e-5)
+    away = np.setdiff1d(np.arange(grid.n_vertices), beside)
+    warp = SphericalWarp(grid, delta=1e-5)
+    identity = warp._raw_jacobian()
+    assert beside.size == 2 and identity[beside].max() < 0.5
+    np.testing.assert_array_equal(warp._calibration[beside], 1.0)
+    np.testing.assert_array_equal(warp._calibration[away], identity[away])
+
+    turned = grid.vertices @ _rotation_about_y(np.radians(0.5)).T
+    gamma = sphere_log_map(grid.vertices, turned)
+    displacement = np.stack([(gamma * grid.e1).sum(axis=1), (gamma * grid.e2).sum(axis=1)], axis=1)
+    jacobian = warp.compose(displacement).jacobian
+    assert 0.9 < jacobian[beside].min() and jacobian[beside].max() < 1.1
+    np.testing.assert_allclose(jacobian[away], 1.0, atol=1e-7)
+
+
+def test_a_density_with_nothing_off_its_diagonal_is_refused(pair):
+    """The diagonal is no part of a density, so a density with nothing else is empty.
+
+    :meth:`Encore.root` zeroes the diagonal before it normalizes (second
+    review), so such a density divided 0 by 0 and the template and costs
+    came back NaN without a word, while :func:`align` checked the whole
+    matrix for mass (third review).
+    """
+    grid, densities = pair
+    n = 2 * grid.n_vertices
+    diagonal = np.diag(np.linspace(1.0, 2.0, n))
+
+    class _Connectome:  # anything with .dense(), as a ContinuousConnectome has
+        def __init__(self, matrix):
+            self.matrix = matrix
+
+        def dense(self):
+            return self.matrix
+
+    encore = Encore(grid, grid)
+    for empty in (diagonal, np.zeros((n, n))):
+        with pytest.raises(ValueError, match="no mass off its diagonal"):
+            encore.root(empty)
+    with pytest.raises(ValueError, match="not finite"):
+        encore.root(np.full((n, n), np.nan))
+    for given in (diagonal, _Connectome(diagonal)):
+        with pytest.raises(ValueError, match="connectome 1 has no mass off its diagonal"):
+            align([densities[0], given], grids=(grid, grid), max_iterations=1)
+    with pytest.raises(ValueError, match="template connectome has no mass off its diagonal"):
+        align([densities[0]], template=_Connectome(diagonal), grids=(grid, grid), max_iterations=1)
+    with pytest.raises(ValueError, match="not square"):
+        align([np.ones(n), np.ones(n)], grids=(grid, grid))
+
+    one_pair = diagonal.copy()
+    one_pair[0, 1] = one_pair[1, 0] = 1.0  # a single connection off the diagonal is mass enough
+    root = encore.root(one_pair)
+    assert np.isfinite(root).all()
+    assert (root**2 * encore.area_product).sum() == pytest.approx(1.0)

@@ -90,17 +90,60 @@ def _constant_columns(matrix) -> np.ndarray:
     return np.all(matrix == matrix[:1], axis=0) & (matrix[0] != 0)
 
 
+def _missing_labels(labels: np.ndarray) -> np.ndarray:
+    """Which group labels are missing: ``NaN``, ``None``, or an empty or blank string.
+
+    Coded like any other label, the missing ones would make one family of
+    every subject without one: ``np.unique`` takes all NaNs for one value.
+    """
+    if labels.dtype.kind in "fc":
+        return np.isnan(labels)
+    if labels.dtype.kind in "US":
+        return np.char.str_len(np.char.strip(labels)) == 0
+    if labels.dtype.kind == "O":
+        return np.array([_is_missing(label) for label in labels], dtype=bool)
+    return np.zeros(labels.size, dtype=bool)
+
+
+def _is_missing(label) -> bool:
+    if label is None:
+        return True
+    if isinstance(label, (str, bytes)):
+        return not label.strip()
+    try:
+        return bool(label != label)  # NaN, and NaT, are unequal to themselves
+    except TypeError:  # pandas' NA will not say whether it equals itself
+        return True
+
+
 def _design_matrix(design, add_intercept):
     design = np.asarray(design, dtype=np.float64)
     if design.ndim == 1:
         design = design[:, None]
+    if not add_intercept:
+        return design
     # Always column 0, so that ``terms`` keep meaning the same columns whatever
-    # the covariates hold. A covariate that happens to be constant (one sex in
-    # the cohort) is then collinear with it: harmless to the fit, since the
-    # degrees of freedom follow the rank, and refused if asked to be tested.
-    if add_intercept:
-        design = np.column_stack([np.ones(design.shape[0]), design])
-    return design
+    # the covariates hold. A constant column beside it is either the caller's
+    # own intercept or a covariate that does not vary in these subjects (one
+    # sex), and taking it silently for either misnumbers the columns of whoever
+    # meant the other: it is refused, and with it a column of zeros, the other
+    # coding of one sex.
+    if design.shape[0]:
+        zeros = ~design.any(axis=0)
+        constant = np.flatnonzero(_constant_columns(design) | zeros)
+        if constant.size:
+            j = int(constant[0])
+            if zeros[j]:
+                raise ValueError(
+                    f"design column {j} is all zeros, which no test can use: if it is a "
+                    "covariate that does not vary in these subjects (one sex, say), drop it"
+                )
+            raise ValueError(
+                f"design column {j} is constant, so it duplicates the intercept prepended as "
+                "column 0: if it is your own intercept, pass add_intercept=False; if it is a "
+                "covariate that does not vary in these subjects (one sex, say), drop it"
+            )
+    return np.column_stack([np.ones(design.shape[0]), design])
 
 
 @dataclass
@@ -187,10 +230,13 @@ def local_test(
     design
         ``(n_subjects, n_covariates)``. Unless ``add_intercept`` is false an
         intercept is prepended as column 0, always, so covariate ``j`` is
-        column ``j + 1`` whatever the covariates hold. A covariate that is
-        constant over the cohort is collinear with the intercept: it costs no
-        degree of freedom, and asking to test it is refused as collinear. To
-        supply the intercept yourself, pass ``add_intercept=False``.
+        column ``j + 1`` whatever the covariates hold, and a constant column
+        is refused: beside the prepended intercept it is either an intercept
+        of your own, as statsmodels' ``add_constant`` makes one, or a
+        covariate that does not vary in these subjects (sex in a single-sex
+        subset), and taking it for either would misnumber the columns of
+        whoever meant the other. A column of zeros, which no test can use, is
+        refused with it.
     terms
         Which design columns to test, as integer indices into the final design
         matrix, each at most once. Defaults to every non-constant column except
@@ -198,6 +244,12 @@ def local_test(
         indices 0 and 1.
     method
         Multiplicity correction, one of :data:`METHODS`.
+    add_intercept
+        Prepend the intercept as column 0. Pass ``False`` to supply it
+        yourself, as a constant column of ``design``; the columns are then
+        numbered as given. A design carrying its own constant column needs
+        ``add_intercept=False``: until October 2026 such a column was taken
+        as the intercept.
     permutations
         If positive, p-values come from a permutation test with this many
         draws rather than from the F distribution. The scheme is
@@ -217,7 +269,11 @@ def local_test(
         columns), and the F statistic's denominator has ``G - 1`` degrees of
         freedom instead of ``n - p``. It needs a design of full column rank
         and hundreds of groups rather than dozens (the module notes), and
-        cannot be combined with ``permutations``.
+        cannot be combined with ``permutations``. Every subject needs a
+        label: a missing one -- ``NaN``, ``None``, or an empty or blank
+        string -- is refused, since coded like any other label it would put
+        every subject without a family into one family together. A subject
+        without a family takes a label of its own.
 
     Examples
     --------
@@ -265,6 +321,12 @@ def local_test(
         labels = np.asarray(groups).ravel()
         if labels.size != n_subjects:
             raise ValueError(f"{labels.size} group labels for {n_subjects} subjects")
+        missing = int(_missing_labels(labels).sum())
+        if missing:
+            raise ValueError(
+                f"groups= has {missing} missing label{'s' if missing > 1 else ''}; give every "
+                "subject a family, or a label of its own for a subject without one"
+            )
         _, codes = np.unique(labels, return_inverse=True)
         if codes.max() + 1 < 2:
             raise ValueError("groups= needs at least two groups")

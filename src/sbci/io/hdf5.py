@@ -24,7 +24,9 @@ about 12 MB compressed -- so the group is optional and a file without it is
 valid, it simply cannot be re-smoothed.
 
 Vertex and triangle indices are global and zero-based over the whole grid, so
-the hemisphere is implied by the index rather than stored beside it.
+the hemisphere is implied by the index rather than stored beside it: a vertex
+index is split at half the file's own grid, as its connectivity and area count
+it, and a triangle index at the grid's 5120 faces per hemisphere.
 """
 
 from __future__ import annotations
@@ -36,7 +38,7 @@ from typing import Any
 import h5py
 import numpy as np
 
-from .. import spec
+from .. import grid, spec
 from ..errors import FormatError, InvalidFileError
 from ..metadata import Metadata
 
@@ -46,6 +48,31 @@ MASK = "mask"
 COORDINATES = "coordinates"
 METADATA = "metadata"
 ENDPOINTS = spec.ENDPOINTS_GROUP
+
+
+def _vertices_per_hemisphere(handle) -> int:
+    """Half the file's grid, where its whole-grid vertex indices change hemisphere.
+
+    Counted from the file's own arrays rather than taken from the ico4 grid,
+    so the connectivity and the area have to agree on the count, and it has
+    to be even.
+    """
+    n_area = int(handle[AREA].size)
+    try:
+        n = grid.n_from_condensed(int(handle[CONNECTIVITY].size))
+    except ValueError as exc:
+        raise InvalidFileError(f"/{CONNECTIVITY}: {exc}") from exc
+    if n != n_area:
+        raise InvalidFileError(
+            f"/{ENDPOINTS} cannot be split into hemispheres: the connectivity is for {n} "
+            f"vertices but the area for {n_area}"
+        )
+    if n % 2:
+        raise InvalidFileError(
+            f"/{ENDPOINTS} cannot be split into hemispheres: the grid has {n} vertices, "
+            "an odd number"
+        )
+    return n // 2
 
 
 def _read_endpoints(handle) -> Any:
@@ -76,11 +103,12 @@ def _read_endpoints(handle) -> Any:
             if optional[name].shape[0] != sizes["vertex_in"]:
                 raise InvalidFileError(f"/{ENDPOINTS}/{name} disagrees on the streamline count")
 
+    n_per_hemi = _vertices_per_hemisphere(handle)
     try:
         return Endpoints.from_global(
             vertex_in=np.asarray(group["vertex_in"][()]),
             vertex_out=np.asarray(group["vertex_out"][()]),
-            n_per_hemi=spec.N_VERTICES_PER_HEMI,
+            n_per_hemi=n_per_hemi,
             n_faces_per_hemi=spec.N_FACES_PER_HEMI,
             **optional,
         )
@@ -88,8 +116,15 @@ def _read_endpoints(handle) -> Any:
         raise InvalidFileError(f"/{ENDPOINTS}: {exc}") from exc
 
 
-def _write_endpoints(handle, endpoints, opts) -> None:
+def _write_endpoints(handle, endpoints, opts, n_vertices: int) -> None:
     """Write the optional endpoint group, in global zero-based indices."""
+    # The reader splits the indices at half the file's grid: endpoints on
+    # another grid would come back in the wrong hemisphere, or not at all.
+    if 2 * endpoints.n_per_hemi != n_vertices:
+        raise ValueError(
+            f"the endpoints are on a grid of {2 * endpoints.n_per_hemi} vertices but the "
+            f"connectome on one of {n_vertices}"
+        )
     group = handle.create_group(ENDPOINTS)
     group.create_dataset(
         "vertex_in", data=np.asarray(endpoints.global_vertex_in, dtype=np.int32), **opts
@@ -174,7 +209,8 @@ def write_hdf5(
 
     ``endpoints`` is a :class:`sbci.smoothing.Endpoints`; pass it to make the
     file re-smoothable. It is refused on a functional connectome, which has no
-    streamlines.
+    streamlines, and when its vertices per hemisphere are not half the
+    connectome's grid, where the reader will split it.
     """
     metadata.validate()
     if endpoints is not None and metadata.modality != "sc":
@@ -202,7 +238,7 @@ def write_hdf5(
                     COORDINATES, data=np.asarray(coords, dtype=np.float32), **opts
                 )
             if endpoints is not None:
-                _write_endpoints(handle, endpoints, opts)
+                _write_endpoints(handle, endpoints, opts, np.size(area))
             handle.create_dataset(METADATA, data=text)
         os.replace(partial, path)
     finally:

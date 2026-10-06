@@ -121,13 +121,23 @@ measurements.
     neighbours of a coordinate pole -- so the average over neighbours there
     mixes vectors expressed in incompatible frames: ten smoothing passes move
     the polar vertices of a 20-degree rotation by 9 degrees and the rest by
-    0.2, and the vertex at the pole follows only half of a 4-degree shift of
-    the endpoints around it (3.5 degrees once corrected). By default the field
-    is lifted to 3-vectors, smoothed per Cartesian component and projected
-    back onto the frames, which agrees with the reference's smoothing to 1e-3
-    of the field where the frame turns slowly (within 30 degrees of the
-    coordinate equator); ``strict_upstream=True`` keeps the reference's. Found
-    by the second review of 5 October 2026.
+    0.2, the vertex at the pole follows only half of a 4-degree shift of the
+    endpoints around it (3.5 degrees once corrected), and 100 passes keep
+    98.9% of a rotation about the coordinate z axis but 90.5% of one about a
+    tilted axis. By default the field is smoothed with the connection
+    Laplacian, which carries each neighbour's vector to the vertex by parallel
+    transport before the cotangent weights combine them: it does not depend
+    on the frame, keeps 97.6% of a rotation about any axis, and within 10
+    degrees of the coordinate equator, where the frame is nearly parallel,
+    agrees with the reference's smoothing of a rotation to 1e-4 of the field
+    (the projected 3-vectors below differed there by 3e-4). Smoothing the
+    3-vectors per Cartesian component, the port's first correction, projects
+    the neighbours' vectors onto the tangent plane instead, which drops a
+    curvature term: on the unit sphere it adds the field itself to the
+    connection Laplacian, so a rotation, which that maps to itself, was
+    damped twice as fast (95.2%). ``strict_upstream=True`` keeps the
+    reference's. Found by the second review of 5 October 2026; the third
+    review found the curvature term.
 17. **A rigid rotation is held as a velocity field.** ``rotate``, which the
     rigid initialization uses, sets the field to the rotation's own rotational
     field and realizes it by scaling and squaring, whose first scaled step
@@ -135,7 +145,8 @@ measurements.
     circle; six squarings double that error each time, to 0.035 degrees at a
     20-degree rotation, 1.6 at 150 and 2.3 at a half turn. And every later
     step smooths the field by 5%, rotation and all, so over the 100 iterations
-    of a registration a 150-degree rotation erodes to 142.6 degrees, which the
+    of a registration a 150-degree rotation erodes to 146.2 degrees (item 16's
+    smoothing; 142.6 with the projected 3-vectors it replaced), which the
     gradient has to keep restoring. By default the rotation is held exactly,
     outside the field, and the warp is the field's flow after it; the field
     carries only the deformation. ``strict_upstream=True`` keeps the
@@ -758,8 +769,9 @@ class StationaryWarp:
     of a tangent field ``velocity`` (``(P, 2)`` in the ``(e1, e2)`` frame),
     computed by scaling and squaring with barycentric interpolation and
     parallel transport. Composing is addition of velocity fields, followed by
-    the reference's 5% Laplacian smoothing (module docstring, item 8), applied
-    to the field as 3-vectors rather than frame components (item 16).
+    the reference's 5% Laplacian smoothing (module docstring, item 8), with
+    the connection Laplacian, which compares neighbouring vectors by parallel
+    transport, rather than on the frame components (item 16).
 
     A rigid rotation set by :meth:`rotate` is held exactly, as ``rigid``, and
     the warp is the field's flow after it: the field then carries only the
@@ -801,6 +813,16 @@ class StationaryWarp:
         self._laplacian = cotangent_laplacian(
             self.base, self.faces, reference_layout=strict_upstream
         )
+        # the connection Laplacian's off-diagonal entries, along which the smoothing
+        # carries each neighbour's vector to the vertex (module docstring, item 16)
+        entries = self._laplacian.tocoo()
+        off_diagonal = entries.row != entries.col
+        self._edges = (
+            entries.row[off_diagonal],
+            entries.col[off_diagonal],
+            entries.data[off_diagonal],
+        )
+        self._diagonal = self._laplacian.diagonal()
 
     @property
     def n_vertices(self) -> int:
@@ -899,18 +921,25 @@ class StationaryWarp:
         return True
 
     def _smooth(self, velocity, strict_upstream: bool = False) -> np.ndarray:
-        """Remove ``viscosity`` of the field's cotangent Laplacian from it.
+        """Remove ``viscosity`` of the field's connection Laplacian from it.
 
-        The field is lifted to 3-vectors, smoothed per Cartesian component and
-        projected back onto each vertex's frame, so that neighbours are
-        averaged as vectors. ``strict_upstream=True`` smooths the ``(e1, e2)``
-        components as two scalars, which mixes frames where they turn sharply
-        (module docstring, item 16).
+        The cotangent weights combine each neighbour's vector carried to the
+        vertex by parallel transport, so the result does not depend on the
+        frame and is tangent there. Smoothing the 3-vectors per Cartesian
+        component would project the neighbours' vectors onto the tangent plane
+        instead, which drops a curvature term and damps a rotation twice as
+        fast. ``strict_upstream=True`` smooths the ``(e1, e2)`` components as
+        two scalars, which mixes frames where they turn sharply (module
+        docstring, item 16).
         """
         if strict_upstream:
             return velocity - self.viscosity * (self._laplacian @ velocity)
         ambient = self.e1 * velocity[:, :1] + self.e2 * velocity[:, 1:]
-        ambient = ambient - self.viscosity * (self._laplacian @ ambient)
+        rows, cols, weights = self._edges
+        carried = _transport(ambient[cols], self.base[cols], self.base[rows])
+        laplacian = self._diagonal[:, None] * ambient
+        np.add.at(laplacian, rows, weights[:, None] * carried)
+        ambient = ambient - self.viscosity * laplacian
         return np.stack([(ambient * self.e1).sum(1), (ambient * self.e2).sum(1)], axis=1)
 
     def invert(self) -> StationaryWarp:
@@ -1307,14 +1336,25 @@ class ConSEAL:
         the estimate is coincident with it: no direction, no weight. The
         reference's arithmetic, which ``strict_upstream`` keeps, lets the
         rounding of the starting subject's norm pin the median to that
-        subject (module docstring, item 15).
+        subject (module docstring, item 15). A subject with no streamlines
+        has no density to normalize and is refused.
         """
-        qs = [c.q_transform(kernel) for c in connectomes]
+        strict = self.strict_upstream
+        qs = []
+        for index, connectome in enumerate(connectomes):
+            q = connectome.q_transform(kernel)
+            if not q.any():
+                raise ValueError(
+                    f"subject {index} has no streamlines on this grid, so its density is zero "
+                    "everywhere and cannot enter the template; leave it out"
+                )
+            if not strict:
+                # q_transform returns a fresh array: normalized in place, the cohort's
+                # densities are held once rather than twice
+                q /= np.sqrt((q**2).sum())
+            qs.append(q)
         if not qs:
             raise ValueError("a template needs at least one connectome")
-        strict = self.strict_upstream
-        if not strict:
-            qs = [q / np.sqrt((q**2).sum()) for q in qs]
         coincident = 0.0 if strict else 1e-6  # radians; subjects sit 0.2 to 0.5 apart (item 15)
         q_bar = sum(qs) / len(qs)
         q_mu = qs[int(np.argmin([((q - q_bar) ** 2).sum() for q in qs]))].copy()
@@ -1475,12 +1515,24 @@ class ConSEAL:
         registered onward rather than reset to the locations it was built
         with; ``warped`` is that copy with its endpoints carried along, and
         ``costs`` the trace from the initial cost onward.
-        ``callback(iteration, cost)`` is called after every step.
+        ``callback(iteration, cost)`` is called after every step. A moving
+        connectome with no streamlines, or a fixed density that is zero
+        everywhere, is refused.
         """
+        if not moving.n_streamlines:
+            raise ValueError(
+                "the moving connectome has no streamlines on this grid, so there is nothing "
+                "to register"
+            )
         if isinstance(fixed, EndpointConnectome):
             q1 = fixed.q_transform(kernel)
         else:
             q1 = np.asarray(fixed, dtype=np.float64)
+        if not q1.any():
+            raise ValueError(
+                "the fixed connectome has no streamlines on this grid: its density is zero "
+                "everywhere, so there is nothing to register onto"
+            )
         moving = moving.copy()
         # The fresh identity warps act on the committed locations, so commit
         # the current ones: a no-op for a connectome that was never warped,
@@ -1613,7 +1665,8 @@ def endpoints_align(
     connectomes
         :class:`~sbci.ContinuousConnectome` objects carrying endpoints with
         barycentric positions, :class:`~sbci.smoothing.Endpoints`, or
-        :class:`EndpointConnectome` built on ``grids``.
+        :class:`EndpointConnectome` built on ``grids``, each with at least one
+        streamline.
     template
         What every subject is registered onto. ``None``, the default,
         estimates it first: the Karcher median of the subjects' square-root
@@ -1663,6 +1716,26 @@ def endpoints_align(
     subjects = [_as_subject(item, lh_grid, rh_grid) for item in connectomes]
     if not subjects:
         raise ValueError("endpoints_align needs at least one connectome")
+    fixed = None
+    if isinstance(template, (EndpointConnectome, Endpoints)) or hasattr(template, "endpoints"):
+        # the fixed subject, built on the same grids as the moving ones; it need not be listed
+        fixed = _as_subject(
+            template, lh_grid, rh_grid, "a template connectome that carries its endpoints"
+        )
+    # an empty subject's density is zero everywhere: there is nothing to register, and
+    # normalizing it for the template made the whole cohort NaN. Refuse it before the
+    # kernel is built.
+    for index, subject in enumerate(subjects):
+        if not subject.n_streamlines:
+            raise ValueError(
+                f"subject {index} has no streamlines on this grid, so there is nothing to "
+                "register; leave it out"
+            )
+    if fixed is not None and not fixed.n_streamlines:
+        raise ValueError(
+            "the template connectome has no streamlines on this grid, so there is nothing "
+            "to register onto"
+        )
 
     builder = HeatKernelBuilder(lh_grid, rh_grid, kernel_degree)
     kernel, derivative = builder.compute(sigma, derivative=True, strict_upstream=strict_upstream)
@@ -1684,11 +1757,7 @@ def endpoints_align(
         if not 0 <= int(template) < len(subjects):
             raise ValueError(f"template={template} names no subject; the list has {len(subjects)}")
         target = subjects[int(template)].q_transform(kernel)
-    elif isinstance(template, (EndpointConnectome, Endpoints)) or hasattr(template, "endpoints"):
-        # the fixed subject, built on the same grids as the moving ones; it need not be listed
-        fixed = _as_subject(
-            template, lh_grid, rh_grid, "a template connectome that carries its endpoints"
-        )
+    elif fixed is not None:
         target = fixed.q_transform(kernel)
     else:
         target = np.asarray(template, dtype=np.float64)

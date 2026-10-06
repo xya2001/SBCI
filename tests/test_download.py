@@ -77,6 +77,25 @@ def test_subjects_and_modalities_are_checked(tmp_path, monkeypatch):
         download.fetch_cohort(tmp_path, modalities=("dwi",), fetcher=fetcher, report=lambda _: None)
 
 
+def test_a_single_modality_may_be_a_plain_string(tmp_path, monkeypatch):
+    """``modalities="sc"`` is the one modality, as ``subjects="100307"`` is the one subject.
+
+    Read letter by letter it was ``("s", "c")``, refused as the modality ``'s'``.
+    """
+    payloads = {("sub-A", "sc"): b"sc-A", ("sub-A", "fc"): b"fc-A"}
+    fetcher, calls = _fake_manifest(tmp_path, monkeypatch, payloads)
+    quiet = dict(fetcher=fetcher, report=lambda _: None)
+    assert [p.name for p in download.fetch_cohort(tmp_path, modalities="sc", **quiet)] == [
+        "sub-A_sc.h5"
+    ]
+    assert [p.name for p in download.fetch_cohort(tmp_path, modalities="fc", **quiet)] == [
+        "sub-A_fc.h5"
+    ]
+    assert calls == ["id-sub-A-sc", "id-sub-A-fc"]
+    with pytest.raises(ValueError, match="got 'dwi'"):
+        download.fetch_cohort(tmp_path, modalities="dwi", **quiet)
+
+
 def test_asking_only_for_what_the_cohort_lacks_says_so(tmp_path, monkeypatch, capsys):
     # A cohort that holds only SC: asking for FC alone says so rather than fetch nothing.
     data = b"sc"

@@ -256,8 +256,8 @@ it now corrects them by default:
    `encore_cost_check.m` demonstrates it.
 3. **ENCORE zeroes any vertex on the coordinate axis**, because the Jacobian
    closes with `sin(theta)`. The ico4 grid has four such vertices, so
-   `align()` rotates the mesh clear first and refuses a grid that still has
-   them.
+   `align()` rotates the mesh clear first and refuses a grid with a vertex on
+   the axis or within 1e-3 of it.
 4. **ENCORE's derivative does not converge.** Run `encore_delta_sweep.m`: it
    moves by about 0.037 between every adjacent pair of step sizes without
    settling, because at a vertex the interpolant has a kink and the measured
@@ -297,7 +297,7 @@ it now corrects them by default:
    keeps the bias.
 10. **ConSEAL holds a rigid rotation as a velocity field** (`rotate`, used by
     `init_rotation=True`): its flow is 1.6 degrees off at 150 degrees, and
-    every later smoothing erodes it, 7.4 of 150 degrees over 100 steps. The
+    every later smoothing erodes it, 3.8 of 150 degrees over 100 steps. The
     port holds the rotation exactly, outside the field; `strict_upstream=True`
     keeps the reference's (PORTING.md item 9).
 

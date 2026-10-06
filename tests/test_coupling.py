@@ -178,6 +178,97 @@ def test_to_atlas_matrices_with_an_empty_region_couple_region_by_region(connecto
     assert np.isnan(both[2]) and np.isfinite(both[:2]).all()
 
 
+def test_an_empty_region_does_not_bring_back_a_region_without_sc():
+    """A zero SC profile with the empty region's NaN in it is still constant, and still dropped.
+
+    A NaN equals nothing, so the NaN made that profile pass for varying: it was
+    kept, entered every other region's comparison, and adding an empty region
+    to six changed all five values. Every form now gives the regions present
+    exactly what it gives without the empty one.
+    """
+    rng = np.random.default_rng(0)
+    n = 6
+    sc = rng.random((n, n))
+    sc = sc + sc.T
+    fc = rng.random((n, n)) - 0.5
+    fc = fc + fc.T
+    np.fill_diagonal(sc, 0.0)
+    np.fill_diagonal(fc, 0.0)
+    sc[2, :] = 0.0  # region 2 has no SC
+    sc[:, 2] = 0.0
+
+    def with_empty(matrix):
+        return np.pad(matrix, (0, 1), constant_values=np.nan)
+
+    def local(a, b, **kwargs):
+        return local_coupling(a, b, np.ones(a.shape[0], dtype=int), min_area=1, **kwargs)
+
+    for compute in (global_coupling, discrete_coupling, local):
+        expected = compute(sc, fc)
+        assert np.isnan(expected[2]) and np.isfinite(np.delete(expected, 2)).all()
+        result = compute(with_empty(sc), with_empty(fc))
+        assert np.isnan(result[n])
+        np.testing.assert_array_equal(result[:n], expected)
+        upper = compute(np.triu(with_empty(sc)), np.triu(with_empty(fc)), triangular=True)
+        np.testing.assert_array_equal(upper[:n], compute(np.triu(sc), np.triu(fc), triangular=True))
+
+
+def test_an_atlas_with_an_empty_region_and_one_without_sc_couples_as_without_the_empty_one(
+    sc_metadata,
+):
+    """End to end, through ``to_atlas``: region D has no streamline, region E no cortical vertex.
+
+    E covers only the medial wall, so FC by mean reads NaN along its row and
+    column, and so does SC by mean. With SC by mass or by mean, D comes out NaN
+    and A to C exactly as on the same atlas without E.
+    """
+    from sbci.atlas import Atlas
+    from sbci.connectome import ContinuousConnectome
+    from sbci.grid import to_condensed
+    from sbci.metadata import template
+
+    rng = np.random.default_rng(3)
+    n = 7
+    area = rng.uniform(1.0, 3.0, n)
+    mask = np.arange(n) < 6  # vertex 6 is the medial wall
+    structural = rng.random((n, n))
+    structural = structural + structural.T
+    structural[[5, 6], :] = 0.0  # no streamline ends at vertex 5, nor on the medial wall
+    structural[:, [5, 6]] = 0.0
+    np.fill_diagonal(structural, 0.0)
+    structural /= area @ structural @ area
+    functional = np.tanh(rng.standard_normal((n, n)))
+    functional = (functional + functional.T) / 2
+    functional[6, :] = 0.0
+    functional[:, 6] = 0.0
+    fc_metadata = template(
+        "fc",
+        normalization="none",
+        registration_reference="fsaverage",
+        pipeline_version="test",
+        container_version="test",
+        fc_nuisance_model="none",
+    )
+    sc, fc = (
+        ContinuousConnectome(
+            data=to_condensed(matrix).astype(np.float32), area=area, mask=mask, metadata=metadata
+        )
+        for matrix, metadata in ((structural, sc_metadata), (functional, fc_metadata))
+    )
+    gappy = Atlas(name="gappy", labels=np.array([1, 1, 2, 3, 3, 4, 5]), names=tuple("ABCDE"))
+    full = Atlas(name="full", labels=np.array([1, 1, 2, 3, 3, 4, 0]), names=tuple("ABCD"))
+    fc_gappy, fc_full = fc.to_atlas(gappy), fc.to_atlas(full)
+    assert np.isnan(fc_gappy[4]).all()
+    for how in ("mass", "mean"):
+        sc_gappy, sc_full = sc.to_atlas(gappy, how=how), sc.to_atlas(full, how=how)
+        assert np.all(sc_gappy[3, :3] == 0.0)  # D has no SC
+        expected = discrete_coupling(sc_full, fc_full)
+        assert np.isnan(expected[3]) and np.isfinite(expected[:3]).all()
+        result = discrete_coupling(sc_gappy, fc_gappy)
+        assert np.isnan(result[4])
+        np.testing.assert_array_equal(result[:4], expected)
+
+
 # --- local -----------------------------------------------------------------
 
 

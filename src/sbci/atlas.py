@@ -10,11 +10,12 @@ partial-coverage atlases such as ``PALS_B12_Visuotopic`` everything outside the
 atlas. Regions are numbered ``1..K`` with no gaps, and ``names[i]`` names label
 ``i + 1``.
 
-``PALS_B12_Lobes`` is the one exception: it is a coarse twelve-lobe
-parcellation that assigns *every* vertex, medial wall included, and so has no
-label ``0``. A connectome carries its own medial-wall mask, and ``to_atlas``
-gives masked vertices no area, so a lobe matrix built from it still counts
-cortex only.
+``PALS_B12_Lobes`` is a coarse ten-lobe parcellation, five lobes a
+hemisphere. Its 394 unlabelled vertices are the medial wall as PALS draws it
+(spelt ``MEDIAL.WALL`` in the source files), which is not quite the pipeline's:
+89 of the mask's 439 medial-wall vertices carry a lobe. A connectome carries
+its own medial-wall mask, and ``to_atlas`` gives masked vertices no area, so a
+lobe matrix built from it still counts cortex only.
 """
 
 from __future__ import annotations

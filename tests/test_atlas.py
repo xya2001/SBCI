@@ -84,6 +84,19 @@ def test_coverage_is_plausible(name):
     assert (atlas.labels == 0).any(), "the medial wall should be unassigned"
 
 
+def test_pals_lobes_has_ten_lobes_and_a_medial_wall_of_its_own():
+    """The module notes' numbers: five lobes a hemisphere, and the medial wall as PALS draws it.
+
+    The notes called it a twelve-lobe atlas with no label 0, as it was while
+    its ``MEDIAL.WALL`` entries were kept as regions.
+    """
+    lobes = load_atlas("PALS_B12_Lobes")
+    wall = load_atlas("Desikan").labels == 0  # the pipeline's medial wall
+    assert lobes.n_regions == 10 and sum(n.startswith("LH_") for n in lobes.names) == 5
+    assert int((lobes.labels == 0).sum()) == 394
+    assert int(wall.sum()) == 439 and int((wall & (lobes.labels != 0)).sum()) == 89
+
+
 @pytest.mark.parametrize(
     ("given", "expected"),
     [

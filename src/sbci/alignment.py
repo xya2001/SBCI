@@ -65,6 +65,11 @@ DEFAULT_ORDER = 6
 DEFAULT_DELTA = 1e-5
 """Central-difference step. See the conditioning note in the module docstring."""
 
+AXIS_CLEARANCE = 1e-3
+"""How far every vertex must sit from the coordinate axis, as ``sin(theta)``, for the
+``(theta, phi)`` Jacobian: what :func:`rotate_off_poles` guarantees and :func:`align`
+checks (:meth:`SphericalGrid.pole_vertices`)."""
+
 
 # --- sphere utilities ------------------------------------------------------
 
@@ -219,7 +224,23 @@ def _harmonic_derivatives(degree, theta, phi, reference: bool = False):
 
     Ordered ``Re(Y_0), Re(Y_1), Im(Y_1), ...`` as the reference orders them.
     ``reference`` selects the reference's Legendre recurrence
-    (:func:`_legendre_derivatives`).
+    (:func:`_legendre_derivatives`) and its treatment of the poles.
+
+    The phi-component of the gradient is ``m P_l^m / sin(theta)`` times a sine
+    or cosine of ``m phi``, which is 0/0 at a point on the coordinate axis. Its
+    limit there is ``dP_l^m/dtheta / cos(theta)`` at ``m = 1`` and zero above,
+    so the ``m = 1`` cosine and sine fields at the north pole are
+    ``dP_l^1/dtheta`` times the x and the y axis, whatever phi the point was
+    given, as the gradient of a smooth function must be. Within ``1e-5`` of
+    the axis the ``m = 1`` term is taken as that limit, which is good to 1e-8
+    there (degree 15); the quotient itself loses digits as ``cos(theta)``
+    rounds towards 1 -- about ``eps / sin(theta)^2``, 5% at 2e-8 from the
+    axis. Above ``m = 1`` the quotient stays accurate, and is zero on the
+    axis. The reference divides by ``max(sin(theta), 1e-5)`` instead, which
+    zeroes the phi-component on the axis, so at a pole with ``phi = pi`` (or
+    0) every ``m = 1`` sine field vanishes while its cosine partner keeps its
+    full size; ``reference=True`` keeps that. Further than ``1e-5`` from the
+    axis the two are the same arithmetic.
     """
     theta = np.asarray(theta, dtype=np.float64).ravel()
     phi = np.asarray(phi, dtype=np.float64).ravel()
@@ -227,7 +248,13 @@ def _harmonic_derivatives(degree, theta, phi, reference: bool = False):
 
     order = np.arange(degree + 1)[:, None]
     sin_phi, cos_phi = np.sin(order * phi), np.cos(order * phi)
-    sin_theta = np.maximum(np.sin(theta), 1e-5)
+    if reference:
+        sin_theta = np.maximum(np.sin(theta), 1e-5)
+        near = np.zeros(theta.size, dtype=bool)
+    else:
+        sin_theta = np.sin(theta)
+        near = sin_theta < 1e-5
+        sin_theta = np.where(sin_theta > 0, sin_theta, 1.0)  # P_l^m, m > 0, is zero there too
 
     width = 2 * (degree + 1) - 1
     gradient = np.zeros((2, width, theta.size))
@@ -240,6 +267,11 @@ def _harmonic_derivatives(degree, theta, phi, reference: bool = False):
     gradient[0, sine_slots] = first[1:] * sin_phi[1:]
     gradient[1, cosine_slots] = values * -(order * sin_phi) / sin_theta
     gradient[1, sine_slots] = values[1:] * (order[1:] * cos_phi[1:]) / sin_theta
+    if degree > 0 and near.any():
+        # l'Hopital, with cos(theta) = +1 or -1 on the axis; slots 1 and 2 are m = 1
+        limit = first[1, near] / np.cos(theta[near])
+        gradient[1, 1, near] = -limit * sin_phi[1, near]
+        gradient[1, 2, near] = limit * cos_phi[1, near]
 
     scale = -degree * (degree + 1)
     laplacian[cosine_slots] = scale * values * cos_phi
@@ -258,7 +290,10 @@ def tangent_basis(order, theta, phi, areas, reference: bool = False):
     zonal gradient field by a constant, which the area-weighted normalization
     below removes again, so the basis itself is the same to rounding; the
     Laplacian of those fields, normalized by the same constant, comes out
-    ``2 / (1 + 1/(l(l+1)))`` times too large -- 4/3 at degree 1.
+    ``2 / (1 + 1/(l(l+1)))`` times too large -- 4/3 at degree 1. A point on
+    the coordinate axis also gets the reference's arithmetic, which drops the
+    phi-component of the ``m = 1`` fields there (:func:`_harmonic_derivatives`);
+    on a grid with no such point the two settings differ only at ``m = 0``.
     """
     theta = np.asarray(theta, dtype=np.float64).ravel()
     phi = np.asarray(phi, dtype=np.float64).ravel()
@@ -579,8 +614,14 @@ class SphericalGrid:
     recurrence, whose zonal derivatives are wrong by ``(1 + 1/(l(l+1))) / 2``
     (see :func:`tangent_basis`); the basis fields are unchanged to rounding
     but their divergence, ``laplacian``, is not, and it enters every
-    registration gradient. The setting is kept as ``reference`` so the
-    estimators built on the grid can see what they were given.
+    registration gradient. It also keeps the reference's arithmetic at a
+    vertex on the coordinate axis, where each degree's two ``m = 1`` fields
+    lose their phi-component (:func:`_harmonic_derivatives`): on the bundled
+    sphere, whose poles have ``phi = pi``, every ``m = 1`` sine field and its
+    rotated partner vanish there. ENCORE's grids are rotated clear of the
+    axis, so that reaches only ConSEAL's. The setting is kept as
+    ``reference`` so the estimators built on the grid can see what they were
+    given.
     """
 
     def __init__(self, vertices, faces, order: int = DEFAULT_ORDER, reference: bool = False):
@@ -615,17 +656,23 @@ class SphericalGrid:
         """Vertices in the mesh."""
         return int(self.vertices.shape[0])
 
-    def pole_vertices(self, tolerance: float = 1e-8) -> np.ndarray:
-        """Vertices sitting on the axis of the spherical coordinate system.
+    def pole_vertices(self, tolerance: float = AXIS_CLEARANCE) -> np.ndarray:
+        """Vertices on the axis of the spherical coordinate system, or too near it.
 
         The Jacobian is formed in ``(theta, phi)`` coordinates and closes with
         a factor of ``sin(theta)``, which vanishes at the poles. A vertex there
         therefore gets a Jacobian of exactly zero, and a density pushed through
-        the warp loses that vertex's whole row and column. The sphere has no
-        distinguished axis, so this is an artifact of the parametrization
-        rather than of the data -- see :func:`rotate_off_poles`.
+        the warp loses that vertex's whole row and column. Near the axis the
+        central difference straddles it and is no better: 1e-5 rad from the
+        axis the identity's Jacobian comes out 0.78, and a rigid rotation's,
+        calibrated against it (:class:`SphericalWarp`), 1.27 instead of 1. So
+        a vertex counts here when ``sin(theta)`` is at most ``tolerance``, by
+        default the clearance :func:`rotate_off_poles` guarantees, at which
+        the rotation's Jacobian is 1 to 3e-5 at the default step. The sphere
+        has no distinguished axis, so all of this is an artifact of the
+        parametrization rather than of the data.
         """
-        return np.flatnonzero(np.sin(self.theta) < tolerance)
+        return np.flatnonzero(np.sin(self.theta) <= tolerance)
 
 
 def parallel_transport(tangent, origin, destination):
@@ -680,16 +727,23 @@ class SphericalWarp:
     The Jacobian is the reference's central difference through four offset
     points relocated on the planar mesh (:meth:`_raw_jacobian`). That scheme
     carries the mesh's chord-versus-arc error: on the identity it returns not
-    1 but 0.9965 on the ico4 grid (0.805 on a 42-vertex icosphere), and since
-    :meth:`Concon.evaluate` transports a density with the product of two
-    Jacobians, every accepted step would take about 0.7% of its mass on ico4.
-    So the scheme's value on the identity is computed once, at construction,
-    and every Jacobian is divided by it: the identity gives exactly 1 and a
-    small warp 1 plus its divergence. ``reference=True`` leaves the Jacobian
-    uncalibrated, as the reference computes it, for the MATLAB comparison. A
-    vertex on the coordinate axis has an identity Jacobian of zero
-    (:meth:`SphericalGrid.pole_vertices`) and is left as it is: there is
-    nothing there to calibrate against.
+    1 but 0.9965 on the ico4 grid (0.805 on a 42-vertex icosphere). The
+    registration transports only square-root densities, renormalized at
+    every trial (:meth:`Concon.evaluate_root`), but :meth:`Concon.evaluate`
+    applies the final warps' Jacobians, a product of two, once at the end to
+    give the aligned density, which would come out about 0.7% short of its
+    mass on ico4 (35% on the 42-vertex sphere). So the scheme's value on the
+    identity is computed once, at construction, and every Jacobian is
+    divided by it: the identity gives exactly 1 and a small warp 1 plus its
+    divergence. ``reference=True`` leaves the Jacobian uncalibrated, as the
+    reference computes it, for the MATLAB comparison. A vertex where the
+    identity's value is below one half is left as it is: on the coordinate
+    axis it is zero, and closer to the axis than about a step the central
+    difference straddles it, so the value measures the parametrization
+    rather than the mesh -- divided out, it would turn a rigid rotation's
+    Jacobian of 1 into 38 at 3e-6 rad from the axis. Nearer than
+    :data:`AXIS_CLEARANCE` the Jacobian is unreliable either way, which is
+    why :func:`align` refuses such a grid (:meth:`SphericalGrid.pole_vertices`).
     """
 
     def __init__(self, grid: SphericalGrid, delta: float = DEFAULT_DELTA, reference: bool = False):
@@ -721,10 +775,9 @@ class SphericalWarp:
             )
         }
         # The scheme's own value on the identity, divided out of every Jacobian
-        # (class docstring); a zero, at a vertex on the axis, is left alone.
+        # (class docstring); below one half, on or next to the axis, it is left alone.
         identity = self._raw_jacobian()
-        self._calibration = np.where(identity > 0, identity, 1.0)
-        self._calibration[grid.pole_vertices()] = 1.0
+        self._calibration = np.where(identity >= 0.5, identity, 1.0)
 
     def compose(self, displacement) -> SphericalWarp:
         """Compose with a further displacement given in the tangent basis."""
@@ -1003,6 +1056,20 @@ def _without_diagonal(density) -> np.ndarray:
     return density
 
 
+def _density_problem(density) -> str | None:
+    """Why a square array is not a connectivity density :func:`align` can use, or ``None``.
+
+    Its diagonal is no part of it (:meth:`Encore.root`), so the mass that
+    counts is the mass off the diagonal.
+    """
+    if not np.isfinite(density).all() or density.min() < 0:
+        return "is not a nonnegative density"
+    # the entries are nonnegative, so mass off the diagonal is a nonzero entry there
+    if np.count_nonzero(density) == np.count_nonzero(density.diagonal()):
+        return "has no mass off its diagonal"
+    return None
+
+
 class Encore:
     """Template estimation and registration on a pair of spherical meshes.
 
@@ -1048,10 +1115,16 @@ class Encore:
         is zeroed here too, before the normalization, so that a raw array
         with a nonzero diagonal starts :meth:`register` at the cost its trial
         steps are measured by; left in, it sat in every residual and no step
-        could ever be accepted. The input is not modified.
+        could ever be accepted. A density with nothing off its diagonal then
+        has no mass to normalize and is refused. The input is not modified.
         """
         density = _without_diagonal(density)
-        return np.sqrt(density / (density * self.area_product).sum())
+        mass = (density * self.area_product).sum()
+        if not np.isfinite(mass):
+            raise ValueError("the density is not finite")
+        if mass <= 0:
+            raise ValueError("the density has no mass off its diagonal")
+        return np.sqrt(density / mass)
 
     def template(self, densities, iterations: int = 10):
         """Karcher median of the square-root densities."""
@@ -1176,7 +1249,7 @@ class Encore:
         return result, lh_warp, rh_warp, cost
 
 
-def pole_rotation(vertices, tolerance: float = 1e-3) -> np.ndarray:
+def pole_rotation(vertices, tolerance: float = AXIS_CLEARANCE) -> np.ndarray:
     """The rotation :func:`rotate_off_poles` applies, as a ``3 x 3`` matrix.
 
     ``rotate_off_poles(v) == v @ pole_rotation(v).T``, so ``rotated @ R`` maps
@@ -1186,21 +1259,26 @@ def pole_rotation(vertices, tolerance: float = 1e-3) -> np.ndarray:
     for angle in (0.0, 0.3, 0.7, 1.1, 1.7):
         cos, sin = np.cos(angle), np.sin(angle)
         rotation = np.array([[cos, 0.0, sin], [0.0, 1.0, 0.0], [-sin, 0.0, cos]])
-        candidate = vertices @ rotation.T
-        if np.sin(np.arccos(np.clip(candidate[:, 2], -1.0, 1.0))).min() > tolerance:
+        # measured as SphericalGrid.pole_vertices measures it, on the unit sphere
+        theta, _ = cart_to_sphere(normalize_rows(vertices @ rotation.T))
+        if np.sin(theta).min() > tolerance:
             return rotation
     raise RuntimeError("could not rotate the mesh clear of the coordinate poles")
 
 
-def rotate_off_poles(vertices, tolerance: float = 1e-3):
-    """Rotate a spherical mesh so that no vertex lies on the coordinate axis.
+def rotate_off_poles(vertices, tolerance: float = AXIS_CLEARANCE):
+    """Rotate a spherical mesh so that every vertex clears the coordinate axis.
 
     The ico4 grid puts four vertices exactly at the poles, where the
     ``(theta, phi)`` parametrization is singular and the Jacobian collapses to
-    zero. A rotation is a change of coordinates and nothing else: areas,
-    distances and the connectivity are untouched, and the vertex order is
-    unchanged. The angles below are irrational multiples of the icosahedral
-    symmetry, so none of them can bring a vertex back onto the axis.
+    zero, and within about a finite-difference step of them it is unreliable
+    (:meth:`SphericalGrid.pole_vertices`). After the rotation every vertex has
+    ``sin(theta)`` above ``tolerance``, by default :data:`AXIS_CLEARANCE`, the
+    clearance :func:`align` checks. A rotation is a change of coordinates and
+    nothing else: areas, distances and the connectivity are untouched, and
+    the vertex order is unchanged. The angles below are irrational multiples
+    of the icosahedral symmetry, so none of them can bring a vertex back onto
+    the axis.
     """
     vertices = np.asarray(vertices, dtype=np.float64)
     return vertices @ pole_rotation(vertices, tolerance).T
@@ -1311,13 +1389,15 @@ def align(
         before zeroing its diagonal, so it falls short of unit norm by the
         mass interpolation put there: 0.02 to 0.2% on ico4. And the
         finite-difference Jacobian is left as the scheme returns it, 0.9965
-        on the identity on ico4 rather than 1, so every accepted step takes
-        about 0.7% of a density's mass; the default divides that bias out
-        (:class:`SphericalWarp`). Grids passed in through ``grids`` keep the
-        setting they were built with. A step that folds a face is refused in
-        both modes; the reference's Jacobian is an absolute value and cannot
-        see one, but it only ever folds at step lengths far above the
-        default.
+        on the identity on ico4 rather than 1. The registration renormalizes
+        every density it transports, but the final warps' Jacobians are
+        applied once, at the end, to give :attr:`Alignment.aligned`, which
+        then comes out about 0.7% short of its mass; the default divides
+        that bias out (:class:`SphericalWarp`). Grids passed in through
+        ``grids`` keep the setting they were built with. A step that folds a
+        face is refused in both modes; the reference's Jacobian is an
+        absolute value and cannot see one, but it only ever folds at step
+        lengths far above the default.
 
     Returns
     -------
@@ -1343,9 +1423,13 @@ def align(
     shapes = {d.shape for d in densities}
     if len(shapes) != 1:
         raise ValueError(f"connectomes are on different grids: {sorted(shapes)}")
+    shape = densities[0].shape
+    if len(shape) != 2 or shape[0] != shape[1]:
+        raise ValueError(f"connectomes are {shape}, not square matrices")
     for index, density in enumerate(densities):
-        if not np.isfinite(density).all() or density.min() < 0 or density.sum() <= 0:
-            raise ValueError(f"connectome {index} is not a nonnegative density with positive mass")
+        problem = _density_problem(density)
+        if problem:
+            raise ValueError(f"connectome {index} {problem}")
 
     if grids is None:
         (lh_grid, rh_grid), rotations = _hemisphere_grids(
@@ -1358,10 +1442,10 @@ def align(
         poles = grid.pole_vertices()
         if poles.size:
             raise ValueError(
-                f"the {name} grid has {poles.size} vertices on the coordinate "
-                f"axis ({poles[:4].tolist()}...), where the Jacobian is "
-                "identically zero and those vertices would be dropped. Pass "
-                "vertices through sbci.alignment.rotate_off_poles first."
+                f"the {name} grid has {poles.size} vertices on or within {AXIS_CLEARANCE:g} "
+                f"of the coordinate axis ({poles[:4].tolist()}...), where the Jacobian is "
+                "zero or unreliable. Pass the vertices through "
+                "sbci.alignment.rotate_off_poles first."
             )
     expected = lh_grid.n_vertices + rh_grid.n_vertices
     if densities[0].shape != (expected, expected):
@@ -1389,10 +1473,9 @@ def align(
             raise ValueError(
                 f"the template connectome is {fixed.shape}, not {expected} x {expected}"
             )
-        if not np.isfinite(fixed).all() or fixed.min() < 0 or fixed.sum() <= 0:
-            raise ValueError(
-                "the template connectome is not a nonnegative density with positive mass"
-            )
+        problem = _density_problem(fixed)
+        if problem:
+            raise ValueError(f"the template connectome {problem}")
         template = encore.root(fixed)
     template = np.asarray(template, dtype=np.float64)
     if template.shape != (expected, expected):

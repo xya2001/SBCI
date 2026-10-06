@@ -608,8 +608,9 @@ Four things to know before trusting the numbers:
   large, and the registration gradient uses it; its transported square-root
   density is normalized before its diagonal is zeroed, so the cost is
   evaluated on vectors 0.02% to 0.2% short of unit norm; its finite-difference
-  Jacobian of the identity warp is 0.9965 rather than 1, so a transported
-  density loses 0.7% of its mass; and it accepts a warp that folds the mesh
+  Jacobian of the identity warp is 0.9965 rather than 1, so the aligned
+  density loses 0.7% of its mass (once, when the final warp is applied); and
+  it accepts a warp that folds the mesh
   whenever the cost falls. The port fixes the four; `reference=True` restores
   the first three for comparison with the MATLAB run (a fold is never
   accepted). PORTING.md items 4, 8 and 9 have the sizes.
@@ -618,7 +619,9 @@ Four things to know before trusting the numbers:
   coordinate axis gets a Jacobian of exactly zero and loses its whole row and
   column. The ico4 grid has four such vertices, so `align()` rotates the mesh
   clear of them -- a change of coordinates and nothing else. It refuses a grid
-  you supply yourself that still has poles.
+  you supply yourself with a vertex on the axis or within 0.001 of it (in
+  `sin(theta)`), where the Jacobian is unreliable too;
+  `sbci.alignment.rotate_off_poles` clears it.
 - **`delta` defaults to 1e-5, not the reference's 1e-10.** A central difference
   at 1e-10 loses six of sixteen digits; the reference's own derivative moves by
   2% of its range between adjacent step sizes. Pass `delta=1e-10` to reproduce
@@ -691,9 +694,10 @@ seconds per 100,000 streamlines rather than minutes. Six things to know:
   large (PORTING.md item 4); and its Karcher median collapses onto the
   subject it starts from whenever that subject's square-root density rounds
   to a squared norm below 1, which float32 endpoint weights make routine
-  (PORTING.md item 9). The port also smooths the velocity field as vectors
-  in space rather than as two frame components, which the reference's
-  component-wise smoothing distorts near the coordinate poles, and it holds
+  (PORTING.md item 9). The port also smooths the velocity field with the
+  connection Laplacian, carrying each neighbour's vector to the vertex by
+  parallel transport, where the reference smooths the two frame components
+  as scalars, which distorts the field near the coordinate poles; and it holds
   the rotation of the rigid initialization exactly, outside the velocity
   field, where the reference holds it as the field itself: realized 1.6
   degrees off at 150 degrees and eroded by every later smoothing.
@@ -809,7 +813,14 @@ sbci.load(files[0]).plot(effect, mesh="fsaverage", engine="pyvista")
 
 `terms=[1]` tests the score column only: column 0 is the intercept the test
 adds, and columns 2 to 4, sex, the age band and the streamline count, stay in
-the model as nuisance; `terms=[2]` tests sex the same way. `groups=` makes the
+the model as nuisance; `terms=[2]` tests sex the same way. The intercept is
+always column 0, so a design may not carry a constant column of its own: a
+design built with a column of ones, as statsmodels' `add_constant` makes it,
+needs `add_intercept=False`, and a covariate that does not vary in the
+subjects at hand -- sex within a single-sex subset -- has to be dropped. Both
+are refused in words rather than guessed at; until October 2026 a constant
+column was taken as the intercept, which renumbered the columns of a subset
+whose covariate happened to be constant. `groups=` makes the
 families the units of the test (*Testing scores against a covariate*, below).
 On the 943 with a score, no component of the twenty tracks fluid intelligence once the families
 are clusters: the closest, component 13, has r = 0.11 and adjusted p 0.064.

@@ -166,8 +166,9 @@ class ContinuousConnectome:
             row and column (zero under ``"mass"``).
 
         Vertices outside the cortical mask contribute neither connectivity nor
-        area, so an atlas that labels the medial wall (``PALS_B12_Lobes``) is
-        aggregated over cortex only.
+        area, so an atlas whose regions reach into the medial wall -- the
+        PALS-B12 lobes cover 89 of its 439 vertices -- is aggregated over
+        cortex only.
 
         Examples
         --------

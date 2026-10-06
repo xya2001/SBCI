@@ -122,7 +122,7 @@ and `tools/build_hcp_fc.py` build them for anyone with HCP access, and
 | [docs/RESULTS.md](docs/RESULTS.md) | what the methods do on real data: the figures, and the analysis of the 946 young adults |
 | [PORTING.md](PORTING.md) | how each of the seven MATLAB methods was ported and verified, and the errors found in the references |
 | [VERIFICATION.md](VERIFICATION.md) | how to check every claim yourself, in tiers from five minutes to a MATLAB licence |
-| [docs/review-2026-10-05.md](docs/review-2026-10-05.md) | the two independent implementation reviews of October 2026: what they found, which errors were the MATLAB references' own, and what was done about each |
+| [docs/review-2026-10-05.md](docs/review-2026-10-05.md) | the independent implementation reviews of October 2026: what they found, which errors were the MATLAB references' own, and what was done about each |
 | [SPEC_QUESTIONS.md](SPEC_QUESTIONS.md) | the file-format decisions, answered and open |
 | [BLUEPRINT.md](BLUEPRINT.md) | what the package is, what "finished" means, and the decisions it waits on |
 | [scripts/](scripts/README.md), [tools/](tools/README.md), [docs/figures/](docs/figures/README.md) | worked scripts (with the lab's Longleaf paths), the builders of the bundled data, and the figures |

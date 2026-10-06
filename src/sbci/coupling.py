@@ -71,8 +71,19 @@ def _usable(sc: np.ndarray, fc: np.ndarray) -> np.ndarray:
     put a NaN into every other profile's sum and make the whole map NaN. It is
     dropped like a constant profile -- the others are then compared over the
     vertices that remain -- and gets NaN in its own slot.
+
+    It is dropped first, and constancy judged over what remains: a NaN equals
+    nothing, so a profile constant but for the empty region's NaN (a region
+    with no SC) would pass for varying, be kept, and enter every other
+    region's comparison. An empty region then changes nothing for the others.
     """
-    return _nonconstant(fc) & _nonconstant(sc) & ~_nan_throughout(fc) & ~_nan_throughout(sc)
+    present = ~_nan_throughout(fc) & ~_nan_throughout(sc)
+    if present.all():
+        return _nonconstant(fc) & _nonconstant(sc)
+    block = np.ix_(present, present)
+    usable = np.zeros(sc.shape[0], dtype=bool)
+    usable[present] = _nonconstant(fc[block]) & _nonconstant(sc[block])
+    return usable
 
 
 def _prepare(sc, fc, triangular: bool, drop_diagonal: bool):

@@ -895,12 +895,20 @@ def rotation_about_x(degrees):
     )
 
 
+def projected_smoothing(warp, velocity):
+    """The smoothing of the second review: 3-vectors per Cartesian component, projected back."""
+    lifted = warp.e1 * velocity[:, :1] + warp.e2 * velocity[:, 1:]
+    lifted = lifted - warp.viscosity * (warp._laplacian @ lifted)
+    return np.stack([(lifted * warp.e1).sum(1), (lifted * warp.e2).sum(1)], axis=1)
+
+
 def test_smoothing_leaves_a_rotation_alone_at_the_coordinate_poles(bundled_left):
     """Item 16: ten smoothing passes of a 20-degree rotation moved the polar vertices 9 degrees.
 
-    What remains is the smoothing itself, 5% of the Laplacian of a degree-1
-    field ten times over, which shrinks the rotation by half a percent
-    everywhere alike.
+    What remains is the smoothing itself: the connection Laplacian maps a
+    rotation's field to itself scaled by the vertex area, so ten passes of 5%
+    shrink the rotation by a quarter of a percent everywhere alike (half a
+    percent with the projected 3-vectors of the second review).
     """
     grid = bundled_left
     poles = np.flatnonzero(np.abs(grid.vertices[:, 2]) > 1 - 1e-9)
@@ -917,26 +925,66 @@ def test_smoothing_leaves_a_rotation_alone_at_the_coordinate_poles(bundled_left)
             assert warp.compose(np.zeros((grid.n_vertices, 2)), strict_upstream=strict)
         drift[strict] = np.degrees(np.arccos(np.clip((warp.vertices * start).sum(1), -1, 1)))
     assert drift[True][poles].min() > 5.0
-    assert drift[False][poles].max() < 0.12
+    assert drift[False][poles].max() < 0.06  # 0.046; the projected 3-vectors gave 0.092
     assert drift[False][poles].max() < 1.5 * drift[False].mean()
 
 
 def test_both_smoothings_agree_where_the_frame_turns_slowly(bundled_left):
-    """Within 30 degrees of the coordinate equator the two differ by under 1e-3 of the field."""
+    """Within 10 degrees of the coordinate equator the frame is nearly parallel: 1e-4 apart.
+
+    The projected 3-vectors of the second review differed there by their
+    curvature term, 5% of the field weighted by the vertex area (2.7e-4).
+    """
     grid = bundled_left
     warp = StationaryWarp(grid)
-    omega = np.radians(20.0) * np.array([1.0, 0.0, 0.0])
-    field = np.cross(np.broadcast_to(omega, grid.vertices.shape), grid.vertices)
-    velocity = np.stack([(field * grid.e1).sum(1), (field * grid.e2).sum(1)], axis=1)
-    ambient = warp._smooth(velocity)
+    velocity = rotational_velocity(warp, rotation_about_x(20.0))
+    smoothed = warp._smooth(velocity)
     componentwise = warp._smooth(velocity, strict_upstream=True)
     scale = np.linalg.norm(velocity, axis=1).max()
-    difference = np.linalg.norm(ambient - componentwise, axis=1) / scale
-    away = np.abs(grid.vertices[:, 2]) < 0.5
-    assert difference[away].max() < 1e-3
+    difference = np.linalg.norm(smoothed - componentwise, axis=1) / scale
+    projected = np.linalg.norm(projected_smoothing(warp, velocity) - componentwise, axis=1) / scale
+    z = np.abs(grid.vertices[:, 2])
+    equator = z < np.sin(np.radians(10.0))
+    assert difference[equator].max() < 1e-4  # 8.3e-5
+    assert projected[equator].max() > 2e-4
+    # further out the reference's own frame error grows to the size of that term
+    assert difference[z < 0.5].max() < 4e-4  # 2.7e-4
     # 5% of the Laplacian barely touches a degree-1 field; the poles are where they part
-    assert np.linalg.norm(ambient - velocity, axis=1).max() < 1e-3 * scale
-    assert difference[np.abs(grid.vertices[:, 2]) > 0.99].max() > 0.05
+    assert np.linalg.norm(smoothed - velocity, axis=1).max() < 1e-3 * scale
+    assert difference[z > 0.99].max() > 0.05
+
+
+def test_smoothing_damps_a_rotation_at_the_same_rate_about_any_axis(bundled_left):
+    """The connection Laplacian maps a rotation's field to itself scaled by the vertex area.
+
+    So 100 passes of 5% keep exp(-5 * 4 pi / 2562) = 97.6% of a rotation
+    about any axis. The projected 3-vectors of the second review add the
+    field once more, the curvature term the third review found, and damp it
+    twice as fast (95.2%); the reference's component-wise smoothing keeps
+    98.9% about the coordinate z axis but 90.5% about a tilted one (item 16).
+    """
+    from scipy.spatial.transform import Rotation
+
+    grid = bundled_left
+    warp, reference = StationaryWarp(grid), StationaryWarp(grid, strict_upstream=True)
+    smoothings = {
+        "connection": warp._smooth,
+        "projected": lambda velocity: projected_smoothing(warp, velocity),
+        "reference": lambda velocity: reference._smooth(velocity, strict_upstream=True),
+    }
+    kept = {}
+    for axis, direction in (("z", [0.0, 0.0, 1.0]), ("tilted", [0.2, 0.9, 0.4])):
+        omega = np.radians(20.0) * np.asarray(direction) / np.linalg.norm(direction)
+        velocity = rotational_velocity(warp, Rotation.from_rotvec(omega).as_matrix())
+        for name, smooth in smoothings.items():
+            smoothed = velocity
+            for _ in range(100):
+                smoothed = smooth(smoothed)
+            kept[axis, name] = (smoothed * velocity).sum() / (velocity**2).sum()
+    assert kept["z", "connection"] == pytest.approx(kept["tilted", "connection"], rel=5e-3)
+    assert kept["z", "connection"] == pytest.approx(0.976, abs=1e-3)
+    assert kept["z", "projected"] == pytest.approx(kept["z", "connection"] ** 2, abs=1e-3)
+    assert kept["z", "reference"] > 0.985 and kept["tilted", "reference"] < 0.91
 
 
 def test_save_returns_the_path_it_wrote(grid, tmp_path):
@@ -1047,3 +1095,61 @@ def test_an_endpoint_warp_keeps_its_rigid_part_through_save_and_load(grid, tmp_p
     older = {k: v for k, v in exported.__dict__.items() if not k.endswith("_rigid")}
     np.savez_compressed(tmp_path / "older.npz", **older)
     np.testing.assert_array_equal(EndpointWarp.load(tmp_path / "older.npz").lh_rigid, np.eye(3))
+
+
+# --- the third review: an empty subject, and the template's memory -----------------
+
+
+def test_a_subject_without_streamlines_is_refused_by_its_index(
+    grid, connectome, kernel, monkeypatch
+):
+    """Its density is zero everywhere: normalizing it was 0/0, and the cohort came back NaN."""
+    k, dk = kernel
+    nothing = np.zeros((0, 3))
+    empty = EndpointConnectome.from_points(grid, grid, nothing, nothing, [], [])
+    assert not empty.q_transform(k).any()
+    for strict in (False, True):
+        engine = ConSEAL(grid, grid, strict_upstream=strict)
+        with pytest.raises(ValueError, match="subject 1 has no streamlines"):
+            engine.template([connectome, empty], k)
+    engine = ConSEAL(grid, grid, max_iterations=1)
+    with pytest.raises(ValueError, match="moving connectome has no streamlines"):
+        engine.register(connectome, empty, k, dk)
+    with pytest.raises(ValueError, match="fixed connectome has no streamlines"):
+        engine.register(empty, connectome, k, dk)
+    with pytest.raises(ValueError, match="fixed connectome has no streamlines"):
+        engine.register(np.zeros((2 * grid.n_vertices,) * 2), connectome, k, dk)
+
+    def no_kernel(*args, **kwargs):
+        raise AssertionError("the kernel was built before the empty subject was refused")
+
+    monkeypatch.setattr(HeatKernelBuilder, "compute", no_kernel)
+    settings = {"sigma": 0.05, "kernel_degree": 12, "grids": (grid, grid)}
+    with pytest.raises(ValueError, match="subject 1 has no streamlines"):
+        endpoints_align([connectome, empty], **settings)
+    with pytest.raises(ValueError, match="template connectome has no streamlines"):
+        endpoints_align([connectome], template=empty, **settings)
+
+
+def test_the_template_holds_the_cohort_once(grid):
+    """Normalizing into a second list held every density twice: 21 GB for 50 ico4 subjects.
+
+    Each fresh density is now divided in place, which gives the same values,
+    so the median is that of the normalized densities. The peak is one list
+    and a few working arrays (1.22 lists here; 2.00 before).
+    """
+    import tracemalloc
+
+    rng = np.random.default_rng(8)
+    densities = [rng.random((200, 200)) + 0.5 for _ in range(32)]
+    one_list = sum(q.nbytes for q in densities)
+    engine = ConSEAL(grid, grid)
+    tracemalloc.start()
+    try:
+        template = engine.template([_Density(q) for q in densities], None, iterations=5)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert one_list < peak < 1.5 * one_list
+    normalized = [_Density(q / np.sqrt((q**2).sum())) for q in densities]
+    np.testing.assert_allclose(template, engine.template(normalized, None, iterations=5))

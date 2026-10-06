@@ -389,8 +389,10 @@ through the warp loses that vertex's entire row and column.
 The ico4 grid this package ships has **four such vertices** -- 0 and 11 on the
 left, 2562 and 2573 on the right -- so a naive run would have silently dropped
 them. The sphere has no distinguished axis, so `rotate_off_poles()` turns the
-mesh before the frames are built; `align()` refuses a grid that still has
-poles. Worth reporting upstream: the reference's own demo grid happens to avoid
+mesh before the frames are built; `align()` refuses a grid with a vertex on
+the axis or within 1e-3 of it (in `sin(theta)`), where the finite differences
+are unreliable too: a vertex 1e-5 off the axis read 1.27 for a 0.5-degree
+rotation (item 10). Worth reporting upstream: the reference's own demo grid happens to avoid
 the poles, which is why this has not bitten anyone.
 
 ### Four more, found by the reviews of 5 October 2026
@@ -400,8 +402,8 @@ m = 0 term, the transported square-root density is normalized before its
 diagonal is zeroed, a warp that folds the mesh is accepted whenever the cost
 falls, and the finite-difference Jacobian of the identity warp is 0.9965
 rather than 1 on ico4 (0.805 on a 42-vertex icosphere: a discretization bias
-of the scheme, which shrinks under refinement), so a transported density
-loses 0.7% of its mass at every accepted step. All four are the reference's,
+of the scheme, which shrinks under refinement), so the aligned density lost
+0.7% of its mass, once, when the final warp was applied to it. All four are the reference's,
 reproduced here to rounding until the reviews; items 8 and 9 have the sizes.
 The port now corrects them by default -- the Jacobian is calibrated by the
 identity's own value, so a zero step gives exactly 1 and the transported mass
@@ -1734,9 +1736,9 @@ item 2 below) holds for a different reason than the one given.
 | # | Finding | Verdict | Fixed by | Size |
 | --- | --- | --- | --- | --- |
 | 1 | ConSEAL's Karcher median collapses onto its starting subject | **confirmed**: the square-root densities are not renormalized, float32 barycentric weights put a subject's squared norm 1e-10 off 1, and when the starting subject's is below 1 the `1e-14` snap misses it, that subject's Weiszfeld weight is about 7e4 and the first step is already shorter than 0.005 (**the reference's arithmetic**, item 7 docstring item 15) | unit-norm densities and a 1e-6 radian coincidence guard; `strict_upstream=True` keeps the reference's | on the eleven released subjects the median started from sub-212116, whose squared norm rounds 1.7e-10 below 1, and stopped 0.001 degrees from it and 24-27 from the rest; it now sits 0.43 degrees from their mean and 16.6-20.2 from every subject. The synthetic cohort that collapsed at three degrees of spread had its starting subject 1.4e-10 below 1, the one that did not at two degrees 5.1e-10 above |
-| 2 | ConSEAL's default grids have four vertices on the poles | **partly**: the vertex at the north pole moves 2.0 degrees of a 4-degree shift of the endpoints around it, but the endpoints, carried by their triangles, land within 0.09 degrees of the truth either way; the cause is the 5% velocity smoothing, which averages the two frame components as scalars across neighbours whose frames turn 72 degrees around a pole -- after a 20-degree `rotate()`, ten zero-size steps move the two most polar vertices 8.8 degrees and one 11.3, on the unrotated grid and on one rotated off the poles alike (7.5 and 9.9); the reference smooths the same way (docstring item 16) | the velocity field is smoothed as ambient 3-vectors and projected back onto the tangent planes; `strict_upstream=True` keeps the component-wise smoothing; the grids stay in the file's frame, since a grid rotated off the poles moves the same vertex 3.7 degrees and lands its endpoints worse (0.10 against 0.035) | the ten-step drift at the poles falls to 0.09 degrees (the 5% smoothing of a degree-1 field, as everywhere else); the pole vertex follows 3.45 of the 4 degrees and the endpoints around it land 0.035 degrees from the truth (0.085 before); away from the poles the two smoothings agree to 3e-4 of the field within 30 degrees of the equator, and a two-subject registration moves by 0.003 degrees per endpoint |
+| 2 | ConSEAL's default grids have four vertices on the poles | **partly**: the vertex at the north pole moves 2.0 degrees of a 4-degree shift of the endpoints around it, but the endpoints, carried by their triangles, land within 0.09 degrees of the truth either way; the cause is the 5% velocity smoothing, which averages the two frame components as scalars across neighbours whose frames turn 72 degrees around a pole -- after a 20-degree `rotate()`, ten zero-size steps move the two most polar vertices 8.8 degrees and one 11.3, on the unrotated grid and on one rotated off the poles alike (7.5 and 9.9); the reference smooths the same way (docstring item 16) | the velocity field is smoothed as vectors: first as ambient 3-vectors projected back onto the tangent planes, and since the third list (item 10) with the connection Laplacian, which parallel-transports each neighbour's vector to the vertex; `strict_upstream=True` keeps the component-wise smoothing; the grids stay in the file's frame, since a grid rotated off the poles moves the same vertex 3.7 degrees and lands its endpoints worse (0.10 against 0.035) | the ten-step drift at the poles falls to 0.09 degrees with the ambient smoothing and 0.046 with the connection Laplacian (the 5% smoothing of a degree-1 field, as everywhere else); the pole vertex follows 3.45 of the 4 degrees and the endpoints around it land 0.035 degrees from the truth (0.085 before); within 10 degrees of the coordinate equator the connection Laplacian agrees with the reference's smoothing to 1e-4 of the field |
 | 3 | `local_test(terms=...)` tests a different column when a covariate is constant | **confirmed** in the code: the intercept was not prepended when any column was constant, so the indices shifted | the intercept is always column 0, so a constant covariate is collinear with it and testing it is refused as such (and `groups=`, which needs full column rank, now refuses such a design instead of running on the shifted one); boolean, duplicate and empty `terms` are refused | an all-female stratum's `terms=[1]` tested the intercept |
-| 4 | the FC exchange file has zeros next to its diagonal | **confirmed** by construction: the zero ico4 FC diagonal spreads to every pair of fsLR vertices in one cell | the FC diagonal is set to the self-correlation 1 before resampling; the sidecar says so | 12.7 fsLR vertices to an ico4 cell, so most pairs of neighbours share one and read 0 |
+| 4 | the FC exchange file has zeros next to its diagonal | **confirmed** by construction: the zero ico4 FC diagonal spreads to every pair of fsLR vertices in one cell | the FC diagonal is set to the self-correlation 1 before resampling, on cortex only since the third list (the medial wall, for which FC has no data, keeps its 0); the sidecar says so | 12.7 fsLR vertices to an ico4 cell, so most pairs of neighbours share one and read 0 |
 | 5 | sidecar files overwrite each other | **confirmed**: the name was cut at the first dot | only the `.dconn.nii` suffix is stripped | `sub-01.ses-1_sc` and `sub-01.ses-2_fc` both wrote `sub-01.json` |
 | 6 | three PALS atlases keep the medial wall as two regions | **confirmed**: `MEDIAL.WALL`, with a dot, slipped past the background pattern | pattern widened in `tools/convert_atlases.py`, the three atlases rebuilt from the toolkit's files | Lobes 12 -> 10 regions (394 wall vertices now unassigned), Brodmann 82 -> 80, Visuotopic 25 -> 23; 11,825 bundled regions |
 | 7 | `surface="sphere"` plots show the wrong side | **confirmed** from the coordinates: the bundled sphere is the pipeline's frame, its x and y anti-correlated with the inflated surface's (-0.97, -0.95; z +0.92), a half turn about z | the plotting negates x and y of the sphere it draws; the stored sphere, which every grid and warp is built on, is untouched | "lateral" rendered the medial view |
@@ -1769,25 +1771,26 @@ flow follows a great circle where a rotation moves a point along a small
 circle, an error six squarings double each time (predicted `alpha^2 sin(psi)
 cos(psi) / 128`, 93-96% of the measured maxima). Measuring it found a second
 effect, larger: every later step smooths the field by 5%, rotation and all,
-so a stored 150-degree rotation erodes to 142.6 over the 100 iterations of a
-registration (7.5 degrees at most from where it belongs), which the gradient
-has to keep restoring. More squarings would only have narrowed the first effect, and
+so a stored 150-degree rotation erodes to 146.2 over the 100 iterations of a
+registration (3.9 degrees at most from where it belongs; 142.6 and 7.5 under
+the ambient smoothing the port had before item 10), which the gradient has to
+keep restoring. More squarings would only have narrowed the first effect, and
 would have moved every small-field result with it. The port instead holds a
 rotation exactly, outside the velocity field, and the warp is the field's
 flow after it (the module docstring's item 17): `rotate` is exact to rounding
 at every angle, nothing erodes, a 5-degree rotation composed after a
 150-degree one lands within 0.007 degrees of their product (0.003 of it the
 5-degree flow's own error), and inverting such a warp returns every vertex
-within 0.007 degrees. A warp without a rotation -- every registration without
-`init_rotation=True` -- is computed exactly as before, bit for bit.
+within 0.007 degrees. The rigid part changes nothing for a warp without one,
+which is every registration without `init_rotation=True`.
 `tests/reference/rotation_probe.py` measures all of this, and what it costs a
 registration: a synthetic subject turned by 150 degrees and handed the exact
 inverse rotation, as a perfect rigid search would find it, started with its
 endpoints 0.98 degrees from the truth on average (1.60 at most) when the
-rotation was a field, and thirty steps left them at 0.81 (1.73) -- the
-registration cannot remove an error it keeps re-creating -- where the
-rotation held exactly leaves them at 0.001; at 60 degrees, 0.17 and 0.13
-against 0.001. `strict_upstream=True` keeps the reference's arithmetic.
+rotation was a field, and thirty steps left them at 0.44 (1.85; 0.81 under
+the ambient smoothing) -- the registration cannot remove an error it keeps
+re-creating -- where the rotation held exactly leaves them at 0.001; at 60
+degrees, 0.17 and 0.089 against 0.001. `strict_upstream=True` keeps the reference's arithmetic.
 
 ### What the corrections change on the released subjects
 
@@ -1819,10 +1822,56 @@ and set against the first review's recording on the same CPU type with
   rises from 0.716 to 0.784 (0.785 onto the mean, before the corrections),
   and ENCORE's half holds at 0.761.
 
+## 10. The third list, 6 October 2026 -- A RE-CHECK OF THE FIRST TWO, AND OF THE FIXES
+
+A third list re-ran the earlier findings against 64722e6 and audited what
+that commit changed. Each item was checked with a probe or against the code
+before anything changed; all hold, one in part.
+
+| # | Finding | Verdict | Fixed by | Size |
+| --- | --- | --- | --- | --- |
+| 1 | the ConSEAL pole vertices only partly fixed | **confirmed**: the tangent basis divides the phi term by `max(sin(theta), 1e-5)` -- the reference's clamp (`Ylm_2nd_derivative.m`, whose own comment asks why) -- so at a vertex exactly on the axis the m = 1 sine fields and their curl partners are zero, 30 of the 510 fields, while their cosine partners are full size; the second list's smoothing hid it | the limit of `P_l^m / sin(theta)` near the axis, `(dP/dtheta) / cos(theta)` for m = 1 and 0 above; `reference=True` keeps the clamp. Away from the poles the fields change only by their normalization, by 0.05% to 0.5% | with `viscosity=0` and endpoints shifted 4 degrees around the pole, the pole vertex now moves 3.54 degrees among neighbours moving 2.66 to 3.86; the reference's basis leaves it at 2.07 among 2.22 to 3.75 (the reviewer's setup: 2.84 against 4.60) |
+| 2 | `local_test(terms=)` tests another column when the design has its own intercept | **confirmed**: since 64722e6 the intercept is always prepended, so `[ones, age, sex]` with `terms=[2]` tested age, its p-value statsmodels' age p-value exactly | a constant column, or a column of zeros, is refused when an intercept is prepended, the message naming both remedies (`add_intercept=False`, or drop the covariate); the docstring and USAGE.md carry the migration note | -- |
+| 3 | coupling wrong on atlases with empty regions | **confirmed**: the NaN row of an empty region made a constant profile (a region with no SC) look varying, so it stayed in every correlation | empty regions dropped before the constancy test | every value moved (-0.021 to -0.258 in my reproduction); now bit for bit as without the empty region, for all three forms; 260 of 262 captured outputs unchanged, the two that changed the bug itself |
+| 4 | a ConSEAL subject with no streamlines makes the cohort NaN; ENCORE likewise for a density whose mass is all on its diagonal | **confirmed** | refused in words, by index | -- |
+| 5 | ConSEAL's template held two copies of the cohort | **confirmed** | each density normalized in place | peak 2.0 cohorts' worth to 1.2 to 1.4 (about 12 GB for 50 ico4 subjects) |
+| 6 | the FC export set the diagonal to 1 on the medial wall | **confirmed** | cortex only | 14,871 pairs of medial-wall fsLR vertices had read exactly 1 |
+| 7 | the Jacobian calibration beside the axis | **confirmed, smaller than reported**: `align()` let through a vertex 1e-5 rad off the axis, where the calibrated Jacobian of a 0.5-degree rotation read 1.27 (the reviewer saw 920 closer still) | `align()` refuses vertices within the 1e-3 that `rotate_off_poles` clears, and the calibration ignores an identity value below 0.5 | 1.0001 at 1e-3 |
+| 8 | the vector smoothing shrinks rotations twice as fast as the reference | **partly**: twice as fast only about the coordinate axis -- 95.2% of a rotation field left after 100 smoothings against the reference's 98.9% -- while about a tilted axis the reference shrinks it faster (90.5%), its rate depending on the frame (item 16 of the ConSEAL docstring). The ambient smoothing's own rate came from a curvature term: projecting a neighbour's vector instead of transporting it adds the sphere's Ricci curvature, doubling the damping of rotation fields | the connection Laplacian, which parallel-transports each neighbour's vector | 97.6% left for every axis, exp(-5 * 4 pi / 2562); within 10 degrees of the coordinate equator it agrees with the reference's smoothing to 1e-4 of the field, 3 to 20 times closer than the ambient one |
+| 9 | stale documents | **confirmed** | `atlas.py` (PALS_B12_Lobes is ten lobes, 394 vertices unlabelled), and the 0.7% of item 9, which is lost once, when the final warp is applied, not at every step | -- |
+
+And the small ones: the CIFTI export checks the file name and validates the
+metadata before the 16.9 GB resample; `fetch_cohort(modalities="sc")` takes
+the string as one modality; `local_test(groups=)` refuses missing family
+labels, which `np.unique` had made one family (the text strings `"NA"` and
+`"nan"` are labels like any other); the HDF5 reader splits the endpoints at
+the file's own vertex count. Two checks went further than asked: `align()`
+refuses a non-square input, and `pole_rotation` measures `sin(theta)` on
+normalized rows, which a sphere of radius other than one had defeated.
+
+### What the corrections change on the released subjects
+
+Recorded with `tests/reference/record_outputs.py` and set against the second
+list's recording with `tests/reference/compare_outputs.py`, key by key. The
+job landed on an Intel Gold 6140 rather than the AMD EPYC 9654 of the
+earlier recording; the two are in the same AVX-512 group (VERIFICATION.md,
+Tier 3) and differ here by one unit in the last place in `reduce`'s explained
+fractions and the projections, nowhere else.
+
+- **ENCORE**, by default and under `reference=True`, and every method
+  outside the two aligners -- parcellation, the three couplings, seeding,
+  smoothing, the FPCA fit: identical, bit for bit. ENCORE's grids are
+  rotated off the axis, so the pole basis never reaches them.
+- **ConSEAL**: the two subjects' aligned endpoints move 0.00035 degrees on
+  average and 0.06 at most, 0.005 within 10 degrees of the coordinate poles,
+  where the corrected basis acts, and 0.0003 elsewhere. The run on the
+  reference basis, which isolates the connection-Laplacian smoothing, moves
+  them 0.00006 degrees on average and 0.002 at most.
+
 ## Status
 
-All seven ports are done and verified, and the two reviews of 5 October 2026
-(items 8 and 9) have been answered in full; what is left is under each
-item's *Still open*. They were done in the order 3, 1, 2, 5, 4, 6, 7: parcellation
+All seven ports are done and verified, and the three reviews of 5 and 6
+October 2026 (items 8 to 10) have been answered in full; what is left is
+under each item's *Still open*. They were done in the order 3, 1, 2, 5, 4, 6, 7: parcellation
 unblocked the first notebook, kernel smoothing the WP3 speed target, and the
 two alignments came last because nothing else depends on them.
