@@ -177,6 +177,9 @@ under `/work/users/x/y/xya/`.
 (PORTING.md item 6, r = 1.000000 at full scale), FPCA (item 5), ENCORE (item 4),
 ConSEAL (item 7), and the subject download, `sbci download hcp-ya`, which
 fetches the eleven released HCP Young Adult subjects and verifies each file.
+Ahead of WP5, two notebooks run on young adults are in `notebooks/`: how far a
+continuous connectome repeats, across days and across halves of its
+streamlines, and prediction with every fit inside the training folds.
 
 ### The exchange file, as built
 

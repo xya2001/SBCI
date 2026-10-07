@@ -775,6 +775,99 @@ the choice of test is mine. It is verified against `scipy.stats` and against
 the properties the procedures are defined by, but it has not been blessed by
 anyone who wrote the method. See PORTING.md item 5.
 
+## How far it repeats: test-retest
+
+Three pieces measure it, and `notebooks/reliability.ipynb` puts them to work
+on a hundred young adults.
+
+```python
+import numpy as np
+import sbci
+from sbci.stats import icc, identification
+
+day1 = sbci.load_cohort(folder, modalities="fc", session="REST1")
+day2 = sbci.load_cohort(folder, modalities="fc", session="REST2")
+assert day1.subjects == day2.subjects        # one subject order for both days
+
+cortex = sbci.atlas.cortex_mask()
+rows, cols = np.triu_indices(cortex.size, 1)
+pairs = np.flatnonzero(cortex[rows] & cortex[cols])   # the cortical vertex pairs
+first = np.vstack([sbci.load(p).data[pairs] for p in day1.paths("fc")])
+second = np.vstack([sbci.load(p).data[pairs] for p in day2.paths("fc")])
+
+found = identification(first, second)
+found.accuracy                  # (day 1 to 2, day 2 to 1): the share whose other day is their own
+found.within - found.between    # how far a subject stands out: differential identifiability
+icc([first[:, :5000], second[:, :5000]])   # ICC(2,1) feature by feature; kind="consistency" for (3,1)
+```
+
+`identification` correlates every subject's first session with every
+subject's second and asks whether each one's own is the closest (Finn et al.,
+2015). It sums in float64 a block of features at a time, so the float32 that
+connectomes are stored in is read as it is: a hundred subjects' 11 million
+cortical pairs are 4.4 GB a day. `icc` takes `(k, n_subjects, n_features)`, or
+a list of `k` arrays, and gives `NaN` where a feature is missing or does not
+vary.
+
+SC is scanned once, but its streamlines can be split: `endpoints.take(mask)`
+keeps the streamlines a boolean mask or a list of indices picks, with their
+continuous positions, and each half smooths as a whole subject does.
+
+```python
+from sbci.connectome import ContinuousConnectome
+
+sc = sbci.load("sub-100307_sc.h5")
+count = sc.endpoints.n_streamlines
+half = np.random.default_rng(0).permutation(count) < count // 2   # a mask, True for half
+halves = [
+    ContinuousConnectome(sc.data, sc.area, sc.mask, sc.metadata, endpoints=sc.endpoints.take(keep))
+    .smooth(kernel="shk", bandwidth=0.005, mask_medial_wall=True)
+    for keep in (half, ~half)
+]
+```
+
+That measures what the finite number of streamlines costs, not a rescan: the
+two halves share the scan, the tractography and the registration, so it is an
+upper bound on test-retest reliability.
+
+On a hundred young adults (`notebooks/reliability.ipynb`) the continuous FC
+connectome picks out 100 of them from one day's FC by the other's (99 the other
+way round) and Schaefer-200 regions 97 and 96, and a subject stands further out
+from the others in the continuous connectome -- 0.375 between the correlation
+with its own other day and with another subject's, against 0.266. A single
+vertex pair is less reliable than a region pair (median ICC 0.43 against 0.59),
+and summaries are more: a vertex's FC strength repeats with an ICC of 0.61 on
+median, its coupling 0.67. Across halves of the streamlines the smoothing
+bandwidth sets the trade-off: a vertex pair's median ICC rises from 0.24 at
+0.0025 to 0.77 at 0.01 as subjects grow alike (0.40 to 0.18 between own and
+another subject's correlation), and component scores repeat at 0.995 to 0.999.
+ENCORE aligning one half of a subject's streamlines onto the other moves the
+cortex 0.11 degrees on median, against 3.07 between two subjects.
+
+## Predicting from component scores
+
+Component scores are features for a model, and everything a model learns from
+the data -- the basis and the mean it is centred on, as well as the scaling and
+the penalty -- has to be learned without the subjects it is tested on, with
+twins and siblings kept on one side of every split:
+
+```python
+for train, test in folds:                       # whole families in each fold
+    fitted = sbci.reduce([files[i] for i in train], rank=15)
+    x_train = sbci.project(fitted, [files[i] for i in train])
+    x_test = sbci.project(fitted, [files[i] for i in test])
+    ...                                         # scale, tune and fit on x_train only
+```
+
+`notebooks/prediction.ipynb` does it for sex and fluid intelligence on 300
+young adults. Two of its findings are worth knowing before a study: sex there
+is head size first (brain-mask volume and streamline count alone reach an AUC
+of 0.91, and neither connectome adds to it beyond its interval), and splitting
+families across folds raised fluid intelligence's out-of-fold r from about 0.02
+to 0.09 -- all of it leak. At rank 15 the continuous components carry less
+about sex than a PCA of the Schaefer-200 matrices (0.66 against 0.86 on their
+own); the notebook shows how much of that is the regions' transform.
+
 ## Aligning a cohort
 
 ENCORE warps each subject's two spherical surfaces so that their connectivity
