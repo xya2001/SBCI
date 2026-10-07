@@ -475,6 +475,7 @@ def fit_basis(
     explained = np.zeros(rank)
     objective = np.zeros((rank, max_outer))
     inverted_warning_given = False
+    empty_warning_given = False
 
     def refine(vector, deflation):
         """The alternating updates from ``vector``: the component, its scores and trajectory."""
@@ -542,7 +543,20 @@ def fit_basis(
             fitted = refine(vector / np.linalg.norm(vector), deflation)
         vector, score, contracted, trajectory, scale = fitted
         objective[k] = trajectory
-        if penalty is not None and not inverted_warning_given:
+        # A component the data leave nothing for -- more asked for than the cohort
+        # spans -- has a scale at rounding level; the penalty, however small, then
+        # outweighs it, which is no sign that alpha is too large.
+        negligible = k > 0 and abs(scale) <= 1e-10 * abs(scales[0])
+        if negligible and not empty_warning_given:
+            warnings.warn(
+                f"component {k}: the cohort leaves nothing for it (scale {scale:.1e}, against "
+                f"{scales[0]:.1e} for the first), so it and any after it are noise; ask for "
+                "fewer components",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            empty_warning_given = True
+        if penalty is not None and not inverted_warning_given and not negligible:
             # The trap described in the module docstring, judged on the component
             # the fit settled on: the penalty outweighs the data along it.
             roughness = alpha * float(vector @ penalty @ vector)

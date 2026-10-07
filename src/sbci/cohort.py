@@ -54,7 +54,10 @@ leave out and the reasons, which then stand in the report.
 from __future__ import annotations
 
 import csv
+import functools
 import json
+import math
+import numbers
 import os
 import re
 import warnings
@@ -114,14 +117,20 @@ MISSING = frozenset(
         "None",
         "<NA>",
         "#N/A",
+        "#N/A N/A",
         "#NA",
+        "-1.#IND",
+        "-1.#QNAN",
+        "1.#IND",
+        "1.#QNAN",
     }
 )
 """Table cells read as missing, after stripping surrounding space: pandas' defaults.
 
 Case matters, as it does to pandas: ``none`` is a value, ``None`` is missing.
 ``load_cohort(missing=...)`` adds to them, and ``keep_default_missing=False``
-reads only the markers it names."""
+reads only the markers it names. A marker that reads as a number matches that
+number however it is written, as pandas' do: ``-999`` matches ``-999.0``."""
 
 MISMATCH = ("refuse", "exclude", "report")
 """What :func:`load_cohort` does when files disagree on a setting."""
@@ -204,21 +213,74 @@ def _same_label(found: str | None, wanted) -> bool:
     return found.isdigit() and wanted.isdigit() and int(found) == int(wanted)
 
 
+def _markers(missing) -> frozenset:
+    """``missing=`` as marker strings: one marker (``"-999"``, or ``-999``), or several."""
+    named = (missing,) if isinstance(missing, (str, bytes, numbers.Number)) else tuple(missing)
+    return frozenset(
+        (marker.decode() if isinstance(marker, bytes) else str(marker)).strip() for marker in named
+    )
+
+
+@functools.lru_cache(maxsize=64)
+def _numeric_markers(missing: frozenset) -> frozenset:
+    """The markers that read as finite numbers, as numbers."""
+    found = set()
+    for marker in missing:
+        try:
+            number = float(marker)
+        except ValueError:
+            continue
+        if math.isfinite(number):
+            found.add(number)
+    return frozenset(found)
+
+
 def _missing(value, missing=MISSING) -> bool:
-    """A missing cell: ``None``, a NaN of any kind, or a string ``missing`` names."""
+    """A missing cell: ``None``, a NaN of any kind, or what a marker in ``missing`` says.
+
+    A string is missing if a marker names it, or if it reads as the number a
+    marker reads as; a number, if a marker reads as it: ``-999`` takes ``-999``,
+    ``"-999.0"`` and ``-999.0`` alike.
+    """
     if value is None:
         return True
     if isinstance(value, (str, bytes)):
-        text = value.decode() if isinstance(value, bytes) else value
-        return text.strip() in missing
+        text = (value.decode() if isinstance(value, bytes) else value).strip()
+        if text in missing:
+            return True
+        targets = _numeric_markers(missing)
+        if not targets:
+            return False
+        try:
+            return float(text) in targets
+        except ValueError:
+            return False
     try:
-        return bool(value != value)  # NaN, and NaT, are unequal to themselves
+        if value != value:  # NaN, and NaT, are unequal to themselves
+            return True
     except TypeError:  # pandas' NA will not say whether it equals itself
         return True
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, numbers.Real):
+        return False
+    return float(value) in _numeric_markers(missing)
+
+
+def _visit(label: str | None) -> str:
+    """A ``ses-`` label as visits are told apart: ``1`` and ``01`` are one; no label, ``none``."""
+    if label is None:
+        return "none"
+    return str(int(label)) if label.isdigit() else label
+
+
+def _is_frame(table) -> bool:
+    """A pandas DataFrame, or anything holding named columns the way one does."""
+    return hasattr(table, "columns") and hasattr(table, "iloc")
 
 
 def _read_table(table, subject_column, missing=MISSING):
     """The subject column's name, the ids in the table's order, and every column as a list."""
+    if _is_frame(table):
+        table = {str(name): list(table[name]) for name in table.columns}
     if isinstance(table, Mapping):
         columns = {str(key): list(values) for key, values in table.items()}
         lengths = {len(values) for values in columns.values()}
@@ -245,6 +307,13 @@ def _read_table(table, subject_column, missing=MISSING):
             for row in reader:
                 if not any(cell.strip() for cell in row):
                     continue  # a blank line
+                if any(cell.strip() for cell in row[len(header) :]):
+                    raise ValueError(
+                        f"{path.name}, line {reader.line_num}: {len(row)} cells under "
+                        f"{len(header)} column names. A "
+                        f"{'tab' if delimiter == chr(9) else 'comma'} inside a value has to be "
+                        "quoted; read unquoted, it shifts every later cell of the row"
+                    )
                 for name, cell in zip(header, row + [""] * (len(header) - len(row)), strict=False):
                     columns[name].append(cell)
     if subject_column is None:
@@ -312,8 +381,8 @@ def _find_files(files) -> tuple[list[Path], list[Path]]:
                 for name in sorted(names):
                     found = Path(root) / name
                     key = (os.path.realpath(found), name)
-                    if parse_name(name) is not None and found.is_file():
-                        paths.setdefault(key, found)
+                    if parse_name(name) is not None:
+                        paths.setdefault(key, found)  # a link to nothing fails its check, by name
                     elif _EXTENSION.search(name):
                         unnamed.setdefault(key, found)
         elif not path.exists():
@@ -337,6 +406,8 @@ def _inspect(path: Path, modality: str, validate: bool) -> tuple[dict, dict]:
     from .io import read_header
     from .metadata import MetadataError
 
+    if not path.is_file():
+        raise ValueError("not a file that can be read: a link to nothing, or no file at all")
     header = read_header(path)
     metadata = header["metadata"]
     try:
@@ -502,7 +573,7 @@ def load_cohort(
     exclude: Mapping | None = None,
     validate: bool = False,
     mismatch: str = "refuse",
-    missing: str | Iterable[str] = (),
+    missing: str | float | Iterable[str] = (),
     keep_default_missing: bool = True,
 ) -> LoadedCohort:
     """Gather a cohort's files and covariates, check them, and report who is left out and why.
@@ -549,7 +620,9 @@ def load_cohort(
         records the differences.
     missing
         Further table cells to read as missing, beside pandas' defaults
-        (:data:`MISSING`): ``"-999"`` is one marker, a list several.
+        (:data:`MISSING`): ``"-999"`` (or ``-999``) is one marker, a list
+        several. A marker that reads as a number matches that number however a
+        cell writes it, ``-999.0`` as well.
     keep_default_missing
         ``False`` reads only the markers ``missing=`` names, so that, say, a
         site coded ``NA`` stays a site.
@@ -590,8 +663,7 @@ def load_cohort(
     else:
         wanted = {m: session for m in modalities}
         chosen = session is not None
-    named = (missing,) if isinstance(missing, str) else tuple(missing)  # "-999" is one marker
-    missing = frozenset(str(marker).strip() for marker in named)
+    missing = _markers(missing)  # "-999", or -999, is one marker
     if keep_default_missing:
         missing |= MISSING
     required = (require,) if isinstance(require, str) else tuple(require)
@@ -621,7 +693,9 @@ def load_cohort(
     covariate_columns: dict[str, dict] = {}
     table_ids: list = []
     if table is not None:
-        tables = [table] if isinstance(table, (str, Path, Mapping)) else list(table)
+        tables = (
+            [table] if isinstance(table, (str, Path, Mapping)) or _is_frame(table) else list(table)
+        )
         for one in tables:
             id_column, ids, columns = _read_table(one, subject_column, missing)
             for name, values in columns.items():
@@ -662,8 +736,7 @@ def load_cohort(
             if subject in excluded_by_caller or subject in extending:
                 continue
             labels = {
-                m: sorted({"none" if s is None else s for _, s in entries})
-                for m, entries in by_modality.items()
+                m: sorted({_visit(s) for _, s in entries}) for m, entries in by_modality.items()
             }
             if len({label for each in labels.values() for label in each}) > 1:
                 crossed[subject] = "; ".join(
@@ -672,6 +745,14 @@ def load_cohort(
 
     # Every subject seen, and why each is out.
     everyone = sorted(set(found) | in_table)
+    unknown = sorted(set(excluded_by_caller) - set(everyone))
+    if unknown:
+        warnings.warn(
+            f"exclude= names {len(unknown)} subject(s) in no file or table: "
+            + ", ".join(unknown[:5])
+            + (" ..." if len(unknown) > 5 else ""),
+            stacklevel=2,
+        )
     reasons: dict[str, list[str]] = {subject: [] for subject in everyone}
     report: dict[str, dict] = {}
     settings_of: dict[str, dict] = {}
@@ -825,9 +906,13 @@ def load_cohort(
     if not included:
         tally = Counter(part for s in everyone for part in reasons[s])
         common = "; ".join(f"{count} {reason}" for reason, count in tally.most_common(3))
+        hint = (
+            " Do the table's ids match the files' (100307 and sub-100307 match; 0100307 does not)?"
+            if table is not None
+            else ""
+        )
         raise CohortError(
-            f"no subject passed: {common}. Do the table's ids match the files' "
-            "(100307 and sub-100307 match; 0100307 does not)?"
+            f"no subject passed: {common}.{hint}"
             if tally
             else "no files of the asked modalities were found",
             report=rows,

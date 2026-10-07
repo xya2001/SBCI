@@ -1,21 +1,23 @@
 """The tenth list's measurement of a bootstrap that refits every model (docs/review-2026-10-05.md).
 
     module load python/3.12.4
-    python tests/reference/tenth_list_probe.py       # about 15 minutes on 16 cores
+    python tests/reference/tenth_list_probe.py       # about six minutes on 16 cores
 
 The prediction notebook's intervals resample the held-out families with each
 fold's fitted model held fixed, and its section 8 shows them too narrow where
-a model is weak. The obvious repair is to refit: resample whole families within
-each fold, then rerun the whole procedure -- the inner choice of components and
-penalty, the scaling, the fit -- on the resampled training folds, and score the
-resampled held-out ones. This measures what that gives, beside the fixed-model
-bootstrap, on the notebook's own data (``scripts/prediction_data.py``) and
-procedure, two hundred draws each. Where the null's spread is known -- the
-weak fluid-intelligence models, section 8 of the notebook -- the refits
-overshoot it, because a resampled training fold repeats families and so holds
-fewer distinct ones; the notebook tests the weak results by permutation
-instead. The family table is restricted HCP data, read from outside the
-repository; only statistics are printed.
+a model is weak. The obvious repair is to refit: resample whole families
+within each fold, then rerun the supervised procedure -- the inner choice of
+components and penalty, the scaling, the fit -- on the resampled training
+folds, and score the resampled held-out ones. Each fold's functional PCA basis
+and region PCA are kept as they were fitted, so their own variation is not in
+it. This measures what that gives, beside the fixed-model bootstrap, on the
+notebook's own data (``scripts/prediction_data.py``) and procedure, two
+hundred draws each. Where the null's spread is known -- the weak
+fluid-intelligence models, section 8 of the notebook -- the refits overshoot
+it, because a resampled training fold repeats families and so holds fewer
+distinct ones; the notebook tests the weak results by permutation instead. The
+family table is restricted HCP data, read from outside the repository; only
+statistics are printed.
 """
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ import csv
 from pathlib import Path
 
 import numpy as np
-from joblib import Parallel, delayed
+from joblib import Parallel, delayed, parallel_config
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.decomposition import PCA
 from sklearn.linear_model import LogisticRegression, Ridge
@@ -57,6 +59,7 @@ pmat = np.array([float(traits[s]["fluid_intelligence_pmat24"]) for s in subjects
 band = {"22-25": 23.5, "26-30": 28.0, "31-35": 33.0, "36+": 37.0}
 age = np.array([band[traits[s]["age_bin"]] for s in subjects])
 covariates = np.load(DATA / "covariates.npz")
+assert (covariates["subjects"] == subjects).all()  # one subject order, as the notebook checks
 head = np.column_stack([covariates["brain_volume"], covariates["streamlines"]])
 demographic = np.column_stack([men, age, head])
 none = np.empty((subjects.size, 0))
@@ -65,11 +68,15 @@ position = {s: i for i, s in enumerate(subjects)}
 continuous = []
 for k in range(FOLDS):
     data = np.load(DATA / f"fold{k}.npz")
+    assert set(data["test"]) == set(subjects[fold == k])
+    assert set(data["train"]) == set(subjects[fold != k])
     scores = np.empty((subjects.size, RANK))
     scores[[position[s] for s in data["train"]]] = data["train_scores"]
     scores[[position[s] for s in data["test"]]] = data["test_scores"]
     continuous.append(scores)
-logged = np.log10(np.load(DATA / "atlas.npz")["schaefer200"] + 1e-9)
+atlas = np.load(DATA / "atlas.npz")
+assert (atlas["subjects"] == subjects).all()
+logged = np.log10(atlas["schaefer200"] + 1e-9)
 regions = [
     make_pipeline(StandardScaler(), PCA(n_components=RANK, random_state=0))
     .fit(logged[fold != k])
@@ -156,23 +163,26 @@ MODELS = {
 }
 sample = [np.flatnonzero(fold == k) for k in range(FOLDS)]
 refits, fixes = {}, {}
-for name, (scores, target, extra) in MODELS.items():
-    # The sample's own models, their predictions rescored on each draw's held-out families.
-    predicted = np.empty(subjects.size)
-    for index, p in zip(sample, run(scores, target, extra, sample, n_jobs=-1), strict=True):
-        predicted[index] = p
-    observed = mean_over_folds(target, sample, [predicted[index] for index in sample])
-    fixes[name] = np.array(
-        [mean_over_folds(target, d, [predicted[index] for index in d]) for d in draws]
-    )
-    refits[name] = np.array(
-        Parallel(n_jobs=-1)(delayed(refitted)(scores, target, extra, d) for d in draws)
-    )
-    print(
-        f"{name:33s} {observed:.3f}: spread over {DRAWS} draws {fixes[name].std():.3f} with the "
-        f"models held fixed, {refits[name].std():.3f} refitted (whose mean is "
-        f"{refits[name].mean():.3f})"
-    )
+# One thread in each worker process, whatever the environment exports: inherited thread counts
+# crowd the cores and slow the logistic fits many times over.
+with parallel_config(backend="loky", inner_max_num_threads=1):
+    for name, (scores, target, extra) in MODELS.items():
+        # The sample's own models, their predictions rescored on each draw's held-out families.
+        predicted = np.empty(subjects.size)
+        for index, p in zip(sample, run(scores, target, extra, sample, n_jobs=-1), strict=True):
+            predicted[index] = p
+        observed = mean_over_folds(target, sample, [predicted[index] for index in sample])
+        fixes[name] = np.array(
+            [mean_over_folds(target, d, [predicted[index] for index in d]) for d in draws]
+        )
+        refits[name] = np.array(
+            Parallel(n_jobs=-1)(delayed(refitted)(scores, target, extra, d) for d in draws)
+        )
+        print(
+            f"{name:33s} {observed:.3f}: spread over {DRAWS} draws {fixes[name].std():.3f} with "
+            f"the models held fixed, {refits[name].std():.3f} refitted (whose mean is "
+            f"{refits[name].mean():.3f})"
+        )
 gap = "sex, Schaefer-200 with head size", "sex, head size and streamlines"
 print(
     f"the regions added to head size: spread {(fixes[gap[0]] - fixes[gap[1]]).std():.4f} with the "

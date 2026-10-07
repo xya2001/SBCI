@@ -1,6 +1,6 @@
 """End-to-end audit: every row of the documented API, on the released subjects, in order.
 
-    python scripts/audit_api.py            # a batch job: eight cores, 32 GB, about half an hour
+    python scripts/audit_api.py            # a batch job: eight cores, 32 GB, about seven minutes
 
 Each check either passes with the value it produced, or fails loudly; a check
 that needs data the release does not have is reported as skipped, with the
@@ -280,15 +280,16 @@ check("sbci.align(cc_list, template=None)", align)
 
 
 def endpoints_align():
-    result = sbci.endpoints_align(pair, template=0, max_iterations=3, threshold=1e-7)
-    costs = result.costs[1]
+    # Moving onto fixed: the fixed subject itself is the template, and stays where it is.
+    result = sbci.endpoints_align([pair[1]], template=pair[0], max_iterations=3, threshold=1e-7)
+    costs = result.costs[0]
     assert costs[-1] < costs[0], costs
-    back = result.aligned_endpoints(1)
+    back = result.aligned_endpoints(0)
     assert back.n_streamlines == pair[1].endpoints.n_streamlines
     return f"cost {costs[0]:.5f} -> {costs[-1]:.5f}, endpoints handed back"
 
 
-check("sbci.endpoints_align(cc_list, template=None)", endpoints_align)
+check("sbci.endpoints_align([moving], template=fixed)", endpoints_align)
 
 
 def migrate():
@@ -303,6 +304,94 @@ def migrate():
 
 
 check('sbci.migrate_warp(warp, to="fs_LR_32k")', migrate)
+
+print("\n=== 8. a cohort, held-out scores, designs, and test-retest ===")
+
+
+def cohort():
+    loaded = sbci.load_cohort(D, modalities=("sc",))
+    assert len(loaded.subjects) >= len(FIRST), loaded.summary()
+    return loaded.summary().splitlines()[0]
+
+
+check("sbci.load_cohort(folder)", cohort)
+
+
+def project():
+    fit = sbci.reduce([f"{D}/{s}_sc.h5" for s in FIRST[:3]], rank=2, max_outer=3, seed=0)
+    held_out = sbci.project(fit, [f"{D}/{FIRST[3]}_sc.h5"])
+    assert held_out.shape == (1, 2) and np.isfinite(held_out).all(), held_out
+    return f"{FIRST[3]} scored on three others' basis: {np.round(held_out[0], 4).tolist()}"
+
+
+check("sbci.project(fit, held_out)", project)
+
+
+def design_and_contrast():
+    # A planted site effect, so the answer is known.
+    rng = np.random.default_rng(2)
+    site = np.repeat(["a", "b", "c", "d"], 10)
+    named = sbci.stats.design({"age": rng.uniform(22, 36, 40), "site": site})
+    scores = rng.standard_normal((40, 3))
+    scores[:, 0] += 1.5 * (site == "c")
+    by_name = sbci.stats.local_test(scores, named, terms=["site"])
+    contrast = sbci.stats.local_test(scores, named, contrast={"site[c]": 1, "site[b]": -1})
+    assert by_name.pvalue[0] < 0.01 and contrast.pvalue[0] < 0.01, (by_name.pvalue, contrast.pvalue)
+    low, high = contrast.interval()
+    return (
+        f"site by name p = {by_name.pvalue[0]:.1e}; c less b {contrast.estimate[0, 0]:.2f} "
+        f"({low[0, 0]:.2f} to {high[0, 0]:.2f})"
+    )
+
+
+check("sbci.stats.design(...), terms= by name, contrast=", design_and_contrast)
+
+
+def test_retest():
+    from sbci.stats import icc, identification
+
+    halves = ([], [])
+    for subject in FIRST[:3]:
+        connectome = ContinuousConnectome.load(f"{D}/{subject}_sc.h5")
+        endpoints = connectome.endpoints
+        first = (
+            np.random.default_rng(0).permutation(endpoints.n_streamlines)
+            < endpoints.n_streamlines // 2
+        )
+        for half, chosen in zip(halves, (first, ~first), strict=True):
+            holder = ContinuousConnectome(
+                connectome.data,
+                connectome.area,
+                connectome.mask,
+                connectome.metadata,
+                endpoints=endpoints.take(chosen),
+            )
+            half.append(holder.smooth(kernel="shk", bandwidth=0.005, mask_medial_wall=True).data)
+    found = identification(np.vstack(halves[0]), np.vstack(halves[1]))
+    sample = np.random.default_rng(1).choice(halves[0][0].size, 20_000, replace=False)
+    reliability = icc([np.vstack(h)[:, sample] for h in halves])
+    assert found.accuracy == (1.0, 1.0), found.accuracy
+    return (
+        f"3 subjects' halves identified {found.accuracy}; median ICC of 20,000 pairs "
+        f"{np.nanmedian(reliability):.2f}"
+    )
+
+
+check("endpoints.take, sbci.stats.identification, icc", test_retest)
+
+
+def export():
+    with tempfile.TemporaryDirectory() as tmp:
+        strength = sc.dense().sum(axis=1)
+        written = sbci.save_map({"strength": strength}, f"{tmp}/strength.dscalar.nii")
+        table = sbci.save_regions(
+            sbci.region_means(strength, "Desikan"), "Desikan", f"{tmp}/regions.csv"
+        )
+        assert all(os.path.getsize(p) > 0 for p in (*written, table))
+    return "a vertex map as CIFTI, its Desikan means as a table"
+
+
+check("sbci.save_map, region_means, save_regions", export)
 
 print(f"\n{'=' * 70}")
 print(f"{len(passed)} passed, {len(failed)} failed, {len(skipped)} skipped")

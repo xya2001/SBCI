@@ -4,8 +4,10 @@
 
 Downloads the eleven subjects, their SC and FC, with ``sbci download hcp-ya``
 into DIR (default ``./hcp-ya``; files already there and correct are kept), then
-runs the methods the README and USAGE show on them and prints one line per check
-with what it measured. The first check that does not hold stops the script with
+runs the main methods on them, from ``to_atlas`` to ``reduce`` and
+``local_test``, and prints one line per check with what it measured; the
+cohort loader, the test-retest functions and the export are
+``scripts/audit_api.py``'s. The first check that does not hold stops the script with
 exit code 1.
 
 It needs the plotting extra; with the render extra the surface figure is drawn

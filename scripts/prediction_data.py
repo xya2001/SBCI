@@ -3,6 +3,7 @@
     python scripts/prediction_data.py sample      # the sample and its folds
     python scripts/prediction_data.py fold K      # K = 0..4, a batch job each
     python scripts/prediction_data.py atlas       # Schaefer-200 SC for the sample
+    python scripts/prediction_data.py gram        # every pair of subjects' SC, multiplied
     python scripts/prediction_data.py covariates  # head size and streamline count
 
 The lab's paths on Longleaf. ``sample`` draws whole families of the young
@@ -17,8 +18,13 @@ held-out fold ``K`` and the training subjects alike, so the two are scored
 the same way and the held-out subjects never touch the basis. ``atlas`` computes each
 subject's Schaefer-200 SC matrix, for the atlas-based comparison, whose PCA
 the notebook fits inside each training fold the same way; with it, each
-region's mass with itself and the regions' areas, which turn the masses into
-densities in the inner product the functional PCA uses. ``covariates``
+region's mass with itself, and every region pair's connectivity summed with
+each vertex pair counted alike -- as the functional PCA's fit counts them --
+with each region's number of cortical vertices. ``gram`` multiplies every
+pair of subjects' connectomes entry by entry and sums, over the vertex pairs
+counted alike: the inner products a PCA of the connectomes themselves needs,
+in the functional PCA's own, so the notebook can fit one per fold beside
+it. ``covariates``
 records what the baselines use: each subject's brain-mask volume, from the
 pipeline's skull-stripped T1 (``t1_brain.nii.gz``, 1.25 mm), as a measure of
 head size, and the number of streamlines in its SC file.
@@ -37,7 +43,7 @@ import numpy as np
 
 import sbci
 from sbci.io import read_header
-from sbci.parcellation import region_weights
+from sbci.parcellation import parcellate, region_weights
 
 ROOT = Path("/work/users/x/y/xya/hcp-ya")
 SC = ROOT / "full" / "data"
@@ -125,34 +131,53 @@ def atlas() -> None:
     subjects = [s for s, _ in read_sample()]
     schaefer = sbci.load_atlas("Schaefer200")
     upper = np.triu_indices(schaefer.n_regions, 1)
-    between, within, grid = [], [], None
+    masses, sums, cortex = [], [], None
     for subject in subjects:
         connectome = sbci.load(SC / f"{subject}_sc.h5")
-        matrix = connectome.to_atlas(schaefer)
-        between.append(matrix[upper])
-        within.append(np.diagonal(matrix).copy())
-        area = np.where(connectome.mask, connectome.area, 0.0)
-        if grid is None:
-            grid = area
-        elif not np.array_equal(area, grid):
-            raise ValueError(f"{subject}'s vertex areas differ from the first subject's")
-    # A region pair's mass over the product of the regions' areas is its density; with
-    # itself, over the area products of the region's distinct vertex pairs, as the vertex
-    # self-pairs carry no connectivity. These are the functional PCA's area weights.
-    weights, _ = region_weights(schaefer, grid)
-    area = np.asarray(weights.sum(axis=0)).ravel()
-    within_area = area**2 - np.asarray(weights.multiply(weights).sum(axis=0)).ravel()
+        ones = np.where(connectome.mask, 1.0, 0.0)
+        if cortex is None:
+            cortex = ones
+        elif not np.array_equal(ones, cortex):
+            raise ValueError(f"{subject}'s cortex differs from the first subject's")
+        masses.append(connectome.to_atlas(schaefer))
+        # The same blocks with every vertex pair counted alike, as the functional PCA's fit
+        # counts them: its areas only keep its components apart (sbci.reduction.fit_basis).
+        sums.append(parcellate(connectome.dense(np.float64), schaefer, cortex, how="mass"))
+    vertices = np.asarray(region_weights(schaefer, cortex)[0].sum(axis=0)).ravel()
     np.savez_compressed(
         OUT / "atlas.npz",
         subjects=np.array(subjects),
-        schaefer200=np.vstack(between),
-        schaefer200_within=np.vstack(within),
-        schaefer200_area=area,
-        schaefer200_within_area=within_area,
+        schaefer200=np.vstack([m[upper] for m in masses]),
+        schaefer200_within=np.vstack([np.diagonal(m) for m in masses]),
+        schaefer200_sums=np.vstack([s[upper] for s in sums]),
+        schaefer200_within_sums=np.vstack([np.diagonal(s) for s in sums]),
+        schaefer200_vertices=vertices,
     )
     print(
         f"Schaefer-200 SC for {len(subjects)} subjects: {upper[0].size:,} region pairs each, "
         "and each region with itself"
+    )
+
+
+def gram() -> None:
+    subjects = [s for s, _ in read_sample()]
+    start = time.time()
+    data = None
+    for index, subject in enumerate(subjects):
+        values = sbci.load(SC / f"{subject}_sc.h5").data  # the upper triangle, float32
+        if data is None:
+            data = np.empty((len(subjects), values.size), dtype=np.float32)
+        data[index] = values
+    # Summed in float64 a block of pairs at a time: the products are small and many.
+    products = np.zeros((len(subjects), len(subjects)))
+    step = 1 << 20
+    for first in range(0, data.shape[1], step):
+        block = data[:, first : first + step].astype(np.float64)
+        products += block @ block.T
+    np.savez_compressed(OUT / "gram.npz", subjects=np.array(subjects), gram=products)
+    print(
+        f"{len(subjects)} subjects' SC multiplied pairwise over {data.shape[1]:,} vertex pairs "
+        f"({time.time() - start:.0f}s)"
     )
 
 
@@ -184,7 +209,9 @@ if __name__ == "__main__":
         fold(int(sys.argv[2]))
     elif command == "atlas":
         atlas()
+    elif command == "gram":
+        gram()
     elif command == "covariates":
         covariates()
     else:
-        raise SystemExit("sample, fold K, atlas or covariates")
+        raise SystemExit("sample, fold K, atlas, gram or covariates")

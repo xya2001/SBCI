@@ -148,3 +148,31 @@ def test_take_refuses_a_mask_written_as_integers():
         ends.take(np.array([1, 0, 1, 0]))
     assert ends.take(np.array([1, 0, 1, 0], dtype=bool)).vtx_in.tolist() == [3, 7]
     assert ends.take([1, 0]).vtx_in.tolist() == [5, 3]  # indices of another length stay indices
+
+
+def test_taking_no_streamlines_or_indices_that_are_not_integers():
+    """take([]) raised an IndexError, NumPy reading [] as floats."""
+    both = Endpoints([0, 1, 1], [1, 0, 1], [3, 5, 7], [2, 4, 6], n_per_hemi=10)
+    assert both.take([]).n_streamlines == 0
+    with pytest.raises(TypeError, match="integer indices or a boolean mask"):
+        both.take([0.0, 2.0])
+
+
+def test_identification_needs_two_features_and_says_which_way_is_which():
+    with pytest.raises(ValueError, match="two at least"):
+        identification(np.arange(3.0)[:, None], np.arange(3.0)[:, None] + 1)
+    rng = np.random.default_rng(6)
+    first = rng.standard_normal((3, 400))
+    second = first + 0.1 * rng.standard_normal((3, 400))
+    second[2] = 0.7 * first[1] + 0.3 * first[2]  # subject 2's second session looks like subject 1
+    result = identification(first, second)
+    assert result.accuracy == (1.0, 2 / 3)  # first to second, then second to first
+
+
+def test_a_feature_constant_to_rounding_has_no_icc_and_a_small_spread_has_one():
+    rng = np.random.default_rng(7)
+    constant = np.full((2, 6, 1), 0.1)
+    assert np.isnan(icc(constant)).all()
+    subject = rng.standard_normal(6)
+    small = 1e3 + 1e-3 * (subject[None, :, None] + 0.1 * rng.standard_normal((2, 6, 1)))
+    assert np.isfinite(icc(small)).all() and icc(small)[0] > 0.9

@@ -279,3 +279,38 @@ def test_text_is_a_factor_and_levels_go_in_their_natural_order():
         reference={"site": 10},
     )
     assert chosen.names == ("intercept", "site[2]", "site[3]", "age")
+
+
+def test_naming_a_factor_coded_in_full_without_an_intercept_is_refused():
+    """terms=["site"] tested whether every level's mean is zero: the intercept came in with it."""
+    covariates = {"site": ["a", "b", "c"] * 6, "age": np.linspace(20.0, 40.0, 18)}
+    full = design(covariates, intercept=False)
+    scores = np.random.default_rng(5).standard_normal((18, 2)) + 5.0
+    with pytest.raises(ValueError, match="take in the intercept"):
+        local_test(scores, full, terms=["site"])
+    assert local_test(scores, full, terms=["age"]).terms == tuple(full.columns("age"))
+    assert np.isfinite(local_test(scores, design(covariates), terms=["site"]).statistic).all()
+
+
+def test_design_refuses_what_it_would_have_ignored_or_mangled():
+    """A numeric reference was ignored; inf, colliding names, 2-D and empty input got through."""
+    with pytest.raises(ValueError, match="categorical="):
+        design({"site": [1, 2, 3, 1]}, reference={"site": 2})
+    coded = design({"site": [1, 2, 3, 1]}, reference={"site": 2}, categorical=["site"])
+    assert coded.names == ("intercept", "site[1]", "site[3]")
+    with pytest.raises(ValueError, match="infinite in row 1"):
+        design({"age": [20.0, np.inf, 30.0]})
+    with pytest.raises(ValueError, match="one name once written as text"):
+        design({1: [1.0, 2.0, 3.0], "1": [3.0, 1.0, 2.0]})
+    with pytest.raises(ValueError, match="2-D"):
+        design({"age": [[20.0, 21.0], [30.0, 31.0], [25.0, 26.0]]})
+    with pytest.raises(ValueError, match="hold no subjects"):
+        design({"age": []})
+
+
+def test_a_value_the_loader_kept_is_a_level_when_design_is_told_so():
+    """keep_default_missing=False kept a site coded NA, which design() then refused as missing."""
+    covariates = {"site": ["NA", "EU", "NA", "EU"], "age": [20.0, 30.0, 25.0, 35.0]}
+    with pytest.raises(ValueError, match=r"pass missing=\(\)"):
+        design(covariates)
+    assert design(covariates, missing=()).names == ("intercept", "site[NA]", "age")

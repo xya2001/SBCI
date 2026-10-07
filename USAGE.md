@@ -2,7 +2,9 @@
 
 Everything below is live. `scripts/tour.py` runs the single-subject sections,
 *Loading* through *The kernel maths*, and prints the output quoted there; the
-cohort sections quote batch jobs whose output PORTING.md records.
+cohort sections quote batch jobs whose output PORTING.md records, and the
+sections on test-retest and prediction quote the notebooks in `notebooks/`,
+saved with their outputs.
 
 ## Setup anywhere
 
@@ -444,8 +446,17 @@ sbci validate sub-copy_sc.h5
 ```
 
 ```
-[PASS] readable    [PASS] metadata    [PASS] grid    [PASS] symmetry    [PASS] finite
-[PASS] nonnegativity    [PASS] area    [PASS] unit mass    [PASS] mask
+[PASS] readable
+[PASS] name
+[PASS] metadata
+[PASS] grid
+[PASS] shapes
+[PASS] symmetry: storage_convention='upper-triangular-float32', stored dtype=float32
+[PASS] finite: 0 non-finite entries
+[PASS] nonnegativity: 0 negative entries
+[PASS] area: sum 327684, expected about 327684
+[PASS] unit mass: total mass 1
+[PASS] mask: medial wall carries 0 of the total
 ```
 
 Exit status 0 means every check passed. `save()` validates before writing, so a
@@ -723,7 +734,8 @@ and 31-35 against 26-30 in one (component 4: -0.009, interval -0.014 to
 -0.004). The 36+ band holds 9 subjects, and a contrast against so small a level
 leans on cluster-robust errors from a handful of families: better not read.
 The intervals agree with statsmodels' to 1e-9, cluster-robust ones included,
-as do the F tests of contrasts (`tests/test_stats_design.py`).
+as do a contrast's estimate and error, and the F tests of contrasts to 1e-8
+(`tests/test_stats_design.py`).
 
 **Vertex by vertex.** The columns of `scores` need not be components. Given
 each subject's value at every vertex -- the strength of its connectivity, a
@@ -827,24 +839,29 @@ halves = [
 ```
 
 That measures what the finite number of streamlines costs, not a rescan: the
-two halves share the scan, the tractography and the registration, so it is an
-upper bound on test-retest reliability.
+two halves share the scan, the tractography and the registration, and each
+holds half the streamlines. So a half's agreement, carried to the whole set by
+the Spearman-Brown formula, `2r / (1 + r)`, is an upper bound on what a rescan
+would show; a half's own is not.
 
 On a hundred young adults (`notebooks/reliability.ipynb`) the continuous FC
 connectome picks out 100 of them from one day's FC by the other's (99 the other
-way round) and Schaefer-200 regions 97 and 96, and a subject stands further out
-from the others in the continuous connectome: a differential identifiability
-(100 times own day's correlation less another subject's) of 37.5 against 26.6. A single
-vertex pair is less reliable than a region pair (median ICC 0.43 against 0.59),
-and summaries are more: a vertex's FC strength repeats with an ICC of 0.61 on
-median, its coupling 0.67. Across halves of the streamlines the smoothing
-bandwidth sets the trade-off: a vertex pair's median ICC rises from 0.24 at
-0.0025 to 0.84 at 0.01, over the pairs that vary at every bandwidth, as
-subjects grow alike (differential identifiability 39.9 to 17.6, over the same
-pairs), and component
-scores, on a basis fitted to other subjects, repeat at 0.994 to 0.999.
-ENCORE aligning one half of a subject's streamlines onto the other moves the
-cortex 0.11 degrees on median, against 3.07 between two subjects.
+way round) and Schaefer-200 regions 97 and 96, three subjects apart (exact
+McNemar p 0.25). Its differential identifiability (100 times own day's
+correlation less another subject's) is 37.5 against 26.6, but on Fisher's z,
+which does not compress correlations near 1, the regions set subjects further
+apart: which separates more depends on the scale. A single vertex pair is less
+reliable than a region pair (median ICC 0.43 against 0.59), and summaries are
+more: a vertex's FC strength repeats with an ICC of 0.605 on median, its
+coupling 0.665 (with one SC for both days). Across halves of thirty subjects'
+streamlines a vertex pair's median ICC rises with the bandwidth, from 0.24 at
+0.0025 to 0.84 at 0.01 over the pairs that vary at every bandwidth (0.77 over
+those that vary at 0.01), and every subject is identified at every bandwidth;
+whether a subject then stands out less, on r, or more, on z, turns on the
+scale again. Component scores, on a basis fitted to other subjects, repeat at
+0.994 to 0.999, and ENCORE aligning one half of a subject's streamlines onto
+the other moves the cortex 0.11 degrees on median, against 3.07 between two
+subjects.
 
 ## Predicting from component scores
 
@@ -863,20 +880,22 @@ for train, test in folds:                       # whole families in each fold
 
 `notebooks/prediction.ipynb` does it for sex and fluid intelligence on 300
 young adults, scoring each fold on its own: pooled across folds, a weak
-model's r and AUC sit below their null, by an amount that depends on how the
-subjects were dealt. Its bootstrap intervals, which resample the held-out
-families with the fitted models held fixed, are too narrow for a weak model
-by about a third, so it tests the weak results by permutation, families kept
-whole. Two of its findings are worth knowing before a study: sex there is
-head size first (brain-mask volume and streamline count alone reach an AUC
-of 0.92; the regions add 0.03 to it, more than any of 500 permutations, the
-components nothing), and splitting families across folds raised fluid
-intelligence's r by 0.045 on average, where features that cannot leak,
-processed alike, moved within chance of nothing. At rank 15 the continuous
-components carry less about sex than a PCA of the Schaefer-200 matrices
-(0.66 against 0.87), and a PCA of the region densities weighed as the
-functional PCA weighs the continuous ones still reaches 0.81: the gap is
-mostly the reduction, not the regions' transform.
+model's r sits below its null, by an amount that depends on the penalty and
+on how the subjects were dealt. Its bootstrap intervals, which resample the
+held-out families with the fitted models held fixed, are too narrow for a
+weak model by about a third, so it tests the weak results by permutation,
+moving whole families onto families of the same size -- the shortcut
+`local_test` declines above, taken here because the family table does not
+say who is a twin. Three of its findings are worth knowing before a study.
+Sex there is head size first: brain-mask volume and streamline count alone
+reach an AUC of 0.92, and the regions add 0.03 beyond what those two predict
+linearly, more than any of 500 permutations; the components add nothing.
+Splitting families across folds raised fluid intelligence's r by 0.039 on
+average, 0.028 beyond features that cannot leak. And at rank 15 the
+continuous components carry less about sex than a PCA of the Schaefer-200
+matrices (0.66 against 0.87) because of their separable form: an unrestricted
+PCA of the same connectomes, at the vertex pairs and in the functional PCA's
+own inner product, reaches 0.83.
 
 ## Aligning a cohort
 
@@ -1149,7 +1168,7 @@ factor carry an intercept too, implicitly: with `add_intercept=False` they are
 tested exactly as the same factor coded against a reference level, but need
 `terms=` named, since testing every column would test the intercept with
 them. `groups=` makes the
-families the units of the test (*Testing scores against a covariate*, below).
+families the units of the test (*Testing scores against a covariate*, above).
 On the 943 with a score, no component of the twenty tracks fluid intelligence once the families
 are clusters: the closest, component 13, has r = 0.11 and adjusted p 0.064.
 Counted as 943 independent subjects, the same component passes at 0.023,
@@ -1332,6 +1351,11 @@ python tools/build_hcp_fc.py --manifest manifest.csv \
     --spheres /overflow/zzhanglab/encore_project/encore_paper_code/prediction_subs \
     --fslr fslr/ --mapping mapping_avg_ico4.npz --out hcp-ya-fc
 ```
+
+By default a subject's four runs make one FC. `--runs REST1_LR REST1_RL
+--session REST1` makes one day's instead, from that day's two runs, written
+`sub-<id>_ses-REST1_fc.h5`: what *How far it repeats* below reads with
+`load_cohort(session="REST1")`.
 
 **Where each vertex goes.** The SC files place streamline endpoints through
 the subject's FreeSurfer registration (`?h.sphere.reg`); the HCP's time series

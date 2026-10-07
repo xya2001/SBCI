@@ -436,3 +436,21 @@ def test_a_write_goes_through_a_link_and_not_onto_a_read_only_file(tmp_path):
     with pytest.raises(PermissionError, match="read-only"):
         sbci.save_map(values, locked)
     assert locked.read_text() == "keep"
+
+
+def test_a_write_through_a_link_checks_the_folder_it_lands_in(tmp_path):
+    """The link's folder was checked; the write happens beside the target, so that one counts."""
+    values = np.random.default_rng(0).standard_normal(5124)
+    (tmp_path / "dangling.csv").symlink_to(tmp_path / "gone" / "map.csv")
+    with pytest.raises(FileNotFoundError, match="no such directory: .*gone, where the link"):
+        sbci.save_map(values, tmp_path / "dangling.csv")
+    shut = tmp_path / "shut"
+    shut.mkdir()
+    (shut / "map.csv").write_text("old")
+    shut.chmod(0o500)
+    try:
+        with pytest.raises(PermissionError, match="moved into place"):
+            sbci.save_map(values, shut / "map.csv")
+    finally:
+        shut.chmod(0o700)
+    assert (shut / "map.csv").read_text() == "old"

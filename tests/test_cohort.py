@@ -575,3 +575,91 @@ def test_a_file_reached_through_two_links_counts_once(folder):
     (root / "b").symlink_to(root / "a")
     cohort = load_cohort([root / "a", root / "b"])
     assert cohort.subjects == ["sub-01"]
+
+
+def test_a_row_longer_than_the_header_is_refused(folder, tmp_path):
+    """An unquoted comma inside a value shifted the row: an age of 31 was read as 2."""
+    root, add = folder
+    for subject in ("01", "02"):
+        add(f"sub-{subject}_sc.h5")
+    shifted = _table(
+        tmp_path / "subjects.csv",
+        [["subject", "site", "age"], ["01", "UNC", "25"], ["02", "Site 1", " 2", "31"]],
+    )
+    with pytest.raises(ValueError, match="subjects.csv, line 3: 4 cells under 3 column names"):
+        load_cohort(root, shifted)
+    trailing = _table(
+        tmp_path / "trailing.csv", [["subject", "age"], ["01", "25", ""], ["02", "31"]]
+    )
+    assert load_cohort(root, trailing).column("age").tolist() == [25.0, 31.0]
+
+
+def test_missing_markers_match_numbers_however_written(folder, tmp_path):
+    """missing="-999" missed -999.0 and a number -999, and missing=-999 raised a TypeError."""
+    root, add = folder
+    for subject in ("01", "02", "03"):
+        add(f"sub-{subject}_sc.h5")
+    table = _table(
+        tmp_path / "scores.csv", [["subject", "age"], ["01", "25"], ["02", "-999.0"], ["03", "30"]]
+    )
+    for marker in ("-999", -999, -999.0):
+        assert np.isnan(load_cohort(root, table, missing=marker).column("age")[1])
+    as_numbers = {"subject": ["01", "02", "03"], "age": [25, -999, 30]}
+    assert np.isnan(load_cohort(root, as_numbers, missing="-999").column("age")[1])
+
+
+def test_every_pandas_default_marker_reads_as_missing(folder):
+    root, add = folder
+    for subject in ("01", "02"):
+        add(f"sub-{subject}_sc.h5")
+    for marker in ("#N/A N/A", "-1.#IND", "-1.#QNAN", "1.#IND", "1.#QNAN"):
+        cohort = load_cohort(root, {"subject": ["01", "02"], "age": ["25", marker]})
+        assert np.isnan(cohort.column("age")[1]), marker
+
+
+def test_a_dataframe_is_a_table(folder):
+    """A DataFrame was taken for a list of tables, its column names for paths."""
+    pandas = pytest.importorskip("pandas")
+    root, add = folder
+    for subject in ("01", "02"):
+        add(f"sub-{subject}_sc.h5")
+    frame = pandas.DataFrame({"subject": ["01", "02"], "age": [25.0, 31.0]})
+    assert load_cohort(root, frame).column("age").tolist() == [25.0, 31.0]
+
+
+def test_one_visit_written_two_ways_is_one_visit(folder):
+    """ses-1 and ses-01 were refused as files from more than one session."""
+    root, add = folder
+    add("sub-A_ses-1_sc.h5")
+    add("sub-A_ses-01_fc.h5")
+    assert load_cohort(root, modalities=("sc", "fc")).subjects == ["sub-A"]
+
+
+def test_an_exclude_key_that_matches_no_one_warns(folder):
+    root, add = folder
+    add("sub-01_sc.h5")
+    with pytest.warns(
+        UserWarning, match=r"exclude= names 1 subject\(s\) in no file or table: sub-1"
+    ):
+        cohort = load_cohort(root, exclude={"sub-1": "a typo for sub-01"})
+    assert cohort.subjects == ["sub-01"]
+
+
+def test_a_link_to_nothing_is_reported_under_its_subject(folder):
+    """A broken link named as a subject's file was listed as a name that says no subject."""
+    root, add = folder
+    add("sub-01_sc.h5")
+    (root / "sub-02_sc.h5").symlink_to(root / "nowhere.h5")
+    cohort = load_cohort(root)
+    assert cohort.subjects == ["sub-01"]
+    assert "a link to nothing" in cohort.excluded["sub-02"]
+
+
+def test_without_a_table_the_refusal_does_not_ask_about_one(folder):
+    from sbci.cohort import CohortError
+
+    root, add = folder
+    add("sub-01_sc.h5", header=ValueError("unreadable"))
+    with pytest.raises(CohortError, match="unreadable") as refused:
+        load_cohort(root)
+    assert "table" not in str(refused.value)

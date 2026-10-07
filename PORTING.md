@@ -705,8 +705,8 @@ file at a time, held it as 199 GB of float64 and peaked at 196 GiB, and took
 
 ### Estimates, intervals and contrasts (6 October 2026)
 
-The third of five adoption suggestions asked for effect estimates with
-confidence intervals, and for designs and contrasts written by name.
+A request of 6 October 2026 asked for effect estimates with confidence
+intervals, and for designs and contrasts written by name.
 `sbci.stats.design` codes named covariates, text as factors against a
 reference level, into a `Design`; `local_test` takes names in `terms=` and a
 `contrast=` of the coefficients. Both are one linear hypothesis, ``C beta =
@@ -1925,7 +1925,7 @@ Reported as still present:
 | finding 8's shift invariance, with one-hot coding and `add_intercept=False` | **confirmed**, and fixed by 41635ad the same day (item 8, *Finding 8, for an intercept the columns only imply*) | -- | a four-level one-hot probe gives F = 3.12 and 12.08 before and after adding 1e6 |
 | three PALS atlases keep an unassigned `RH_GYRUS` region | **confirmed**: the PALS files name the right hemisphere's unassigned cortex `RH_GYRUS` where the left's is `LH_???` -- in OrbitoFrontal 2,347 vertices against 2,359 | the background pattern of `tools/convert_atlases.py` takes `[LR]H_GYRUS`; the three atlases rebuilt from the toolkit's files, the other 41 unchanged; the coverage floor lowered to 5% so that OrbitoFrontal, at 8.2%, stays | Brodmann 80 -> 79 regions, OrbitoFrontal 48 -> 47, Visuotopic 23 -> 22; OrbitoFrontal labels 203 vertices on the left and 215 on the right, where it labelled the whole right hemisphere; 11,822 bundled regions |
 | ConSEAL's docstrings say `viscosity=0` and `step_clamp=inf` "recover the fork's update rule" | **confirmed**: item 8 of the same docstring lists the fork's other differences, its central-difference gradient and its direct composition | reworded: the two settings remove the regularizations the fork does without, and nothing else | -- |
-| findings 1, 3 and 6 | open, as item 8's *Still open* records: the scores the fit records one step early, the re-registration drift of 0.001 degrees, the area weighting | unchanged | -- |
+| findings 1, 3 and 6 | open, as the review note's *Still open* records (docs/review-2026-10-05.md): the scores the fit records one step early, the re-registration drift of 0.001 degrees, the area weighting | unchanged | -- |
 
 New in the third round's commits, and from the audit:
 
@@ -2027,11 +2027,47 @@ that still stood; each was checked with a probe first.
 | 9 | (low) the endpoint arrays' width is not checked | **confirmed**: positions two wide passed the header check, which `load` refused | the header check gives each dataset its shape, `(S, 3)` for the positions |
 | 10 | (low) `to_table` does not record which contrast was tested | **confirmed** | a `tested` column holds the hypothesis in the design's names, `age_band[31-35] - age_band[26-30]` or the tested columns |
 
+## 16. A recheck of everything, 7 October 2026 -- NON-FINITE SCORES, TOO FEW GROUPS, THE LOADER'S TABLES
+
+After the tenth list, four reviewers read the code, the notebooks and the
+documents again, independently, and each finding was reproduced with a probe
+before anything changed. The code's findings are here; the notebooks' and the
+documents' are in docs/review-2026-10-05.md, *The recheck after the tenth
+list*. Every fix comes with a test that fails before it: 18 of the 19 added,
+the nineteenth pinning `icc`'s rounding threshold, which did not change.
+
+| # | Finding | Verdict | Fixed by |
+| --- | --- | --- | --- |
+| 1 | (medium) one infinite score makes every column of `local_test` NaN | **confirmed**: LAPACK's least squares scales the whole right-hand side by its largest entry, so one `inf` turned every column's statistic, coefficients and p-value NaN, in the classical, `groups=` and permutation tests alike | a column holding a non-finite score is left out of the solve and comes back NaN on its own; the others are as they were |
+| 2 | (medium) a CSV row longer than its header is cut short | **confirmed**: an unquoted comma inside a value shifted the row, and `02,Site 1, 2,31` under `subject,site,age` read the age as 2 | a row whose cells beyond the header are not empty is refused, naming the line; trailing empty cells stay allowed |
+| 3 | (medium) `missing=` markers match only text written exactly as given | **confirmed**: `-999.0` in a CSV and the number -999 in a dict table passed `missing="-999"`, and `missing=-999` raised a TypeError | a marker that reads as a number matches that number however a cell writes it, as pandas' markers do, and one number is one marker |
+| 4 | (medium) `design()` applies the loader's default markers again | **confirmed**: a site coded `NA`, kept by `load_cohort(keep_default_missing=False)`, was refused by `design()` as missing, with advice that could not help | `design(missing=...)`, by default the loader's markers: `missing=()` takes `NA` as a level, and the refusal says so |
+| 5 | (low-medium) `MISSING` lacks five of pandas' defaults | **confirmed**: `#N/A N/A`, `-1.#IND`, `-1.#QNAN`, `1.#IND` and `1.#QNAN` were read as text, and one of them made an age column a factor | added |
+| 6 | (low-medium) a cluster-robust test of more combinations than there are groups less one | **confirmed**: with two groups and two tested columns the robust covariance is singular, and F came out near 1e17, or below zero | refused: G groups give a robust covariance of rank G - 1 at most |
+| 7 | (low-medium) naming a factor coded in full, with no intercept, tests the intercept with it | **confirmed**: `terms=["site"]` under `design(intercept=False)` tested whether every level's mean is zero, and rejected for data with no site effect | refused when the tested columns are needed to make the design's constant, as the default terms already were |
+| 8 | (low) `reference=` on a covariate of numbers is ignored | **confirmed**: the covariate entered as a number, its codes as a trend | refused, pointing to `categorical=` |
+| 9 | (low) a non-finite value in a design fails as an SVD that did not converge | **confirmed** | `design()` and `local_test` refuse it, naming the column and the subject |
+| 10 | (low) `design()` merges the names `1` and `"1"`, and ravels a 2-D covariate into more subjects | **confirmed** | both refused |
+| 11 | (low) empty input raises an IndexError | **confirmed**: `design({"age": []})`, `local_test` on no subjects, `Endpoints.take([])` | each refused with a reason; `take([])` takes no streamlines, and indices that are not integers are refused |
+| 12 | (low) `ses-1` and `ses-01` are two visits to the one-visit check | **confirmed**, though `session=1` took both | the check reads a numeric label as its number |
+| 13 | (low) the roughness warning fires for a component the cohort leaves nothing for | **confirmed**: rank 4 from a rank-2 cohort said to lower alpha, at a scale of 4e-17 | such a component is named for what it is, noise, and the penalty is not blamed |
+| 14 | (low) misleading messages | **confirmed**: a link to nothing named like a subject's file was listed among the names that say no subject; "no subject passed" asked about a table when none was given; a DataFrame passed as a table was taken for a list of paths; a table's repeated column was said to need the maps renamed; a write through a link checked the link's folder rather than the target's, and a read-only folder failed naming the temporary file; `identification` on one feature said the features do not vary | the link is reported under its subject; the table hint comes only with a table; a DataFrame is a table; the refusals name what is wrong |
+| 15 | (low) docstrings that said more than the code | **confirmed**: `identification`'s read as if it dropped constant features, and `icc`'s NaN rule left out its rounding threshold and a zero denominator | both say what the code does |
+| 16 | (low) an `exclude=` key that matches no subject is ignored | **confirmed**: `exclude={"sub-1": ...}` left `sub-01` in without a word | warned about |
+
+The reviewers also checked, against statsmodels and direct computation, and
+found right: ordinary least squares (coefficients, errors, F, degrees of
+freedom, contrasts, partial R-squared); the cluster-robust errors, Wald F and
+intervals, with covariates in large units too; rank-deficient designs against
+a full-rank recoding; the size of the Freedman-Lane permutation test; and
+`icc` against a two-way ANOVA. The suite's own comparisons pin these.
+
 ## Status
 
 All seven ports are done and verified, and the reviews of 5 to 7 October
 2026 have been answered in full: the eight of the code here (items 8 to 15),
-and the two of the notebooks in docs/review-2026-10-05.md. What is left is
-under each item's *Still open*. They were done in the order 3, 1, 2, 5, 4, 6, 7: parcellation
+the two of the notebooks in docs/review-2026-10-05.md, and a recheck of all
+of it (item 16, and the review note's last section). What is left is under
+items 4 and 7's *Still open* and the review note's. They were done in the order 3, 1, 2, 5, 4, 6, 7: parcellation
 unblocked the first notebook, kernel smoothing the WP3 speed target, and the
 two alignments came last because nothing else depends on them.

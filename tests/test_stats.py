@@ -875,3 +875,43 @@ def test_the_table_says_what_was_tested(tmp_path):
         rows = path.read_text().splitlines()
         tested = rows[0].split(",").index("tested")
         assert all(row.split(",")[tested] == expected for row in rows[1:]), expected
+
+
+def test_an_infinite_score_leaves_the_other_columns_as_they_were():
+    """One infinite score made every column NaN: least squares scaled them all by it."""
+    rng = np.random.default_rng(3)
+    covariate = rng.standard_normal(30)
+    scores = rng.standard_normal((30, 4)) + 0.3 * covariate[:, None]
+    broken = scores.copy()
+    broken[3, 1] = np.inf
+    for options in ({}, {"groups": np.repeat(np.arange(10), 3)}, {"permutations": 49, "seed": 1}):
+        clean = local_test(scores, covariate, method="none", **options)
+        result = local_test(broken, covariate, method="none", **options)
+        assert np.isnan(result.statistic[1]) and np.isnan(result.pvalue[1])
+        kept = [0, 2, 3]
+        np.testing.assert_allclose(result.statistic[kept], clean.statistic[kept], rtol=1e-12)
+        np.testing.assert_allclose(result.pvalue[kept], clean.pvalue[kept], rtol=1e-12)
+
+
+def test_too_few_groups_for_the_tested_columns_are_refused():
+    """G groups give a robust covariance of rank G - 1: testing more gave F of 1e17, and below 0."""
+    rng = np.random.default_rng(4)
+    covariates = rng.standard_normal((12, 2))
+    scores = rng.standard_normal((12, 3))
+    with pytest.raises(ValueError, match="rank 1 at most, too few to test 2"):
+        local_test(scores, covariates, groups=np.repeat([0, 1], 6))
+    assert np.isfinite(
+        local_test(scores, covariates, groups=np.repeat([0, 1, 2], 4)).statistic
+    ).all()
+
+
+def test_a_design_without_subjects_or_with_an_infinite_value_is_refused():
+    """No subjects raised an IndexError, and an infinite covariate an SVD that did not converge."""
+    with pytest.raises(ValueError, match="no subjects"):
+        local_test(np.empty((0, 2)), np.empty((0, 1)))
+    covariate = np.arange(10.0)
+    covariate[4] = np.inf
+    with pytest.raises(
+        ValueError, match=r"non-finite value \(column 1 of the design matrix, subject 4"
+    ):
+        local_test(np.random.default_rng(0).standard_normal((10, 2)), covariate)

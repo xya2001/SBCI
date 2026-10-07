@@ -611,3 +611,20 @@ def test_the_grid_roughness_penalty_is_exactly_symmetric():
     _, roughness = _grid_gram_and_roughness(np.ones(5124))
     assert np.array_equal(roughness, roughness.T)
     assert roughness.shape == (5124, 5124)
+
+
+def test_a_component_the_cohort_leaves_nothing_for_is_named_and_alpha_is_not_blamed():
+    """Asking for more components than the cohort spans said to lower alpha, at a scale of 4e-17."""
+    rng = np.random.default_rng(21)
+    n, subjects = 40, 12
+    ring = 2 * np.eye(n) - np.roll(np.eye(n), 1, 1) - np.roll(np.eye(n), -1, 1)
+    psi = np.linalg.qr(rng.standard_normal((n, 2)))[0]
+    weights = rng.standard_normal((subjects, 2)) * [3.0, 1.0]
+    matrices = np.einsum("sk,ik,jk->sij", weights, psi, psi)
+    matrices -= matrices.mean(axis=0)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        fit_basis(matrices, np.ones(n), ring, rank=4, alpha=1e-10, seed=0)
+    messages = [str(w.message) for w in caught]
+    assert any("component 2: the cohort leaves nothing for it" in m for m in messages)
+    assert not any("lower alpha" in m for m in messages)

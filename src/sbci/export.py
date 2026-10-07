@@ -108,16 +108,19 @@ def _floats(values, what: str = "the maps") -> np.ndarray:
 
 
 def _target(path: Path) -> Path:
-    """Where writing ``path`` lands, refused as a plain write would refuse it.
+    """Where writing ``path`` lands: through a symbolic link, the file it points to.
 
-    Through a symbolic link, the file it points to; a folder, or a file that is
-    read-only, is refused rather than replaced.
+    A folder there is refused, and so is a read-only file, which a plain write
+    would refuse too. The file is written beside its target and moved onto it,
+    so the target's folder has to exist and take a new file -- a stricter need
+    than a plain write's, which can overwrite a file in a read-only folder.
     """
     target = Path(os.path.realpath(path))
     if target.is_dir():
         raise IsADirectoryError(f"{path} is a folder")
     if target.exists() and not os.access(target, os.W_OK):
         raise PermissionError(f"{path} is read-only")
+    _writable(path)
     return target
 
 
@@ -217,11 +220,23 @@ def _form(path: Path, suffixes) -> str:
 
 
 def _writable(path: Path) -> None:
-    directory = path.parent if str(path.parent) else Path(".")
+    """Refuse, before anything is computed, a write whose folder cannot take it.
+
+    The folder is the one where ``path`` lands -- through a symbolic link, the
+    folder of the file it points to -- since the file is written there under a
+    temporary name and moved onto ``path``.
+    """
+    path = Path(path)
+    target = Path(os.path.realpath(path))
+    directory = target.parent
+    linked = f", where the link {path} points" if path.is_symlink() else ""
     if not directory.is_dir():
-        raise FileNotFoundError(f"no such directory: {directory}")
+        raise FileNotFoundError(f"no such directory: {directory}{linked}")
     if not os.access(directory, os.W_OK):
-        raise OSError(f"cannot write to {directory}")
+        raise PermissionError(
+            f"cannot write to {directory}{linked}: the file is written there under a temporary "
+            "name and moved into place, which needs the folder writable"
+        )
 
 
 def save_map(values, path, names=None, mask="cortex", atlas=None) -> tuple[Path, ...]:
@@ -415,7 +430,7 @@ def _write_table(path, header, rows) -> Path:
     _writable(path)
     if len(set(header)) != len(header):
         repeated = sorted({h for h in header if list(header).count(h) > 1})
-        raise ValueError(f"the table would have two columns named {repeated}; rename the maps")
+        raise ValueError(f"the table would have two columns named {repeated}; name them apart")
     with _atomic(path) as temporary, open(temporary, "w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle, delimiter="\t" if form == ".tsv" else ",", lineterminator="\n")
         writer.writerow(header)

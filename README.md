@@ -81,7 +81,7 @@ vertex, relative to the strongest.*
 | Smoothing | `cc.smooth(kernel="shk" \| "rdk" \| "matern")` from the stored endpoints | `concon` at r = 1.000000 at full scale; MATLAB to 3.25 float32-eps; the Matern closed form |
 | Alignment | `sbci.align(cohort)` (ENCORE, on densities), `sbci.endpoints_align(cohort)` (ConSEAL, on endpoints); `template=fixed` registers onto one subject | the MATLAB references with `reference=True` / `strict_upstream=True` (float64 rounding, r = 0.99999979; ConSEAL to its reference's single precision); by default the references' five shared errors are corrected and checked against closed forms (PORTING.md items 8 and 9) |
 | Carrying a warp | `sbci.migrate_warp(warp, to="fs_LR_32k")` | an identity and a known rotation |
-| Reduction | `sbci.reduce(cohort, rank=K)` (functional PCA, one file at a time); `sbci.project(fit, held_out)` scores new subjects on its basis | the MATLAB reference to 2.1e-16 |
+| Reduction | `sbci.reduce(cohort, rank=K)` (functional PCA, one file at a time); `sbci.project(fit, held_out)` scores new subjects on its basis | the basis, the MATLAB reference to 2.1e-16; `project` too with `reference=True` (by default it scores as the fit itself does, PORTING.md item 8) |
 | Inference | `sbci.local_test(scores, design, groups=...)`, on components or per-vertex features; `sbci.stats.design(...)` for named covariates and factors, `terms=["site"]` and `contrast=` for the hypothesis; estimates with standard errors, intervals and partial R-squared | `scipy.stats` and statsmodels (no MATLAB reference exists), to 1e-9 |
 | Test-retest | `sbci.stats.icc(sessions)`, ICC(2,1) or (3,1) for every feature; `sbci.stats.identification(first, second)`, connectome fingerprinting; `endpoints.take(...)` to split a subject's streamlines | Shrout and Fleiss's published example; `np.corrcoef` in float64 |
 | Figures | `cc.plot(values, mesh="fsaverage", engine="pyvista")` | drawn on FreeSurfer's fsaverage, shaded by sulcal depth |
@@ -127,7 +127,7 @@ and `tools/build_hcp_fc.py` build them for anyone with HCP access, and
 | [notebooks/](notebooks/README.md) | two analyses of young adults, saved with their outputs: how far a continuous connectome repeats, across days and across halves of its streamlines, and prediction with every fit inside the training folds |
 | [PORTING.md](PORTING.md) | how each of the seven MATLAB methods was ported and verified, and the errors found in the references |
 | [VERIFICATION.md](VERIFICATION.md) | how to check every claim yourself, in tiers from five minutes to a MATLAB licence |
-| [docs/review-2026-10-05.md](docs/review-2026-10-05.md) | the independent implementation reviews of October 2026: what they found, which errors were the MATLAB references' own, and what was done about each |
+| [docs/review-2026-10-05.md](docs/review-2026-10-05.md) | the independent reviews of October 2026, of the implementation and then of the notebooks: what they found, which errors were the MATLAB references' own, and what was done about each |
 | [SPEC_QUESTIONS.md](SPEC_QUESTIONS.md) | the file-format decisions, answered and open |
 | [BLUEPRINT.md](BLUEPRINT.md) | what the package is, what "finished" means, and the decisions it waits on |
 | [scripts/](scripts/README.md), [tools/](tools/README.md), [docs/figures/](docs/figures/README.md) | worked scripts (with the lab's Longleaf paths), the builders of the bundled data, and the figures |
@@ -137,13 +137,15 @@ and `tools/build_hcp_fc.py` build them for anyone with HCP access, and
 ```bash
 git clone https://github.com/xya2001/SBCI.git && cd SBCI
 pip install -e ".[dev]"
-pytest                                   # about a minute; 33 tests skip without data outside the repository
+pytest                                   # about a minute; 39 tests skip without data outside the repository
 ruff check . && ruff format --check src tests scripts tools
 ```
 
-CI runs the suite on Linux and macOS, Python 3.10 and 3.13, builds and
-installs the wheel from a blank environment, runs the quick start above
-against the public Drive, and renders the figures. On Longleaf,
+CI runs the suite on Linux and macOS, Python 3.10 and 3.13; builds the wheel
+and installs it in a blank environment; runs the brief's acceptance lines and
+the quick start's smoothing on sub-100307, downloaded from the public Drive;
+and runs the rendering tests and the slow planted-answer test under a virtual
+display. On Longleaf,
 `sbatch scripts/test.sbatch` runs the suite as a batch job, and
 `SBCI_HCP_DIR=hcp-ya sbatch --export=ALL scripts/test.sbatch` adds the tests
 on the released subject. [VERIFICATION.md](VERIFICATION.md) lists what each

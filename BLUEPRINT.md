@@ -11,7 +11,7 @@ answered since), and they are listed in section 9 with an owner and an
 estimated lead time against each.
 Annex A gives each one in full, with the evidence and a recommendation.
 
-One of the five had to come from outside this work, and the project's
+One of the seven had to come from outside this work, and the project's
 acceptance criterion waited on it:
 
 - **Q6 — may we redistribute derived dense connectomes openly?** Answered
@@ -20,7 +20,7 @@ acceptance criterion waited on it:
   adults are public and `sbci download hcp-ya` fetches them. HCP-Aging data are not
   published.
 
-The other four are ratifications rather than investigations: minutes of
+The other six are ratifications rather than investigations: minutes of
 discussion each, but everything written to disk depends on them.
 
 **Q10, which smoother the project standardizes on, has been decided:** both
@@ -137,7 +137,7 @@ src/sbci/
   surface.py       bundled meshes
   plotting.py      surface figures
   validate.py      the checks behind `sbci validate`
-  cli.py           `sbci download` / `validate` / `info` / `example` / `atlases`
+  cli.py           `sbci download` / `validate` / `info` / `example` / `atlases` / `cohort`
 ```
 
 **Design rules that have earned their place.** The specification lives in one
@@ -300,7 +300,7 @@ nothing and prevents an awkward rename later.
 | ~~the spherical kernel port does not reproduce the released files~~ | resolved | r = 1.000000 and scale 1.000000 against `smoothed_sc_avg_0.005_ico4.mat` at full scale (PORTING.md item 6) |
 | Q2 flips to "include the diagonal" | every released file must be rewritten | freeze before the first release, not after |
 | Q3/Q9 picks the plain sum | the legacy importer normalizes wrongly | decide before importing a cohort |
-| a cohort mixes the two kernels | the files are silently incomparable | metadata records which was used; a cohort-level check that refuses a mix is still to be written |
+| a cohort mixes the two kernels | the files are silently incomparable | metadata records which was used, and `sbci.load_cohort` refuses a cohort whose files mix kernels or bandwidths |
 | ~~FPCA dependencies stay unobtainable~~ | resolved | none were needed; verified to 1e-10 (PORTING.md item 5) |
 | ico4 cannot resolve the finest atlases | Schaefer900 and Schaefer1000 lose parcels outright | already measured and documented; do not advertise them |
 

@@ -264,7 +264,9 @@ def _level(value) -> str:
     return str(value).strip()
 
 
-def design(covariates, intercept: bool = True, reference=None, categorical=()) -> Design:
+def design(
+    covariates, intercept: bool = True, reference=None, categorical=(), missing=None
+) -> Design:
     """A design matrix with named columns, from named covariates.
 
     Parameters
@@ -284,6 +286,11 @@ def design(covariates, intercept: bool = True, reference=None, categorical=()) -
         Covariates to take as factors although their values are numbers, as a
         site coded 1, 2, 3. Text is a factor anyway, whatever it reads as:
         codes ``"01"``, ``"02"`` are levels, not a number.
+    missing
+        The cells read as missing besides ``None`` and NaN: by default the
+        markers :func:`sbci.load_cohort` reads by default (``NA``, ``n/a``, an
+        empty cell ...). Pass ``()`` where such a cell is a value -- a site
+        coded ``NA``, kept by ``load_cohort(keep_default_missing=False)``.
 
     A number enters as it is. A factor of ``L`` levels enters as ``L - 1``
     columns of zeros and ones, one per level but the reference, named
@@ -302,20 +309,29 @@ def design(covariates, intercept: bool = True, reference=None, categorical=()) -
     >>> d.columns("sex")
     [2]
     """
-    from .cohort import _missing
+    from .cohort import MISSING, _markers, _missing
 
     if not isinstance(covariates, Mapping) or not covariates:
         raise ValueError("design() takes a dict of named covariates, one value per subject")
+    markers = MISSING if missing is None else _markers(missing)
     reference = {str(k): v for k, v in (reference or {}).items()}
     categorical = {categorical} if isinstance(categorical, str) else {str(c) for c in categorical}
     unknown = sorted((set(reference) | categorical) - {str(k) for k in covariates})
     if unknown:
         raise ValueError(f"reference= and categorical= name covariates not given: {unknown}")
-    cells_of = {str(k): list(np.asarray(v, dtype=object).ravel()) for k, v in covariates.items()}
+    if len({str(k) for k in covariates}) < len(covariates):
+        raise ValueError("two covariates have one name once written as text, as 1 and '1' do")
+    flat = {str(k): np.asarray(v, dtype=object) for k, v in covariates.items()}
+    deep = sorted(name for name, cells in flat.items() if cells.ndim > 1)
+    if deep:
+        raise ValueError(f"{deep[0]} is {flat[deep[0]].ndim}-D; a covariate is one value a subject")
+    cells_of = {name: list(cells.ravel()) for name, cells in flat.items()}
     lengths = {name: len(cells) for name, cells in cells_of.items()}
     if len(set(lengths.values())) > 1:
         raise ValueError(f"the covariates differ in length: {lengths}")
     n = next(iter(lengths.values()))
+    if n == 0:
+        raise ValueError("the covariates hold no subjects")
     columns: list = []
     names: list = []
     groups: dict = {}
@@ -325,17 +341,27 @@ def design(covariates, intercept: bool = True, reference=None, categorical=()) -
         names.append("intercept")
         groups["intercept"] = (0,)
     for name, cells in cells_of.items():
-        missing = [i for i, value in enumerate(cells) if _missing(value)]
-        if missing:
-            count = len(missing)
+        gaps = [i for i, value in enumerate(cells) if _missing(value, markers)]
+        if gaps:
+            count = len(gaps)
             raise ValueError(
                 f"{name} has {count} missing value{'s' if count > 1 else ''} (the first in row "
-                f"{missing[0]}): leave those subjects out first, as load_cohort(require=...) does"
+                f"{gaps[0]}, {cells[gaps[0]]!r}): leave those subjects out first, as "
+                "load_cohort(require=...) does -- or, where such a cell is a value (a site coded "
+                "NA), pass missing=() as load_cohort(keep_default_missing=False) keeps them"
             )
         numbers = None
         if name not in categorical and all(_is_number(value) for value in cells):
             numbers = np.array([float(value) for value in cells])
         if numbers is not None:
+            if name in reference:
+                raise ValueError(
+                    f"{name} is numbers, which enter as they are; reference= codes a factor, so "
+                    f"name {name} in categorical= too to take its values as levels"
+                )
+            if not np.isfinite(numbers).all():
+                first = int(np.flatnonzero(~np.isfinite(numbers))[0])
+                raise ValueError(f"{name} is infinite in row {first}; a design has no fit for it")
             if np.all(numbers == numbers[0]):
                 raise ValueError(f"{name} does not vary in these subjects; drop it")
             groups[name] = (len(columns),)
@@ -743,8 +769,22 @@ def local_test(
     else:
         matrix = _design_matrix(design, add_intercept)
     n_subjects, n_terms = matrix.shape
+    if n_subjects == 0:
+        raise ValueError("the design has no subjects")
     if scores.shape[0] != n_subjects:
         raise ValueError(f"{scores.shape[0]} subjects in scores but {n_subjects} in the design")
+    bad = np.argwhere(~np.isfinite(matrix))
+    if bad.size:
+        row, column = (int(i) for i in bad[0])
+        label = (
+            repr(named.names[column])
+            if named is not None
+            else f"column {column} of the design matrix"
+        )
+        raise ValueError(
+            f"the design holds a non-finite value ({label}, subject {row}); a missing covariate "
+            "is left out with its subject first, and an infinite one has no fit"
+        )
     if contrast is not None and terms is not None:
         raise ValueError("give terms= or contrast=, not both")
 
@@ -798,6 +838,22 @@ def local_test(
             raise ValueError(
                 f"column {empty[0]} of the design matrix is all zeros in these subjects, so "
                 "there is nothing in it to test"
+            )
+        rest = [i for i in range(n_terms) if i not in tested]
+        intercept_named = any(
+            np.all(matrix[:, t] == matrix[0, t]) and matrix[0, t] != 0 for t in tested
+        )
+        if (
+            not intercept_named
+            and _spans_constant(matrix)
+            and not (rest and _spans_constant(matrix[:, rest]))
+        ):
+            raise ValueError(
+                "the tested columns combine into a constant the rest of the design does not "
+                "hold -- dummy codes for every level of a factor do, with no intercept -- so the "
+                "test would take in the intercept: whether every level's mean is zero. Code the "
+                "factor against a reference level (design(..., intercept=True)) to test whether "
+                "the levels differ, or write the hypothesis out with contrast="
             )
 
     codes = None
@@ -874,12 +930,25 @@ def local_test(
         )
 
     def fit(responses, full):
-        """Coefficients and residual sums of squares, every column at once."""
+        """Coefficients and residual sums of squares, every column at once.
+
+        A column holding a non-finite score is left out of the solve and comes back
+        NaN on its own: LAPACK's least squares scales the whole right-hand side by
+        its largest entry, so one infinite score made every column NaN.
+        """
         norms = np.linalg.norm(full, axis=0)
         norms = np.where(norms > 0, norms, 1.0)
-        scaled, *_ = np.linalg.lstsq(full / norms, responses, rcond=None)
-        coefficients = scaled / norms[:, None]
-        residual = responses - full @ coefficients
+        finite = np.isfinite(responses).all(axis=0)
+        if finite.all():
+            scaled, *_ = np.linalg.lstsq(full / norms, responses, rcond=None)
+            coefficients = scaled / norms[:, None]
+        else:
+            coefficients = np.full((full.shape[1], responses.shape[1]), np.nan)
+            if finite.any():
+                scaled, *_ = np.linalg.lstsq(full / norms, responses[:, finite], rcond=None)
+                coefficients[:, finite] = scaled / norms[:, None]
+        with np.errstate(invalid="ignore"):
+            residual = responses - full @ coefficients
         return coefficients, (residual * residual).sum(axis=0)
 
     # The scale a residual is judged against is the variation the reduced
@@ -892,7 +961,8 @@ def local_test(
     # component of a dummy-coded design NaN.)
     magnitude = (scores * scores).sum(axis=0)
     if reduced.shape[1] and _spans_constant(reduced, rank_reduced):
-        centred = scores - scores.mean(axis=0)
+        with np.errstate(invalid="ignore"):  # an infinite score centres to NaN, its own column
+            centred = scores - scores.mean(axis=0)
         scale = (centred * centred).sum(axis=0)
     else:
         scale = magnitude
@@ -929,8 +999,9 @@ def local_test(
     # The coefficients' covariance, held as a factor from the design's singular
     # value decomposition rather than formed from X'X, which squares the
     # design's conditioning (until 6 October 2026 a raw streamline count
-    # beside the intercept gave errors 14 times too small, and a date in
-    # seconds none): classical, sigma^2 A A' ...
+    # beside the intercept gave the intercept an error of 3.6e-4 for 1.10, and
+    # a date in seconds an error 2,400 times too small and the others none):
+    # classical, sigma^2 A A' ...
     with np.errstate(divide="ignore", invalid="ignore"):
         sigma2 = full_ss / residual_dof
     factor = _gram_factor(matrix)
@@ -1046,6 +1117,12 @@ def _clustered_wald(matrix, scores, beta, codes, n_groups, weights, testable):
     statistics, ``A``, and ``c M_U`` for every column.
     """
     n_subjects, n_terms = matrix.shape
+    q = weights.shape[0]
+    if n_groups - 1 < q:
+        raise ValueError(
+            f"{n_groups} groups give a cluster-robust covariance of rank {n_groups - 1} at most, "
+            f"too few to test {q} combinations at once: test fewer terms, or use more groups"
+        )
     residual = scores - matrix @ beta
     norms, left, singular, right = _scaled_svd(matrix)  # of full column rank here
     factor = (right.T / singular) / norms[:, None]
@@ -1057,7 +1134,6 @@ def _clustered_wald(matrix, scores, beta, codes, n_groups, weights, testable):
     reach = weights @ factor  # (q, terms)
     block = np.einsum("qi,kij,rj->kqr", reach, meat, reach)
     tested_beta = beta.T @ weights.T  # (columns, q)
-    q = weights.shape[0]
     statistic = np.full(scores.shape[1], np.nan)
     for k in np.flatnonzero(testable):
         try:
@@ -1098,7 +1174,12 @@ def icc(sessions, kind: str = "agreement") -> np.ndarray:
         agreement    (MSR - MSE) / (MSR + (k - 1) MSE + k (MSC - MSE) / n)
         consistency  (MSR - MSE) / (MSR + (k - 1) MSE)
 
-    ``NaN`` where a feature has a missing value or no variance.
+    ``NaN`` where a feature has a missing value; where it does not vary
+    beyond rounding -- its sum of squares about the mean is below 1e-20 of
+    its sum of squares, agreement to about ten significant digits, so a
+    feature of 1e6 plus a spread of 1e-5 counts as constant; or where the
+    formula's denominator is not positive, as with two subjects and two
+    sessions whose subject and session means all agree.
 
     Examples
     --------
@@ -1172,11 +1253,12 @@ def identification(first, second) -> Identification:
     functional connectomes across days. ``first`` and ``second`` are
     ``(n_subjects, n_features)`` in one subject order -- whole connectomes'
     upper triangles, region matrices, maps. A feature missing in any subject
-    is left out of every comparison. A feature that is the same in every
-    subject -- a pair of vertices no streamline reaches, zero throughout --
-    tells no one apart but still enters every correlation and shifts them
-    all, so two sets of features, or one connectome at two bandwidths, are
-    compared over the features that vary in both. The similarity is
+    is left out of every comparison; every other one enters, including a
+    feature that is the same in every subject -- a pair of vertices no
+    streamline reaches, zero throughout -- which tells no one apart but still
+    shifts every correlation. So to compare two sets of features, or one
+    connectome at two bandwidths, pass only the features that vary in both:
+    this function does not drop them. The similarity is
     Pearson's r across features, summed in float64 a block of features at a
     time: float32 input is not copied whole, so a hundred whole ico4
     connectomes fit, and the sums keep float64's precision, which they need.
@@ -1205,6 +1287,11 @@ def identification(first, second) -> Identification:
     if not present.any():
         raise ValueError("no feature is present in every subject")
     columns = np.flatnonzero(present)
+    if columns.size < 2:
+        raise ValueError(
+            f"{columns.size} feature present in every subject: a correlation across features "
+            "needs two at least"
+        )
     step = max(1, _BLOCK_ELEMENTS // n)
     if columns.size == present.size:
         blocks = [slice(start, start + step) for start in range(0, columns.size, step)]

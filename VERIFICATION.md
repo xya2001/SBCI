@@ -35,7 +35,7 @@ git clone <this repository> && cd sbci
 python -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
 
-python -m pytest -q                 # expect: everything passes; 33 skip with every extra installed, more without (below)
+python -m pytest -q                 # expect: everything passes; 39 skip with every extra installed, more without (below)
 ruff check . && ruff format --check src tests scripts tools
 python -m build --wheel
 ```
@@ -55,8 +55,8 @@ reads it from `SBCI_HCP_DIR`; the MATLAB comparisons in
 `tests/test_matlab_reference.py` (22) need the Tier 4 reference dumps, named
 by the `SBCI_*` paths at the top of that file; the planted-answer analysis on
 the ico4 grid in `tests/test_example.py` (three minutes of FPCA) runs with
-`SBCI_SLOW_TESTS=1`, which CI's `render` job sets; seven doctest items are
-whole examples marked `+SKIP`; and without the plotting and render extras the
+`SBCI_SLOW_TESTS=1`, which CI's `render` job sets; thirteen doctest items
+are whole examples marked `+SKIP`; and without the plotting and render extras the
 figure tests in `tests/test_surface.py`, `test_plot_mesh.py` and
 `test_render.py` skip as well. With a network connection, two more checks run
 on the released young adults:
@@ -104,12 +104,13 @@ python scripts/audit_api.py
 `scripts/audit_api.py` exercises the methods of the README's capabilities table on the released
 young adults, in the order a user would: load, save, parcellate, seed,
 couple structure with function, plot, export, validate, download, smooth,
-reduce, test, align with ENCORE and
-ConSEAL, and carry a warp to fs_LR: 17 checks (the synthetic example,
+reduce, test, align with ENCORE and ConSEAL, carry a warp to fs_LR, gather a
+cohort, score a held-out subject, test a named design and a contrast, split
+streamlines for test-retest, and write maps and region tables: 22 checks (the synthetic example,
 `sbci info` and `sbci atlases` are covered by the unit tests instead). Its
 paths default to the lab's on Longleaf and follow `SBCI_HCP_DIR` and
 `SBCI_TOOLKIT`. It prints a value for each and exits non-zero if any fails.
-Expect `17 passed, 0 failed, 0 skipped`. It smooths, reduces and aligns on
+Expect `22 passed, 0 failed, 0 skipped`. It smooths, reduces and aligns on
 the full grid, so run it inside a batch job.
 
 **What this proves.** The documented API works end to end on a real subject,

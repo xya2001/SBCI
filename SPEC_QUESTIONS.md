@@ -272,8 +272,8 @@ where `src/sbci/spec.py` currently carries a **provisional** value, marked
     - `smooth()` defaults to `kernel="shk"`. `shk` means the **spherical heat
       kernel**, not the Matern kernel -- see the naming note below.
     - The two are not comparable, so a cohort must not mix kernels. `sbci
-      validate` checks one file and records the kernel; a cohort-level check
-      that refuses a mix is still to be written.
+      validate` checks one file and records the kernel, and `sbci.load_cohort`
+      (`sbci cohort`) refuses a cohort whose files mix kernels or bandwidths.
     - The two kernels take different bandwidth parameters: the spherical kernel
       takes `sigma` (0.005 in the released files) and the Riemannian kernel
       takes `kappa` (about 1.95). `bandwidth` alone is therefore ambiguous in

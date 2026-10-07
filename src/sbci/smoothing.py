@@ -837,6 +837,12 @@ class Endpoints:
         ([3, 7], 2)
         """
         index = np.asarray(indices)
+        if index.size == 0:
+            index = index.astype(np.intp)  # [] is float64 to NumPy, and takes nothing
+        elif index.dtype.kind not in "biu":
+            raise TypeError(
+                f"streamlines are taken by integer indices or a boolean mask, got {index.dtype}"
+            )
         if index.dtype == bool:
             if index.shape != (self.n_streamlines,):
                 raise ValueError(f"a mask over {self.n_streamlines} streamlines, got {index.shape}")
