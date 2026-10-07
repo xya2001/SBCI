@@ -797,7 +797,7 @@ second = np.vstack([sbci.load(p).data[pairs] for p in day2.paths("fc")])
 
 found = identification(first, second)
 found.accuracy                  # (day 1 to 2, day 2 to 1): the share whose other day is their own
-found.within - found.between    # how far a subject stands out: differential identifiability
+100 * (found.within - found.between)   # differential identifiability, as Amico and Goni scale it
 icc([first[:, :5000], second[:, :5000]])   # ICC(2,1) feature by feature; kind="consistency" for (3,1)
 ```
 
@@ -833,14 +833,15 @@ upper bound on test-retest reliability.
 On a hundred young adults (`notebooks/reliability.ipynb`) the continuous FC
 connectome picks out 100 of them from one day's FC by the other's (99 the other
 way round) and Schaefer-200 regions 97 and 96, and a subject stands further out
-from the others in the continuous connectome -- 0.375 between the correlation
-with its own other day and with another subject's, against 0.266. A single
+from the others in the continuous connectome: a differential identifiability
+(100 times own day's correlation less another subject's) of 37.5 against 26.6. A single
 vertex pair is less reliable than a region pair (median ICC 0.43 against 0.59),
 and summaries are more: a vertex's FC strength repeats with an ICC of 0.61 on
 median, its coupling 0.67. Across halves of the streamlines the smoothing
 bandwidth sets the trade-off: a vertex pair's median ICC rises from 0.24 at
-0.0025 to 0.77 at 0.01 as subjects grow alike (0.40 to 0.18 between own and
-another subject's correlation), and component scores repeat at 0.995 to 0.999.
+0.0025 to 0.84 at 0.01, over the pairs that vary at every bandwidth, as
+subjects grow alike (differential identifiability 39.8 to 17.5), and component
+scores, on a basis fitted to other subjects, repeat at 0.994 to 0.999.
 ENCORE aligning one half of a subject's streamlines onto the other moves the
 cortex 0.11 degrees on median, against 3.07 between two subjects.
 
@@ -860,13 +861,16 @@ for train, test in folds:                       # whole families in each fold
 ```
 
 `notebooks/prediction.ipynb` does it for sex and fluid intelligence on 300
-young adults. Two of its findings are worth knowing before a study: sex there
-is head size first (brain-mask volume and streamline count alone reach an AUC
-of 0.91, and neither connectome adds to it beyond its interval), and splitting
-families across folds raised fluid intelligence's out-of-fold r from about 0.02
-to 0.09 -- all of it leak. At rank 15 the continuous components carry less
-about sex than a PCA of the Schaefer-200 matrices (0.66 against 0.86 on their
-own); the notebook shows how much of that is the regions' transform.
+young adults, scoring each fold on its own: pooled across folds, a weak
+model's r and AUC sit below their null, by an amount that depends on how the
+subjects were dealt. Two of its findings are worth knowing before a study: sex
+there is head size first (brain-mask volume and streamline count alone reach
+an AUC of 0.92; the regions add 0.03 to it, the components nothing), and
+splitting families across folds raised fluid intelligence's r by 0.045 on
+average, where features that cannot leak did not move. At rank 15 the
+continuous components carry less about sex than a PCA of the Schaefer-200
+matrices (0.66 against 0.87); the notebook shows how much of that is the
+regions' transform.
 
 ## Aligning a cohort
 

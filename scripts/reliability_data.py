@@ -17,9 +17,10 @@ are split here. For each, ``split``:
    samples of one brain, whose warp is alignment's noise -- and the next
    subject's first half onto this subject's, the warp between two brains.
 
-``components`` fits a rank-20 reduction to the thirty subjects' whole
-connectomes and scores both halves against it with ``project``, so that
-neither half is the one the basis was fitted to.
+``components`` fits a rank-20 reduction to thirty other subjects of the
+sample, none of them split, and scores both halves of each split subject on
+it with ``project``: a basis fitted to the split subjects themselves would
+have seen both halves of each, and flattered their agreement.
 """
 
 from __future__ import annotations
@@ -43,6 +44,12 @@ SPLIT = 30
 def sample() -> list:
     with open(ROOT / "reliability" / "manifest.csv") as handle:
         return [line.strip() for line in handle.readlines()[1:] if line.strip()][:SPLIT]
+
+
+def others() -> list:
+    """The next thirty of the sample, none of them split: the subjects the basis is fitted to."""
+    with open(ROOT / "reliability" / "manifest.csv") as handle:
+        return [line.strip() for line in handle.readlines()[1:] if line.strip()][SPLIT : 2 * SPLIT]
 
 
 def halves(subject: str):
@@ -122,12 +129,13 @@ def split(index: int) -> None:
 
 
 def components() -> None:
-    subjects = sample()
+    subjects, fitted_to = sample(), others()
+    assert not set(subjects) & set(fitted_to)
     start = time.time()
-    reduction = sbci.reduce([SC / f"{s}_sc.h5" for s in subjects], rank=20)
+    reduction = sbci.reduce([SC / f"{s}_sc.h5" for s in fitted_to], rank=20)
     print(
-        f"rank 20 on {len(subjects)} whole connectomes: {reduction.explained[-1]:.1%} explained "
-        f"({time.time() - start:.0f}s)",
+        f"rank 20 on {len(fitted_to)} other subjects' whole connectomes: "
+        f"{reduction.explained[-1]:.1%} explained ({time.time() - start:.0f}s)",
         flush=True,
     )
     scores = {}
