@@ -1155,8 +1155,8 @@ class Identification:
     within: float
     """Mean similarity of a subject's two sessions: the diagonal."""
     between: float
-    """Mean similarity of two subjects' sessions: off the diagonal. ``within - between`` is
-    Amico and Goni's differential identifiability."""
+    """Mean similarity of two subjects' sessions: off the diagonal. Amico and Goni's
+    differential identifiability is ``100 * (within - between)``."""
     features: int
     """How many features entered: those present in every subject's two sessions."""
 
@@ -1172,12 +1172,17 @@ def identification(first, second) -> Identification:
     functional connectomes across days. ``first`` and ``second`` are
     ``(n_subjects, n_features)`` in one subject order -- whole connectomes'
     upper triangles, region matrices, maps. A feature missing in any subject
-    is left out of every comparison. The similarity is Pearson's r across
-    features, summed in float64 a block of features at a time: float32 input
-    is not copied whole, so a hundred whole ico4 connectomes fit, and the sums
-    keep float64's precision, which they need. Smoothed SC is mostly near zero
-    with a few large values, and float32 sums over its millions of pairs drift
-    by more than a percent, to correlations above one.
+    is left out of every comparison. A feature that is the same in every
+    subject -- a pair of vertices no streamline reaches, zero throughout --
+    tells no one apart but still enters every correlation and shifts them
+    all, so two sets of features, or one connectome at two bandwidths, are
+    compared over the features that vary in both. The similarity is
+    Pearson's r across features, summed in float64 a block of features at a
+    time: float32 input is not copied whole, so a hundred whole ico4
+    connectomes fit, and the sums keep float64's precision, which they need.
+    Smoothed SC is mostly near zero with a few large values, and float32
+    sums over its millions of pairs drift by more than a percent, to
+    correlations above one.
 
     Examples
     --------

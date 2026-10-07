@@ -2029,8 +2029,9 @@ that still stood; each was checked with a probe first.
 
 ## Status
 
-All seven ports are done and verified, and the eight reviews of 5 and 6
-October 2026 (items 8 to 15) have been answered in full; what is left is
+All seven ports are done and verified, and the reviews of 5 to 7 October
+2026 have been answered in full: the eight of the code here (items 8 to 15),
+and the two of the notebooks in docs/review-2026-10-05.md. What is left is
 under each item's *Still open*. They were done in the order 3, 1, 2, 5, 4, 6, 7: parcellation
 unblocked the first notebook, kernel smoothing the WP3 speed target, and the
 two alignments came last because nothing else depends on them.

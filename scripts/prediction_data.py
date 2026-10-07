@@ -16,7 +16,9 @@ the four other folds and scores every subject on it with ``project``, the
 held-out fold ``K`` and the training subjects alike, so the two are scored
 the same way and the held-out subjects never touch the basis. ``atlas`` computes each
 subject's Schaefer-200 SC matrix, for the atlas-based comparison, whose PCA
-the notebook fits inside each training fold the same way. ``covariates``
+the notebook fits inside each training fold the same way; with it, each
+region's mass with itself and the regions' areas, which turn the masses into
+densities in the inner product the functional PCA uses. ``covariates``
 records what the baselines use: each subject's brain-mask volume, from the
 pipeline's skull-stripped T1 (``t1_brain.nii.gz``, 1.25 mm), as a measure of
 head size, and the number of streamlines in its SC file.
@@ -35,6 +37,7 @@ import numpy as np
 
 import sbci
 from sbci.io import read_header
+from sbci.parcellation import region_weights
 
 ROOT = Path("/work/users/x/y/xya/hcp-ya")
 SC = ROOT / "full" / "data"
@@ -122,9 +125,35 @@ def atlas() -> None:
     subjects = [s for s, _ in read_sample()]
     schaefer = sbci.load_atlas("Schaefer200")
     upper = np.triu_indices(schaefer.n_regions, 1)
-    matrices = np.vstack([sbci.load(SC / f"{s}_sc.h5").to_atlas(schaefer)[upper] for s in subjects])
-    np.savez_compressed(OUT / "atlas.npz", subjects=np.array(subjects), schaefer200=matrices)
-    print(f"Schaefer-200 SC for {len(subjects)} subjects: {matrices.shape[1]:,} region pairs each")
+    between, within, grid = [], [], None
+    for subject in subjects:
+        connectome = sbci.load(SC / f"{subject}_sc.h5")
+        matrix = connectome.to_atlas(schaefer)
+        between.append(matrix[upper])
+        within.append(np.diagonal(matrix).copy())
+        area = np.where(connectome.mask, connectome.area, 0.0)
+        if grid is None:
+            grid = area
+        elif not np.array_equal(area, grid):
+            raise ValueError(f"{subject}'s vertex areas differ from the first subject's")
+    # A region pair's mass over the product of the regions' areas is its density; with
+    # itself, over the area products of the region's distinct vertex pairs, as the vertex
+    # self-pairs carry no connectivity. These are the functional PCA's area weights.
+    weights, _ = region_weights(schaefer, grid)
+    area = np.asarray(weights.sum(axis=0)).ravel()
+    within_area = area**2 - np.asarray(weights.multiply(weights).sum(axis=0)).ravel()
+    np.savez_compressed(
+        OUT / "atlas.npz",
+        subjects=np.array(subjects),
+        schaefer200=np.vstack(between),
+        schaefer200_within=np.vstack(within),
+        schaefer200_area=area,
+        schaefer200_within_area=within_area,
+    )
+    print(
+        f"Schaefer-200 SC for {len(subjects)} subjects: {upper[0].size:,} region pairs each, "
+        "and each region with itself"
+    )
 
 
 def covariates() -> None:

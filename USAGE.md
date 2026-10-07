@@ -840,7 +840,8 @@ and summaries are more: a vertex's FC strength repeats with an ICC of 0.61 on
 median, its coupling 0.67. Across halves of the streamlines the smoothing
 bandwidth sets the trade-off: a vertex pair's median ICC rises from 0.24 at
 0.0025 to 0.84 at 0.01, over the pairs that vary at every bandwidth, as
-subjects grow alike (differential identifiability 39.8 to 17.5), and component
+subjects grow alike (differential identifiability 39.9 to 17.6, over the same
+pairs), and component
 scores, on a basis fitted to other subjects, repeat at 0.994 to 0.999.
 ENCORE aligning one half of a subject's streamlines onto the other moves the
 cortex 0.11 degrees on median, against 3.07 between two subjects.
@@ -863,14 +864,19 @@ for train, test in folds:                       # whole families in each fold
 `notebooks/prediction.ipynb` does it for sex and fluid intelligence on 300
 young adults, scoring each fold on its own: pooled across folds, a weak
 model's r and AUC sit below their null, by an amount that depends on how the
-subjects were dealt. Two of its findings are worth knowing before a study: sex
-there is head size first (brain-mask volume and streamline count alone reach
-an AUC of 0.92; the regions add 0.03 to it, the components nothing), and
-splitting families across folds raised fluid intelligence's r by 0.045 on
-average, where features that cannot leak did not move. At rank 15 the
-continuous components carry less about sex than a PCA of the Schaefer-200
-matrices (0.66 against 0.87); the notebook shows how much of that is the
-regions' transform.
+subjects were dealt. Its bootstrap intervals, which resample the held-out
+families with the fitted models held fixed, are too narrow for a weak model
+by about a third, so it tests the weak results by permutation, families kept
+whole. Two of its findings are worth knowing before a study: sex there is
+head size first (brain-mask volume and streamline count alone reach an AUC
+of 0.92; the regions add 0.03 to it, more than any of 500 permutations, the
+components nothing), and splitting families across folds raised fluid
+intelligence's r by 0.045 on average, where features that cannot leak,
+processed alike, moved within chance of nothing. At rank 15 the continuous
+components carry less about sex than a PCA of the Schaefer-200 matrices
+(0.66 against 0.87), and a PCA of the region densities weighed as the
+functional PCA weighs the continuous ones still reaches 0.81: the gap is
+mostly the reduction, not the regions' transform.
 
 ## Aligning a cohort
 
