@@ -272,9 +272,12 @@ class _Deflation:
 
         from scipy.sparse.linalg import LinearOperator
 
+        # Flattened first: SciPy before 1.11 builds a matrix product from (n, 1)
+        # columns, which a diagonal inner product broadcast to (n, n) -- and the
+        # ARPACK fallback, which forms the operator densely, failed on SciPy 1.10.
         return LinearOperator(
             (n, n),
-            matvec=lambda v: self.apply(matrix @ self.apply_transposed(v)),
+            matvec=lambda v: self.apply(matrix @ self.apply_transposed(np.ravel(v))),
             dtype=np.float64,
         )
 
@@ -290,7 +293,7 @@ def _mode1_gram(residual):
     """
 
     def apply(vector):
-        halfway = vector @ residual  # row s is R_s' v
+        halfway = np.ravel(vector) @ residual  # row s is R_s' v; (n, 1) columns flattened
         return (residual @ halfway[:, :, None])[:, :, 0].sum(axis=0)
 
     return apply
@@ -328,7 +331,11 @@ class Reduction:
     basis: np.ndarray
     """``(n_vertices, rank)``; column ``k`` is ``psi_k`` on the grid."""
     scores: np.ndarray
-    """``(n_subjects, rank)``; row ``i`` summarises subject ``i``."""
+    """``(n_subjects, rank)``; row ``i`` summarises subject ``i``.
+
+    Each column is the scores of the component in :attr:`basis`, so
+    :func:`project` gives the training subjects these back, to rounding.
+    """
     scales: np.ndarray
     """``(rank,)``; the weight of each component in the fit.
 
@@ -338,7 +345,12 @@ class Reduction:
     which only grows, to judge how many components are worth keeping.
     """
     explained: np.ndarray
-    """``(rank,)``; fraction of the cohort's norm captured up to component k."""
+    """``(rank,)``; fraction of the cohort's norm captured up to component k.
+
+    The norm is the square root of the sum of squares, as the reference
+    reports it, so square it for the share of the sum of squares that a PCA
+    calls variance explained: 0.26 of the norm is 7% of the sum of squares.
+    """
     objective: np.ndarray
     """``(rank, iterations)``; the objective at each outer iteration."""
     mean: np.ndarray | None = None
@@ -363,7 +375,7 @@ class Reduction:
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
         return (
             f"<Reduction rank {self.rank} over {self.scores.shape[0]} subjects, "
-            f"{self.explained[-1]:.1%} explained>"
+            f"{self.explained[-1]:.1%} of the norm explained>"
         )
 
 
@@ -517,8 +529,15 @@ def fit_basis(
                 change = abs((trajectory[step + 1] - trajectory[step]) / trajectory[0])
             step += 1
 
-        scale = float(vector @ contracted @ vector)
-        return vector, score, contracted, trajectory, scale
+        if step:
+            # The last pass moved the vector after its scores were taken, so those
+            # are the previous vector's. Score the vector being returned -- one more
+            # pass over the cohort -- so that the scores, the scale and the deflation
+            # all belong to this component. (The reference keeps the previous
+            # vector's, which project() could reproduce only to the tolerance.)
+            weights = (residual @ vector) @ vector
+        scale = float(np.linalg.norm(weights))
+        return vector, (weights / scale if scale else weights), trajectory, scale
 
     for k in range(rank):
         deflation = _Deflation(components[:, :k] if k else None, gram)
@@ -541,7 +560,7 @@ def fit_basis(
                 guess /= np.linalg.norm(guess)
             vector = power_iteration(_mode1_gram(residual), guess, max_inner, tol_inner)
             fitted = refine(vector / np.linalg.norm(vector), deflation)
-        vector, score, contracted, trajectory, scale = fitted
+        vector, score, trajectory, scale = fitted
         objective[k] = trajectory
         # A component the data leave nothing for -- more asked for than the cohort
         # spans -- has a scale at rounding level; the penalty, however small, then
@@ -632,11 +651,8 @@ def project(reduction: Reduction, matrices, reference: bool = False) -> np.ndarr
     ``Y - sum_{l<k} c_l psi_l psi_l'``, and is divided by the component's
     scale -- the contraction and deflation :func:`fit_basis` applies to the
     training cohort. So the result is in the units of :attr:`Reduction.scores`,
-    and a model trained on those can be given projected scores as they are.
-    (The fit records a component's scores one alternating step before its
-    final vector, as the reference does, so on the training cohort the two
-    agree to the fit's tolerance, and to rounding once the updates have
-    converged.)
+    and a model trained on those can be given projected scores as they are;
+    on the training cohort it returns the fit's scores, to rounding.
 
     ``reference=True`` reproduces ``ConConSmooth.smooth`` instead: least
     squares of each subject's matrix against the products ``psi_k psi_k'``

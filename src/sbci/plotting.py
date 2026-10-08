@@ -219,6 +219,35 @@ def display_coordinates(part, surface: str) -> np.ndarray:
     return coordinates
 
 
+def _colour_range(values, vmin=None, vmax=None, symmetric=None):
+    """``(vmin, vmax, symmetric)`` for finite ``values``: the bounds a figure draws with.
+
+    ``symmetric`` defaults to whether the values take both signs. A symmetric
+    scale is centred on zero: one bound given is mirrored -- ``vmin=-0.5``
+    alone means ``(-0.5, 0.5)``, not ``-0.5`` up to the map's largest value --
+    and none given spans the largest magnitude both ways; both given are kept
+    as they are. A constant map collapses the range, and the renderer divides
+    by ``vmax - vmin`` (its colorbar takes its own bounds from the data and so
+    cannot be fixed by widening them alone), so a small window is opened.
+    """
+    values = np.asarray(values, dtype=np.float64)
+    if symmetric is None:
+        symmetric = bool(values.min() < 0 < values.max())
+    if vmin is None or vmax is None:
+        if symmetric:
+            given = vmin if vmin is not None else vmax
+            limit = abs(given) if given is not None else np.abs(values).max()
+            auto_min, auto_max = -limit, limit
+        else:
+            auto_min, auto_max = values.min(), values.max()
+        vmin = auto_min if vmin is None else vmin
+        vmax = auto_max if vmax is None else vmax
+    if vmax <= vmin:
+        pad = abs(vmin) * 1e-6 or 1e-6
+        vmin, vmax = vmin - pad, vmax + pad
+    return float(vmin), float(vmax), bool(symmetric)
+
+
 def plot_surface(
     surface_map,
     surface: str = "inflated",
@@ -255,7 +284,8 @@ def plot_surface(
         Which views to draw for each hemisphere. The default gives the usual
         four-panel figure.
     cmap, threshold, vmin, vmax
-        Passed to nilearn. ``vmin``/``vmax`` default to the map's own range.
+        Passed to nilearn. ``vmin``/``vmax`` default to the map's own range;
+        on a symmetric scale one of them alone is mirrored about zero.
     symmetric
         Centre the colour scale on zero. Defaults to true when the map has
         both signs, which is what a coupling map usually wants.
@@ -327,26 +357,10 @@ def plot_surface(
     if not finite.any():
         raise ValueError("the map has no finite values to plot")
 
-    if symmetric is None:
-        symmetric = bool(values[finite].min() < 0 < values[finite].max())
-    if vmin is None or vmax is None:
-        limit = np.abs(values[finite]).max()
-        if symmetric:
-            auto_min, auto_max = -limit, limit
-        else:
-            auto_min, auto_max = values[finite].min(), values[finite].max()
-        vmin = auto_min if vmin is None else vmin
-        vmax = auto_max if vmax is None else vmax
-
-    # A constant map collapses the colour range. The renderer divides by
-    # (vmax - vmin), and its colorbar derives its own bounds from the data and
-    # so cannot be fixed by widening vmin/vmax alone. Open a small window for
-    # the surface and drop the colorbar, which conveys nothing for a single
-    # value anyway.
+    vmin, vmax, symmetric = _colour_range(values[finite], vmin, vmax, symmetric)
+    # A constant map collapses the colour range: drop the colorbar, which
+    # conveys nothing for a single value (see _colour_range for the window).
     constant = float(values[finite].min()) == float(values[finite].max())
-    if vmax <= vmin:
-        pad = abs(vmin) * 1e-6 or 1e-6
-        vmin, vmax = vmin - pad, vmax + pad
 
     half = grid_mesh.n_vertices // 2
     # Flat outside cortex: FreeSurfer fills the medial wall with a surface

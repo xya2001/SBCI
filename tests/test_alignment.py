@@ -301,15 +301,36 @@ def test_the_bundled_grid_is_rotated_clear_of_the_poles():
         assert grid.pole_vertices().size == 0
 
 
-def test_align_refuses_a_grid_with_poles():
+def test_align_turns_a_supplied_grid_off_the_poles_and_records_the_turn():
+    """As the bundled grid is turned: the warps then carry the turn, which migrate_warp needs.
+
+    align used to refuse such a grid and advise rotate_off_poles; a grid turned
+    that way gave warps in a frame nothing recorded, which migrate_warp placed
+    by the turn off -- up to 17 degrees for the bundled sphere's. A grid the caller
+    turned is recorded when ``grid_rotations`` says so.
+    """
+    from sbci.alignment import pole_rotation
+
     vertices, faces = icosphere(2)
     mesh = SphericalGrid(vertices, faces, order=2)
     n = 2 * mesh.n_vertices
     rng = np.random.default_rng(2)
     matrix = rng.random((n, n))
     matrix = matrix + matrix.T
-    with pytest.raises(ValueError, match="coordinate axis"):
-        align([matrix, matrix], grids=(mesh, mesh), order=2)
+    turn = pole_rotation(vertices)
+    options = dict(order=2, max_iterations=1, template_iterations=1)
+    result = align([matrix, matrix], grids=(mesh, mesh), **options)
+    for rotation in (
+        *result.grid_rotations,
+        result.warps[0].lh_rotation,
+        result.warps[1].rh_rotation,
+    ):
+        np.testing.assert_allclose(rotation, turn)
+    turned = SphericalGrid(vertices @ turn.T, faces, order=2)
+    told = align([matrix, matrix], grids=(turned, turned), grid_rotations=(turn, turn), **options)
+    np.testing.assert_allclose(told.warps[0].lh_rotation, turn)
+    with pytest.raises(ValueError, match="pass grids="):
+        align([matrix, matrix], grid_rotations=(turn, turn), **options)
 
 
 def test_a_composed_warp_stays_on_the_sphere(grid):
@@ -1133,7 +1154,7 @@ def test_the_pole_limit_changes_nothing_on_a_grid_clear_of_the_axis(ico4_grids):
         np.testing.assert_array_equal(default.basis[:, others], reference.basis[:, others])
 
 
-def test_align_refuses_a_grid_with_a_vertex_beside_the_axis():
+def test_a_grid_with_a_vertex_beside_the_axis_is_turned_clear_of_it():
     """Near the axis the ``(theta, phi)`` Jacobian is unreliable, not only on it.
 
     1e-5 rad from the axis the identity's comes out 0.74 on this mesh and a
@@ -1146,12 +1167,16 @@ def test_align_refuses_a_grid_with_a_vertex_beside_the_axis():
     n = 2 * vertices.shape[0]
     matrix = np.random.default_rng(3).random((n, n))
     matrix = matrix + matrix.T
+    from sbci.alignment import pole_rotation
+
     for offset in (1e-5, 5e-4):
         near = SphericalGrid(vertices @ _rotation_about_y(offset).T, faces, order=2)
         assert near.pole_vertices(tolerance=1e-8).size == 0  # none on the axis itself
         assert near.pole_vertices().size == 2
-        with pytest.raises(ValueError, match="coordinate axis.*rotate_off_poles"):
-            align([matrix, matrix], grids=(near, near), order=2)
+        turned = align(
+            [matrix, matrix], grids=(near, near), order=2, max_iterations=1, template_iterations=1
+        )  # turned clear of the axis, and the turn recorded
+        np.testing.assert_allclose(turned.grid_rotations[0], pole_rotation(near.vertices))
 
     clear = SphericalGrid(rotate_off_poles(vertices @ _rotation_about_y(1e-5).T), faces, order=2)
     assert clear.pole_vertices().size == 0
@@ -1255,3 +1280,16 @@ def test_a_coarse_grid_is_calibrated_however_far_its_identity_is_from_one():
     warp = SphericalWarp(grid)
     assert warp._raw_jacobian().min() < 0.5
     np.testing.assert_allclose(warp._compute_jacobian(), 1.0, rtol=1e-12)
+
+
+def test_a_density_stored_as_one_triangle_is_refused(pair):
+    """The gradient reads each vertex's row; one triangle gives half the rows nothing.
+
+    Accepted before, such a matrix silently never registered.
+    """
+    grid, densities = pair
+    upper = np.triu(densities[1])
+    with pytest.raises(ValueError, match="connectome 1 is not symmetric.*D \\+ D.T - diag"):
+        align([densities[0], upper], grids=(grid, grid), max_iterations=1)
+    symmetric = upper + upper.T - np.diag(np.diagonal(upper))
+    align([densities[0], symmetric], grids=(grid, grid), max_iterations=1, template_iterations=1)

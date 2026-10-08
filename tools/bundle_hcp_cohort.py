@@ -13,11 +13,17 @@ stored without compression since the HDF5 files are compressed already, plus
 and each subject's sex and age band. Zenodo accepts at most a hundred files
 per record; the 946 young adults give 40 bundles per modality, 80 files.
 
+Every bundle carries ``DATA_USE.txt``, and so do the bundle folder and
+``bundles.json``: the files are derived from HCP Young Adult data, which the
+WU-Minn HCP Open Access Data Use Terms let anyone redistribute only under the
+same terms (:func:`terms`).
+
 ``manifest`` turns ``bundles.json`` and the Zenodo record id into
 ``src/sbci/data/<cohort>.json``, the manifest ``sbci download <cohort>``
-reads once the cohort is added to ``sbci.download.MANIFESTS``. Run it after the
-record is published, since the file URLs carry the record id. Nothing is
-released this way at present.
+reads once the cohort is added to ``sbci.download.MANIFESTS``; the terms go
+with it, so a download writes them beside the files. Run it after the record
+is published, since the file URLs carry the record id. Nothing is released
+this way at present.
 """
 
 from __future__ import annotations
@@ -28,6 +34,7 @@ import json
 import os
 import sys
 import zipfile
+from importlib import resources
 from pathlib import Path
 
 from sbci.download import sha256_of
@@ -36,9 +43,31 @@ COHORT = "hcp-ya-full"  # the default cohort name; --cohort sets it
 FILE_URL = "https://zenodo.org/records/{record}/files/{name}?download=1"
 
 
+def terms(cohort: str) -> str:
+    """The data-use notice for a bundled cohort: the HCP's terms, as the example carries them.
+
+    The terms paragraphs are the bundled example's own (``hcp_ya.json``), so the two
+    releases say the same thing; only the heading and the description change.
+    """
+    example = json.loads(resources.files("sbci.data").joinpath("hcp_ya.json").read_text())
+    body = example["data_use"]
+    start = body.index("They are redistributed under")
+    heading = f"SBCI cohort {cohort}: HCP Young Adult subjects"
+    return (
+        f"{heading}\n{'=' * len(heading)}\n\n"
+        "These files are continuous connectomes on the fsaverage ico4 grid (5,124\n"
+        "vertices) in the format of the sbci Python package\n"
+        "(https://github.com/xya2001/SBCI), derived from data of the WU-Minn Human\n"
+        f"Connectome Project (HCP Young Adult). `sbci download {cohort}` fetches and\n"
+        "verifies them.\n\n" + body[start:]
+    )
+
+
 def bundle(args) -> int:
     data, out = Path(args.data), Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
+    notice = terms(args.cohort)
+    (out / "DATA_USE.txt").write_text(notice, encoding="utf-8")
     with open(args.manifest, encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
     subjects = []
@@ -60,6 +89,7 @@ def bundle(args) -> int:
             path = out / name
             members = []
             with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as z:
+                z.writestr("DATA_USE.txt", notice)  # the terms travel with every bundle
                 for subject, _sex, _bin, files in subjects[start : start + per]:
                     source = files[modality]
                     z.write(source, arcname=source.name)
@@ -83,6 +113,7 @@ def bundle(args) -> int:
             )
     listing = {
         "cohort": args.cohort,
+        "data_use": notice,
         "subjects": [
             {
                 "subject": s,
@@ -110,6 +141,7 @@ def manifest(args) -> int:
             "file with its streamline endpoints (and, where there is FC, one FC file) per "
             "subject, in zip bundles of twenty-four subjects per modality."
         ),
+        "data_use": listing["data_use"],
         "host": "zenodo",
         "record": str(args.record),
         "doi": args.doi or "",

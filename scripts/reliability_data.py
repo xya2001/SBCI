@@ -2,6 +2,7 @@
 
     python scripts/reliability_data.py split SUBJECT_INDEX   # one subject a task; see below
     python scripts/reliability_data.py components             # after every split task
+    python scripts/reliability_data.py components --own-basis # the same, fitted to the split
 
 The lab's paths on Longleaf; the sample is ``reliability/manifest.csv``, a
 hundred young adults with all four resting-state runs, and the first thirty
@@ -20,7 +21,9 @@ are split here. For each, ``split``:
 ``components`` fits a rank-20 reduction to thirty other subjects of the
 sample, none of them split, and scores both halves of each split subject on
 it with ``project``: a basis fitted to the split subjects themselves would
-have seen both halves of each, and flattered their agreement.
+have seen both halves of each, and flattered their agreement. ``--own-basis``
+fits exactly that basis instead, to the thirty split subjects' whole
+connectomes, for the comparison the notebook prints beside the first.
 """
 
 from __future__ import annotations
@@ -128,14 +131,16 @@ def split(index: int) -> None:
     print(f"  aligned within and between ({time.time() - start:.0f}s)", flush=True)
 
 
-def components() -> None:
-    subjects, fitted_to = sample(), others()
-    assert not set(subjects) & set(fitted_to)
+def components(own_basis: bool = False) -> None:
+    subjects = sample()
+    fitted_to = subjects if own_basis else others()
+    assert own_basis or not set(subjects) & set(fitted_to)
     start = time.time()
     reduction = sbci.reduce([SC / f"{s}_sc.h5" for s in fitted_to], rank=20)
+    whose = "the split subjects' own" if own_basis else f"{len(fitted_to)} other subjects'"
     print(
-        f"rank 20 on {len(fitted_to)} other subjects' whole connectomes: "
-        f"{reduction.explained[-1]:.1%} explained ({time.time() - start:.0f}s)",
+        f"rank 20 on {whose} whole connectomes: {reduction.explained[-1]:.1%} of their norm "
+        f"({time.time() - start:.0f}s)",
         flush=True,
     )
     scores = {}
@@ -145,7 +150,7 @@ def components() -> None:
             [sbci.project(reduction, sbci.load(path).dense(np.float64)) for path in paths]
         )
     np.savez_compressed(
-        OUT / "components.npz",
+        OUT / ("components_own-basis.npz" if own_basis else "components.npz"),
         first=scores["A"],
         second=scores["B"],
         explained=reduction.explained,
@@ -157,6 +162,6 @@ if __name__ == "__main__":
     if sys.argv[1] == "split":
         split(int(sys.argv[2]))
     elif sys.argv[1] == "components":
-        components()
+        components(own_basis="--own-basis" in sys.argv[2:])
     else:
-        raise SystemExit("split SUBJECT_INDEX, or components")
+        raise SystemExit("split SUBJECT_INDEX, or components [--own-basis]")

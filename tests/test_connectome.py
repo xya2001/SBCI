@@ -263,3 +263,14 @@ def test_save_refuses_a_name_load_would_not_read(tmp_path, connectome):
     assert not list(tmp_path.iterdir())
     for name in ("sub-x_sc.h5", "sub-x_sc.hdf5", "sub-01.ses-1_sc.h5"):
         assert ContinuousConnectome.load(connectome.save(tmp_path / name)).n_vertices == 5
+
+
+def test_a_computational_file_loads_whatever_the_case_of_its_suffix(tmp_path):
+    """load_cohort finds sub-01_sc.H5 as a computational file; load and save take it too."""
+    import sbci
+
+    for name in ("sub-01_sc.H5", "sub-02_sc.HDF5"):
+        written = sbci.example().save(tmp_path / name)
+        assert sbci.load(written).n_vertices == 5124
+    found = sbci.load_cohort(tmp_path)
+    assert sorted(found.subjects) == ["sub-01", "sub-02"]

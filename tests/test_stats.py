@@ -915,3 +915,29 @@ def test_a_design_without_subjects_or_with_an_infinite_value_is_refused():
         ValueError, match=r"non-finite value \(column 1 of the design matrix, subject 4"
     ):
         local_test(np.random.default_rng(0).standard_normal((10, 2)), covariate)
+
+
+def test_permutation_ties_on_discrete_scores_count_whatever_their_scale():
+    """Discrete scores tie under permutation; a tie counts, however rounding orders it.
+
+    With an intercept and one two-level covariate, Freedman-Lane permutes the
+    scores themselves, and F rises with ``|n S1 - n1 T|`` (the first group's sum
+    and the total), an integer here: the same draws, counted exactly, give
+    p = 0.058. Compared as floats, statistics equal in exact arithmetic fell on
+    either side of the observed one, and the scores scaled by 1, 7.3, 0.01 and
+    1e5 gave 0.046, 0.044, 0.050 and 0.022.
+    """
+    y = np.array([1, 1, 1, 1, 0, 1, 1, 0, 0, 0, 2, 1, 1, 2, 2, 0, 2, 1, 0, 2], dtype=float)
+    group = np.repeat([0.0, 1.0], 10)
+    draws, permutations = np.random.default_rng(3), 499
+    total, first = int(y.sum()), group == 0
+    observed = abs(20 * int(y[first].sum()) - 10 * total)
+    hits = 0
+    for _ in range(permutations):
+        shuffled = y[draws.permutation(20)]
+        hits += abs(20 * int(shuffled[first].sum()) - 10 * total) >= observed
+    exact = (hits + 1) / (permutations + 1)
+    assert exact == pytest.approx(0.058)
+    for scale in (1.0, 7.3, 0.01, 1e5):
+        result = local_test((y * scale)[:, None], group, permutations=permutations, seed=3)
+        assert result.pvalue[0] == pytest.approx(exact), scale

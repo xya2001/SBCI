@@ -149,6 +149,12 @@ def global_coupling(sc, fc, triangular: bool = False) -> np.ndarray:
     array([1., 1., 1.])
     """
     sc, fc = _prepare(sc, fc, triangular, drop_diagonal=False)
+    # The diagonal is kept, as the reference keeps it, but a NaN there is a one-vertex
+    # region's undefined self-connection (``to_atlas(how="mean")`` on Schaefer-1000 has 21):
+    # left in, it made that region's whole profile NaN. Zero leaves it out of a cosine.
+    undefined = np.isnan(np.diagonal(sc)) | np.isnan(np.diagonal(fc))
+    sc[undefined, undefined] = 0.0
+    fc[undefined, undefined] = 0.0
     usable = _usable(sc, fc)
 
     out = np.full(sc.shape[0], np.nan)

@@ -464,3 +464,24 @@ def test_the_constancy_test_is_the_references_on_a_matrix_without_nan():
     matrix[:, :8] = matrix[0, :8]  # constant columns
     reference = ~np.all(np.diff(matrix, axis=0) == 0, axis=0)
     np.testing.assert_array_equal(_nonconstant(matrix), reference)
+
+
+def test_a_one_vertex_region_keeps_its_global_coupling():
+    """Its self-connection is undefined (NaN on the diagonal); its profile is not.
+
+    Global coupling keeps the diagonal, and the NaN there made the region's whole
+    value NaN -- for every one of Schaefer-1000's 21 one-vertex regions.
+    """
+    rng = np.random.default_rng(4)
+    sc = rng.random((5, 5))
+    sc = sc + sc.T
+    fc = np.corrcoef(rng.standard_normal((5, 40)))
+    sc[2, 2] = fc[2, 2] = np.nan  # region 2 has one vertex
+    result = global_coupling(sc, fc)
+    assert np.isfinite(result).all()
+    others = np.arange(5) != 2
+    row_sc, row_fc = sc[2, others], fc[2, others]
+    expected = row_sc @ row_fc / (np.linalg.norm(row_sc) * np.linalg.norm(row_fc))
+    assert result[2] == pytest.approx(expected)
+    whole = global_coupling(np.nan_to_num(sc), np.nan_to_num(fc))
+    np.testing.assert_allclose(result, whole)  # the same as an empty self-pair

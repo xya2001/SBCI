@@ -578,10 +578,24 @@ def fpca_reference():
     is never defined. The reference run applies a one-line fix binding it from
     the parsed options, and changes nothing else. See PORTING.md item 5.
     """
+    return _fpca_run("fpca_reference.mat")
+
+
+@pytest.fixture(scope="module")
+def fpca_fixed_point():
+    """The same Fit run to its fixed point (``tests/reference/fpca_fixed_point.m``).
+
+    A negative ``TOL_OUTER`` never stops early, so after 400 updates the
+    vectors no longer move.
+    """
+    return _fpca_run("fpca_reference_fixed_point.mat")
+
+
+def _fpca_run(name):
     import h5py
 
     inputs = FPCA_REFERENCE / "fpca_inputs.npz"
-    output = FPCA_REFERENCE / "fpca_reference.mat"
+    output = FPCA_REFERENCE / name
     _require(inputs, output)
 
     with np.load(inputs) as data:
@@ -601,47 +615,64 @@ def fpca_reference():
     return got
 
 
-def test_reduction_matches_matlab(fpca_reference):
-    """Basis, scales and explained variance, from the same initialization."""
+def _fit_like(reference, **options):
+    """The port, from the reference's recorded starts, with the reference's settings."""
     from sbci.reduction import fit_basis
 
-    reference = fpca_reference
-    result = fit_basis(
+    return fit_basis(
         reference["matrices"],
         reference["gram"],
         reference["roughness"],
         rank=reference["K"],
         alpha=1e-10,
         start=reference["V0_RECORD"],
+        **options,
     )
+
+
+def _differs(mine: np.ndarray, theirs: np.ndarray) -> float:
+    """Largest difference once the sign, which a component does not fix, is aligned."""
+    sign = np.sign(mine @ theirs) or 1.0
+    return float(np.abs(sign * mine - theirs).max())
+
+
+def test_reduction_matches_matlab_at_the_fixed_point(fpca_fixed_point):
+    """Basis, scales, explained fraction and scores, every component, once the updates stop.
+
+    The reference keeps each component's scores from the vector before its
+    last update, and the port scores the vector it returns; at the fixed point
+    the two vectors are one, so everything agrees (to 1e-15 on these inputs).
+    """
+    reference = fpca_fixed_point
+    result = _fit_like(reference, max_outer=400, tol_outer=-1.0)
 
     relative = _relative(result.scales, reference["scales"].ravel())
-    assert relative < TOLERANCE, (
-        f"component scales differ by {relative:.3g} relative "
-        f"({relative / FLOAT32_EPS:.1f} float32-eps)"
-    )
-    np.testing.assert_allclose(result.explained, reference["residual_norms"].ravel(), atol=1e-10)
-
+    assert relative < 1e-12, f"component scales differ by {relative:.3g} relative"
+    np.testing.assert_allclose(result.explained, reference["residual_norms"].ravel(), atol=1e-12)
     for k in range(reference["K"]):
-        mine, theirs = result.basis[:, k], reference["basis"][:, k]
-        sign = np.sign(mine @ theirs) or 1.0
-        assert np.abs(sign * mine - theirs).max() < 1e-10, f"component {k + 1} differs"
+        assert _differs(result.basis[:, k], reference["basis"][:, k]) < 1e-12, f"component {k + 1}"
+        assert _differs(result.scores[:, k], reference["Smat"][:, k]) < 1e-12, f"scores {k + 1}"
 
 
-def test_reduction_scores_match_matlab(fpca_reference):
-    """The subject weights each component carries."""
-    from sbci.reduction import fit_basis
+def test_reduction_matches_matlab_at_its_default_tolerance(fpca_reference):
+    """The reference's own run: the first vector to rounding, and the scores of that vector.
 
+    The alternating updates are the reference's, so the first component's
+    vector agrees to rounding. Its scores are that very vector's, which the
+    reference does not record: it keeps the previous vector's (2.4e-5 off
+    here, the size of the last update). The later components are fitted to
+    what the scores leave, so they differ by what the corrected scores change
+    -- 1e-9 to 6e-5 in the vectors -- and agree once both are run to the fixed
+    point (the test above).
+    """
     reference = fpca_reference
-    result = fit_basis(
-        reference["matrices"],
-        reference["gram"],
-        reference["roughness"],
-        rank=reference["K"],
-        alpha=1e-10,
-        start=reference["V0_RECORD"],
-    )
-    for k in range(reference["K"]):
-        mine, theirs = result.scores[:, k], reference["Smat"][:, k]
-        sign = np.sign(mine @ theirs) or 1.0
-        assert np.abs(sign * mine - theirs).max() < 1e-10, f"scores {k + 1} differ"
+    result = _fit_like(reference)
+    theirs = reference["basis"][:, 0]
+    assert _differs(result.basis[:, 0], theirs) < 1e-12
+
+    weights = np.einsum("i,sij,j->s", theirs, reference["matrices"], theirs)
+    own = weights / np.linalg.norm(weights)  # the reference's first vector, scored
+    assert np.abs(result.scores[:, 0] - own).max() < 1e-12
+    assert np.abs(reference["Smat"][:, 0] - own).max() > 1e-6  # what the reference recorded
+    for k in range(1, reference["K"]):
+        assert _differs(result.basis[:, k], reference["basis"][:, k]) < 1e-3, f"component {k + 1}"

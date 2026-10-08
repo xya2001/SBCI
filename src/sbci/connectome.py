@@ -78,7 +78,8 @@ class ContinuousConnectome:
         >>> cc = ContinuousConnectome.load("sub-100307_sc.h5")   # doctest: +SKIP
         """
         path = Path(path)
-        suffixes = "".join(path.suffixes)
+        # Any case, as the cohort loader finds them: sub-01_sc.H5 is the same file type.
+        suffixes = "".join(path.suffixes).lower()
         if suffixes.endswith(COMPUTATIONAL_SUFFIXES):
             # Checked here, after the kind of file is known, so that an
             # unrecognized name is reported as such whether or not it exists.
@@ -276,7 +277,7 @@ class ContinuousConnectome:
         file would come back unloadable.
         """
         path = Path(path)
-        if not path.name.endswith(COMPUTATIONAL_SUFFIXES):
+        if not path.name.lower().endswith(COMPUTATIONAL_SUFFIXES):
             raise ValueError(
                 f"{path.name!r} is not a name load() would read back; name the computational "
                 f"file with one of {COMPUTATIONAL_SUFFIXES}"

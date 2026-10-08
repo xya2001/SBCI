@@ -274,9 +274,9 @@ def test_the_medial_wall_keeps_a_zero_diagonal_in_the_fc_exchange_file(tmp_path,
     resampled = []
     real = cifti.resample
 
-    def keeping(matrix, block):
+    def keeping(matrix, block, cortex=None):
         resampled.append(matrix.copy())
-        return real(matrix, block=block)
+        return real(matrix, block=block, cortex=cortex)
 
     monkeypatch.setattr(cifti, "resample", keeping)
     path = cifti.write_cifti(tmp_path / "sub-toy_fc.dconn.nii", toy, block=16)
@@ -287,10 +287,11 @@ def test_the_medial_wall_keeps_a_zero_diagonal_in_the_fc_exchange_file(tmp_path,
     expected = dense.copy()
     expected[toy.mask, toy.mask] = 1.0
     np.testing.assert_array_equal(given, expected)
-    operator = cifti.transfer().toarray()
+    operator = cifti.transfer(cortex=toy.mask).toarray()  # averaged over cortex only
     out = np.asarray(nib.load(str(path)).get_fdata())
     np.testing.assert_allclose(out, operator @ expected @ operator.T, rtol=1e-5, atol=1e-6)
-    walled = np.flatnonzero(operator[:, wall] == 1.0)  # fsLR vertices on the medial wall alone
+    whole = cifti.transfer().toarray()
+    walled = np.flatnonzero(whole[:, wall] == 1.0)  # fsLR vertices on the medial wall alone
     assert walled.size > 1, "the toy overlap has to put two fsLR vertices on the medial wall"
     np.testing.assert_array_equal(out[np.ix_(walled, walled)], 0.0)
 
@@ -412,3 +413,62 @@ def test_an_uppercase_name_is_a_dense_connectome_name(tmp_path):
     assert companion_stem("sub-01_SC.DCONN.NII") == "sub-01_SC"
     with pytest.raises(OSError, match="cannot write to"):
         write_cifti(tmp_path / "missing" / "SUB-01_SC.DCONN.NII", sbci.example())
+
+
+def test_fc_is_averaged_over_cortex_only_beside_the_medial_wall():
+    """A correlation of 0.6 everywhere in cortex reads 0.6 at every fsLR vertex that touches cortex.
+
+    The medial wall's rows are zero for want of a value. Averaged in, as the
+    whole operator does, they scaled the 407 fsLR vertices that straddle the
+    wall by their cortical share of area -- to 0.075 at the least.
+    """
+    from sbci.atlas import cortex_mask
+
+    mask = np.asarray(cortex_mask(), dtype=bool)
+    overlap = cifti.load_overlap()
+    total = np.asarray(overlap.sum(axis=1)).ravel()
+    wall = np.asarray(overlap[:, ~mask].sum(axis=1)).ravel()
+    straddling = (wall > 0) & (wall < total)
+    assert straddling.sum() == 407
+    field = np.where(mask, 0.6, 0.0)
+    np.testing.assert_allclose((cifti.transfer(cortex=mask) @ field)[wall < total], 0.6, rtol=1e-12)
+    assert (cifti.transfer(cortex=mask) @ field)[wall == total].max() == 0.0
+    assert (cifti.transfer() @ field)[straddling].min() < 0.1  # what the whole operator gave
+
+
+def test_write_cifti_averages_fc_over_cortex_and_sc_over_everything(tmp_path, monkeypatch):
+    """FC goes through the operator restricted to the mask; a density through the whole one."""
+    import nibabel as nib
+
+    for modality in ("sc", "fc"):
+        toy = _toy_export(monkeypatch, modality)
+        toy.mask = np.array([True] * 6 + [False])  # the seventh toy vertex is medial wall
+        dense = np.abs(toy.dense().astype(np.float64))
+        dense[6, :] = dense[:, 6] = 0.0
+        toy.dense = lambda dense=dense: dense.copy()
+        path = cifti.write_cifti(tmp_path / f"sub-toy_{modality}.dconn.nii", toy, block=16)
+        written = np.asarray(nib.load(str(path)).get_fdata())
+        expected = dense.copy()
+        if modality == "fc":
+            np.fill_diagonal(expected[:6, :6], 1.0)
+            operator = cifti.transfer(cortex=toy.mask).toarray()
+        else:
+            operator = cifti.transfer().toarray()
+        np.testing.assert_allclose(written, operator @ expected @ operator.T, rtol=1e-5, atol=1e-6)
+
+
+def test_a_failed_write_leaves_no_file_under_the_name(tmp_path, monkeypatch):
+    """The 17 GB file is written under a temporary name and moved into place once complete."""
+    from nibabel import cifti2
+
+    toy = _toy_export(monkeypatch, "sc")
+
+    def failing(self, filename, *args, **kwargs):
+        with open(filename, "wb") as handle:
+            handle.write(b"half a file")
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(cifti2.Cifti2Image, "to_filename", failing)
+    with pytest.raises(OSError, match="No space"):
+        cifti.write_cifti(tmp_path / "sub-toy_sc.dconn.nii", toy, block=16)
+    assert list(tmp_path.iterdir()) == []

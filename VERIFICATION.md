@@ -252,6 +252,7 @@ matlab -batch "run('seed_reference.m')"        # seed rows and a region marginal
 matlab -batch "run('encore_reference.m')"      # ENCORE, every intermediate
 python fpca_make_inputs.py                      # shared inputs for FPCA
 matlab -batch "run('fpca_reference.m')"        # ConConBasis.Fit
+matlab -batch "run('fpca_fixed_point.m')"      # the same, run to its fixed point
 matlab -batch "run('conseal_reference.m')"     # ConSEAL, six iterations on the author's example
 python conseal_compare.py                       # diffs the port against it (the ConSEAL row below)
 
@@ -270,7 +271,7 @@ Expected agreement, and what to reject:
 | `smooth` (rdk) | 3.25 float32-eps | worse than 10 float32-eps |
 | `smooth` (shk) | r = 1.00000000, scale 1.000000 against the released matrices | see PORTING.md item 6 |
 | `endpoints_align` (ConSEAL), `strict_upstream=True` | the single precision the MATLAB reference carries: kernel 4e-8, gradient 6e-7, six-iteration cost trace 1e-7 | see PORTING.md item 7 |
-| `reduce` | 2.1e-16 on the basis | worse than 1e-10 |
+| `reduce` | 1e-15 on every component at the reference's fixed point; at its default tolerance the first vector to 2e-16, with that vector's scores (item 11 below) | worse than 1e-12 |
 | `project`, `reference=True` | the lower-triangle least squares of `ConConSmooth.smooth` | worse than 1e-10 |
 | `align` geometry, basis, template, `reference=True` | 1.6 to 44 float64-eps | worse than 1e-12 |
 | `align` registration, `reference=True` | r = 0.99999979 | see the note below |
@@ -281,12 +282,13 @@ port now computes the right thing, and the rows above are reproduced only with
 `reference=True` (ENCORE, `project`) or `strict_upstream=True` (ConSEAL), which
 restore the reference's arithmetic.
 
-### Ten things in the references that a verifier will hit
+### Eleven things in the references that a verifier will hit
 
 The first four are not port defects. Anyone reproducing this will meet them,
-and should not conclude the port is broken. The last six are errors in the
-references that the port reproduced until the two reviews of 5 October 2026;
-it now corrects them by default:
+and should not conclude the port is broken. The last seven are errors in the
+references that the port reproduced until the reviews of 5 to 7 October 2026;
+it now corrects them, by default where a switch keeps the reference's
+arithmetic:
 
 1. **`ConConBasis.Fit` cannot run as published.** Line 260 reads `auto_sparse`,
    which is never defined; the parsed option is `params.auto_sparse`. Every call
@@ -341,6 +343,15 @@ it now corrects them by default:
     every later smoothing erodes it, 3.8 of 150 degrees over 100 steps. The
     port holds the rotation exactly, outside the field; `strict_upstream=True`
     keeps the reference's (PORTING.md item 9).
+11. **`ConConBasis.Fit` keeps each component's scores from the vector before
+    its last update**, and deflates with them, so the scores it returns are
+    not those of the basis it returns: 2.4e-5 apart on the reference run, and
+    1.6% to 2.0% of the largest score on the prediction notebook's rank-15
+    fits of 240 young adults. Its own sparse branch takes the scores again
+    after it moves the vector. The port scores the vector it returns, with no
+    switch back (PORTING.md item 17); run to its fixed point
+    (`fpca_fixed_point.m`) the reference agrees with it on every component to
+    1e-15.
 
 ---
 
@@ -378,7 +389,7 @@ families as clusters, which agree with statsmodels to 1e-9 and hold the
 nominal false-positive rate in simulation with hundreds of families, not with
 dozens (PORTING.md item 5, *Related subjects*). The analysis in docs/RESULTS.md shows
 why it matters: counted as 943 independent subjects, one component tracked
-fluid intelligence (adjusted p 0.023); with their 422 families as clusters,
+fluid intelligence (adjusted p 0.024); with their 422 families as clusters,
 none does (0.064).
 
 **The spherical kernel ships, and is verified against the binary itself.**
@@ -427,7 +438,7 @@ matches the MATLAB reference (Tier 4).
 
 - [ ] Tier 1 passes from a clean clone: tests, lint, wheel
 - [ ] `scripts/check_hcp_ya.py` passes on a machine with network access
-- [ ] `scripts/audit_api.py` reports 17 passed, 0 failed, 0 skipped
+- [ ] `scripts/audit_api.py` reports 22 passed, 0 failed, 0 skipped
 - [ ] Tier 4 reproduces the agreements in the table above
 - [ ] Alignment raises inter-subject correlation on a cohort of your choosing
 - [ ] The exchange file opens in Connectome Workbench

@@ -805,6 +805,15 @@ class Endpoints:
             flags = getattr(self, name)
             if flags.size and not np.isin(flags, (0, 1)).all():
                 raise ValueError(f"{name} must be 0 (left) or 1 (right)")
+        # Within the hemisphere: an index past it is stored as a whole-grid index that
+        # reads back as a vertex of the other hemisphere (save, then load).
+        for name in ("vtx_in", "vtx_out"):
+            vertex = getattr(self, name)
+            if vertex.size and (vertex.min() < 0 or vertex.max() >= self.n_per_hemi):
+                raise ValueError(
+                    f"{name} out of range for {self.n_per_hemi} vertices per hemisphere: "
+                    f"[{vertex.min()}, {vertex.max()}]. One-based indices need converting."
+                )
         optional = (self.tri_in, self.tri_out, self.bary_in, self.bary_out)
         if any(item is not None for item in optional):
             if any(item is None for item in optional):
@@ -821,6 +830,14 @@ class Endpoints:
             ):
                 if getattr(self, name).shape != expected:
                     raise ValueError(f"{name} is {getattr(self, name).shape}, expected {expected}")
+            faces = 2 * int(self.n_per_hemi) - 4  # a closed triangulated sphere's face count
+            for name in ("tri_in", "tri_out"):
+                triangle = getattr(self, name)
+                if triangle.size and (triangle.min() < 0 or triangle.max() >= faces):
+                    raise ValueError(
+                        f"{name}: triangle indices must lie in 0..{faces - 1} within a "
+                        f"hemisphere; got {triangle.min()}..{triangle.max()}"
+                    )
 
     @property
     def n_streamlines(self) -> int:

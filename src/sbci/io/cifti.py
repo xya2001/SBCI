@@ -49,10 +49,16 @@ Because the values are a density, integrating them needs the fsLR vertex
 areas. :func:`write_cifti` writes those beside the connectome as a companion
 ``.dscalar.nii``, so the exchange file can be parcellated without this package.
 
-A functional connectome goes through the same operator. Its entries are
-Pearson correlations, and because ``P`` is row-stochastic, ``P D P'`` gives
-each fsLR vertex pair the area-weighted mean of the ico4 correlations covering
-it -- taken directly, not through Fisher z. The stored ico4 diagonal is zero
+A functional connectome goes through the same operator restricted to cortex.
+Its entries are Pearson correlations, and the medial wall carries none -- its
+rows are zero for want of a value, not a correlation of zero -- so each fsLR
+vertex averages only the cortical ico4 vertices it overlaps (``P`` with the
+wall's columns dropped and the rows renormalized). The whole operator would
+average the wall's zeros in, and did until October 2026: 407 fsLR vertices
+straddle it, and each one's correlations were scaled by the cortical share of
+its area -- halved at 69 of them, cut by more than half at 157. ``P D P'``
+then gives each fsLR vertex pair the area-weighted mean of the cortical ico4
+correlations covering it -- taken directly, not through Fisher z. The stored ico4 diagonal is zero
 by the file format, and ``P D P'`` would spread that zero to every pair of
 fsLR vertices falling in the same ico4 cell -- with 12.7 fsLR vertices to a
 cell, most share theirs with another -- so those pairs would read a
@@ -131,15 +137,27 @@ def vertex_areas() -> tuple[np.ndarray, np.ndarray]:
     )
 
 
-def transfer():
+def transfer(cortex=None):
     """The row-normalized resampling operator ``P``, shape ``(64984, 5124)``.
 
     Each row sums to one, so ``P D P'`` is an area-weighted average of the
-    density and conserves ``area @ D @ area``.
+    density and conserves ``area @ D @ area``. With ``cortex``, a boolean mask
+    over the ico4 vertices, the other vertices' columns are dropped before the
+    rows are normalized: each fsLR vertex then averages only the cortical ico4
+    vertices it overlaps, and one overlapping none keeps a row of zeros. That
+    is the form for FC, whose medial wall has no value rather than a zero one.
     """
     from scipy import sparse
 
     overlap = load_overlap()
+    if cortex is not None:
+        cortex = np.asarray(cortex, dtype=bool).ravel()
+        if cortex.shape != (overlap.shape[1],):
+            raise ValueError(
+                f"cortex has {cortex.size} entries for {overlap.shape[1]} ico4 vertices"
+            )
+        overlap = (overlap @ sparse.diags(cortex.astype(np.float64))).tocsr()
+        overlap.eliminate_zeros()
     fslr_area = np.asarray(overlap.sum(axis=1)).ravel()
     # A target vertex with no source is possible in principle; leave its row
     # at zero rather than dividing by zero.
@@ -160,7 +178,7 @@ def _brain_model_axis():
     return left + right
 
 
-def resample(dense: np.ndarray, block: int = 8192) -> np.ndarray:
+def resample(dense: np.ndarray, block: int = 8192, cortex=None) -> np.ndarray:
     """Resample an ico4 density onto fsLR-32k, conserving area-weighted mass.
 
     Computed in row blocks straight into the output array, because the
@@ -172,8 +190,11 @@ def resample(dense: np.ndarray, block: int = 8192) -> np.ndarray:
         Symmetric ``(5124, 5124)`` connectivity density.
     block
         Rows of the output computed at a time. Lower it if memory is tight.
+    cortex
+        For correlations: average over these ico4 vertices only
+        (:func:`transfer`), so the medial wall's zeros are not averaged in.
     """
-    operator = transfer()
+    operator = transfer(cortex)
     if dense.shape != (operator.shape[1],) * 2:
         raise ValueError(
             f"expected a {operator.shape[1]}x{operator.shape[1]} matrix, got {dense.shape}"
@@ -230,7 +251,10 @@ def write_cifti(path: str | Path, connectome: Any, block: int = 8192) -> Path:
     computed: on the real grid the resampling takes the time and the memory,
     and nibabel would refuse a name only once it was done. The name has to
     end in ``.dconn.nii``, uncompressed, as nibabel writes CIFTI; the metadata
-    is validated as :meth:`~sbci.ContinuousConnectome.load` validates it.
+    is validated as :meth:`~sbci.ContinuousConnectome.load` validates it. The
+    three files are written under temporary names beside their own and moved
+    into place together once all are complete, so a failure part way through
+    the 17 GB leaves no file under the name, rather than a truncated one.
     """
     from nibabel import cifti2
 
@@ -254,25 +278,34 @@ def write_cifti(path: str | Path, connectome: Any, block: int = 8192) -> Path:
         # Cortex only: the medial wall has no FC, and keeps its zeros.
         cortex = np.flatnonzero(connectome.mask)
         dense[cortex, cortex] = 1.0
-    resampled = resample(dense, block=block)
+        # And averaged over cortex only: the wall's zero rows are no correlation.
+        resampled = resample(dense, block=block, cortex=connectome.mask)
+    else:
+        resampled = resample(dense, block=block)
+
+    from contextlib import ExitStack
+
+    from nibabel.cifti2 import ScalarAxis
+
+    from ..export import _atomic
 
     axis = _brain_model_axis()
     image = cifti2.Cifti2Image(resampled, (axis, axis))
     # nibabel leaves the intent at "unknown CIFTI" unless told; Workbench keys
     # the file type on it.
     image.nifti_header.set_intent(INTENT_DENSE)
-    image.to_filename(str(path))
-
-    (path.parent / f"{stem}.json").write_text(metadata)
-
     fslr_area, _ = vertex_areas()
-    from nibabel.cifti2 import ScalarAxis
-
     areas = cifti2.Cifti2Image(
         fslr_area[None, :].astype(np.float32), (ScalarAxis(["vertex area"]), axis)
     )
     areas.nifti_header.set_intent(INTENT_DENSE_SCALARS)
-    areas.to_filename(str(path.parent / f"{stem}_vertexarea.dscalar.nii"))
+    with ExitStack() as stack:
+        dense_file = stack.enter_context(_atomic(path))
+        sidecar_file = stack.enter_context(_atomic(path.parent / f"{stem}.json"))
+        areas_file = stack.enter_context(_atomic(path.parent / f"{stem}_vertexarea.dscalar.nii"))
+        image.to_filename(str(dense_file))
+        sidecar_file.write_text(metadata)
+        areas.to_filename(str(areas_file))
     return path
 
 

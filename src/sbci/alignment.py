@@ -627,6 +627,7 @@ class SphericalGrid:
     def __init__(self, vertices, faces, order: int = DEFAULT_ORDER, reference: bool = False):
         self.vertices = normalize_rows(vertices)
         self.faces = np.asarray(faces, dtype=np.int64)
+        self.order = int(order)
         self.reference = bool(reference)
         self.theta, self.phi = cart_to_sphere(self.vertices)
         self.areas = voronoi_areas(self.vertices, self.faces)
@@ -1047,7 +1048,9 @@ class Alignment:
     rotated frame, and ``warp.lh_vertices @ grid_rotations[0]`` maps them back
     to the file's sphere. Each warp carries the same two rotations as its
     ``lh_rotation`` and ``rh_rotation``, so a warp saved on its own keeps its
-    frame. Both are identities when ``grids`` were supplied.
+    frame. With ``grids`` supplied they are what :func:`align` was told
+    (``grid_rotations=``) and what it applied itself to a grid with vertices
+    beside the axis -- identities for a grid clear of it and given as is.
     """
 
     template: np.ndarray
@@ -1077,6 +1080,13 @@ def _density_problem(density) -> str | None:
     """
     if not np.isfinite(density).all() or density.min() < 0:
         return "is not a nonnegative density"
+    # Both triangles: the gradient reads each vertex's row, and a matrix stored as one
+    # triangle gives half the rows nothing, so it never registers -- silently.
+    if np.abs(density - density.T).max() > 1e-8 * np.abs(density).max():
+        return (
+            "is not symmetric; a connectivity density holds every pair in both triangles "
+            "(one stored as a single triangle D needs D + D.T - diag(D) first)"
+        )
     # the entries are nonnegative, so mass off the diagonal is a nonzero entry there
     if np.count_nonzero(density) == np.count_nonzero(density.diagonal()):
         return "has no mass off its diagonal"
@@ -1346,6 +1356,7 @@ def align(
     backtracks: int = 4,
     reference: bool = False,
     verbose: bool = False,
+    grid_rotations=None,
 ) -> Alignment:
     """Estimate a template and register every connectome onto it.
 
@@ -1376,7 +1387,16 @@ def align(
         is enough.
     grids
         ``(lh_grid, rh_grid)`` to align on, as :class:`SphericalGrid`. Defaults
-        to the bundled ico4 sphere, split at the hemisphere boundary.
+        to the bundled ico4 sphere, split at the hemisphere boundary, rotated
+        clear of the coordinate axis. A supplied grid with vertices on or
+        beside the axis is rotated clear of it here too
+        (:func:`pole_rotation`), and the rotation is recorded in every warp.
+    grid_rotations
+        With ``grids``: the rotations ``R`` already applied to their vertices
+        (``vertices @ R.T``), one per hemisphere, so that the warps record the
+        frame they are in -- :func:`sbci.templates.migrate_warp` places a warp
+        by it, and a rotation it does not know (the bundled sphere turned off
+        its poles by hand, say) puts the warp that far from where it belongs.
     derivative
         ``"difference"``, the default, is the reference's central difference at
         ``delta``. ``"analytic"`` differentiates the piecewise-linear
@@ -1445,20 +1465,38 @@ def align(
             raise ValueError(f"connectome {index} {problem}")
 
     if grids is None:
+        if grid_rotations is not None:
+            raise ValueError("grid_rotations describe supplied grids; pass grids= with them")
         (lh_grid, rh_grid), rotations = _hemisphere_grids(
             order, return_rotations=True, reference=reference
         )
     else:
-        lh_grid, rh_grid = grids
-        rotations = (np.eye(3), np.eye(3))
+        given = (None, None) if grid_rotations is None else tuple(grid_rotations)
+        if len(given) != 2:
+            raise ValueError("grid_rotations takes one rotation per hemisphere, (left, right)")
+        placed = []
+        for grid, rotation in zip(grids, given, strict=True):
+            rotation = np.eye(3) if rotation is None else np.asarray(rotation, dtype=np.float64)
+            if rotation.shape != (3, 3) or not np.allclose(rotation @ rotation.T, np.eye(3)):
+                raise ValueError("each of grid_rotations must be a 3 x 3 rotation")
+            if grid.pole_vertices().size:
+                # Turned clear of the axis here, as the bundled grid is, and recorded:
+                # turned by hand, its warps came back in a frame nothing recorded.
+                turn = pole_rotation(grid.vertices)
+                grid = SphericalGrid(
+                    grid.vertices @ turn.T, grid.faces, grid.order, reference=grid.reference
+                )
+                rotation = turn @ rotation
+            placed.append((grid, rotation))
+        (lh_grid, lh_rotation), (rh_grid, rh_rotation) = placed
+        rotations = (lh_rotation, rh_rotation)
     for name, grid in (("left", lh_grid), ("right", rh_grid)):
         poles = grid.pole_vertices()
         if poles.size:
             raise ValueError(
                 f"the {name} grid has {poles.size} vertices on or within {AXIS_CLEARANCE:g} "
                 f"of the coordinate axis ({poles[:4].tolist()}...), where the Jacobian is "
-                "zero or unreliable. Pass the vertices through "
-                "sbci.alignment.rotate_off_poles first."
+                "zero or unreliable, even turned by pole_rotation"
             )
     expected = lh_grid.n_vertices + rh_grid.n_vertices
     if densities[0].shape != (expected, expected):

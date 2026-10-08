@@ -114,8 +114,11 @@ who has the link; the error names the file id.
 A cohort too large for one file per subject can travel as zip bundles on
 Zenodo, which `fetch_cohort` reads as well, fetching only the bundles the
 requested subjects need and resuming an interrupted one
-(`tools/bundle_hcp_cohort.py` writes them). No cohort is released that way at
-present.
+(`tools/bundle_hcp_cohort.py` writes them, each with `DATA_USE.txt`). The HCP's
+terms let derived data be redistributed only under the same terms, so
+`tools/zenodo_upload.py` makes the record restricted, with the terms as its
+access conditions and no open licence such as CC-BY. No cohort is released
+that way at present.
 
 ## Checking a cohort before an analysis
 
@@ -297,7 +300,7 @@ atlas = sbci.load_atlas("Desikan")
 
 whole = sc.coupling(fc, scope="global")                         # (5124,), mean 0.217
 local = sc.coupling(fc, scope="region", labels=atlas.labels)    # (5124,), mean 0.595
-regions = discrete_coupling(sc.to_atlas(atlas), fc.to_atlas(atlas))   # (68,), mean 0.312
+regions = discrete_coupling(sc.to_atlas(atlas, how="mean"), fc.to_atlas(atlas))   # (68,), mean 0.364
 sc.plot(whole, mesh="fsaverage")
 ```
 
@@ -306,12 +309,15 @@ and any vertex whose profile is constant. Local coupling runs higher than
 global because neighbouring vertices inside a region share both structure and
 function. `scope="discrete"` applies the Pearson form to the matrices as they
 come, the grid's, as the MATLAB reference does; for the atlas-level summary,
-hand `discrete_coupling` the two atlas matrices, as above (`to_atlas` averages
-FC through Fisher-z).
+hand `discrete_coupling` the two atlas matrices, as above, like for like: FC's
+mean correlation (`to_atlas` averages it through Fisher-z) against SC's mean
+density, `how="mean"`. SC's default, `"mass"`, grows with the regions' size,
+which then enters the result.
 
 On the eleven young adults, global coupling averages 0.200 to 0.268 per
 subject, within-region coupling 0.595 to 0.679, and the Desikan-level form
-0.271 to 0.370.
+0.329 to 0.421 (0.271 to 0.370 with SC's mass, as these pages had it until
+October 2026).
 The maps agree across subjects (r = 0.53 to 0.71) and follow the gradient
 coupling is known for (Vázquez-Rodríguez et al., PNAS 2019; Baum et al., PNAS
 2020): 0.30 on average over primary and unimodal sensory and motor regions
@@ -620,7 +626,7 @@ result = sbci.reduce(subjects, rank=20)
 
 result.basis            # (5124, 20)  the shared functions
 result.scores           # (n_subjects, 20)  one row per subject
-result.explained[-1]    # fraction of the cohort's norm captured
+result.explained[-1]    # fraction of the cohort's norm captured; squared, of its sum of squares
 result.reconstruct(0)   # subject 1 rebuilt from its 20 numbers
 ```
 
@@ -630,9 +636,10 @@ is handled. It takes what `reduce` takes -- connectomes, their `.h5` files or
 their dense matrices -- and reads one subject at a time. It scores a subject
 exactly as the fit scored the
 training subjects, so projecting the training cohort returns `result.scores`
-to the fit's own tolerance: the fit records each score one alternating step
-before its final component, as the reference does, which is 1e-3 at the
-default `tol_outer` and rounding once the fit has converged.
+to rounding: the fit records the scores of the vectors it returns. (The
+MATLAB reference keeps each component's scores from the vector before its
+last update, which on real cohorts put them about 2% of the largest score
+from the returned vectors' own; PORTING.md item 17.)
 `reference=True` gives the MATLAB `ConConSmooth.smooth` projection instead, a
 least-squares fit over the lower triangle with the diagonal, which weighs the
 diagonal differently and comes out smaller by the factor 1/(1 + Σ_i ψ_k(i)⁴):
@@ -725,12 +732,12 @@ sbci.local_test(reduction.scores, banded, groups=families,
 ```
 
 On the 943 young adults (`tests/reference/inference_probe.py`) the named
-design gives the published 11 of 20 components for sex, identical to the
-index-based call. The strongest, component 15, has an estimate of -0.0137 with
-a 95% interval of -0.018 to -0.0094, on 421 degrees of freedom (one fewer than
-the families), and a partial R-squared of 0.037; across the eleven it runs
-from 0.009 to 0.039. The age band as a factor shows in 3 of the 20 components,
-and 31-35 against 26-30 in one (component 4: -0.009, interval -0.014 to
+design gives the published 13 of 20 components for sex, identical to the
+index-based call. The strongest, component 16, has an estimate of -0.0131 with
+a 95% interval of -0.0174 to -0.0088, on 421 degrees of freedom (one fewer than
+the families), and a partial R-squared of 0.034; across the thirteen it runs
+from 0.005 to 0.034. The age band as a factor shows in 3 of the 20 components,
+and 31-35 against 26-30 in one (component 5: -0.009, interval -0.014 to
 -0.004). The 36+ band holds 9 subjects, and a contrast against so small a level
 leans on cluster-robust errors from a handful of families: better not read.
 The intervals agree with statsmodels' to 1e-9, cluster-robust ones included,
@@ -959,10 +966,12 @@ Four things to know before trusting the numbers:
   coordinates and closes with a factor of `sin(theta)`, so a vertex on the
   coordinate axis gets a Jacobian of exactly zero and loses its whole row and
   column. The ico4 grid has four such vertices, so `align()` rotates the mesh
-  clear of them -- a change of coordinates and nothing else. It refuses a grid
-  you supply yourself with a vertex on the axis or within 0.001 of it (in
-  `sin(theta)`), where the Jacobian is unreliable too;
-  `sbci.alignment.rotate_off_poles` clears it.
+  clear of them -- a change of coordinates and nothing else -- and so it does
+  a grid you supply with a vertex on the axis or within 0.001 of it (in
+  `sin(theta)`), where the Jacobian is unreliable too. Every warp records the
+  rotation, which `migrate_warp` needs to place it; a grid you rotated
+  yourself needs `grid_rotations=` saying so, or its warps land that far off
+  (up to 17 degrees, the bundled sphere's own rotation).
 - **`delta` defaults to 1e-5, not the reference's 1e-10.** A central difference
   at 1e-10 loses six of sixteen digits; the reference's own derivative moves by
   2% of its range between adjacent step sizes. Pass `delta=1e-10` to reproduce
@@ -1047,7 +1056,10 @@ seconds per 100,000 streamlines rather than minutes. Six things to know:
 - **Rigid initialization is off by default**, as in the reference's own
   example; `init_rotation=True` runs the multi-shell rotation search first,
   and the rotation it finds is held exactly while the registration deforms
-  after it. The exported warp keeps it as `lh_rigid` and `rh_rigid`; its
+  after it. The reference's caps turn about axes perpendicular to z only, so
+  its search could not undo a turn about z (8 degrees stayed 8 to 9 off); each
+  shell's best are now turned about z too, and `strict_upstream=True` keeps
+  the reference's search. The exported warp keeps it as `lh_rigid` and `rh_rigid`; its
   vertices are the whole map.
 - **The stopping threshold is absolute.** The public default of 1e-4 is a
   quarter of the whole cost when two subjects are alike, and stops the
@@ -1171,11 +1183,11 @@ them. `groups=` makes the
 families the units of the test (*Testing scores against a covariate*, above).
 On the 943 with a score, no component of the twenty tracks fluid intelligence once the families
 are clusters: the closest, component 13, has r = 0.11 and adjusted p 0.064.
-Counted as 943 independent subjects, the same component passes at 0.023,
-which is the error `groups=` is there to prevent. Sex shows in 11 of the
-twenty, the strongest at adjusted p 2e-8; docs/RESULTS.md shows where. The rank
+Counted as 943 independent subjects, the same component passes at 0.024,
+which is the error `groups=` is there to prevent. Sex shows in 13 of the
+twenty, the strongest at adjusted p 1e-7; docs/RESULTS.md shows where. The rank
 matters as well: a rank-4 fit comes nowhere near for fluid intelligence
-(smallest adjusted p 0.32), because the largest differences between these
+(smallest adjusted p 0.33), because the largest differences between these
 subjects lie elsewhere (PORTING.md item 5).
 
 **Running it on Longleaf.** `reduce` holds the cohort once, as one dense
@@ -1184,8 +1196,8 @@ are loaded when indexed, it reads one subject at a time, so the files need not
 be held as well. The fit of the 943 peaked at 196 GiB; ask for 230 GB. Ask for
 the cores as one task, `--ntasks=1 --cpus-per-task=8`: with eight one-CPU
 tasks the cluster sets `OMP_NUM_THREADS=1`, and the linear algebra then runs
-on one core. With eight threads the rank-20 fit of the 943 took five and a
-half hours, loading included.
+on one core. With eight threads the rank-20 fit of the 943 took four to five
+and a half hours, loading included, depending on the node.
 
 The pipeline is checked against a planted answer on a synthetic cohort
 (`sbci.example_cohort()`, one bundle scaled by a synthetic age) in PORTING.md
@@ -1291,7 +1303,11 @@ Three files are written: the dense connectome, a `.json` sidecar with the
 metadata table, and a `_vertexarea.dscalar.nii` of fsLR vertex areas. The
 connectome holds a density, so anything that integrates it -- parcellation,
 totals, region means -- needs those areas; they are not recoverable from the
-`.dconn` alone.
+`.dconn` alone. An FC file holds correlations instead, each fsLR vertex
+averaging the cortical ico4 vertices it overlaps: the medial wall has no FC,
+and averaging its empty rows in shrank the 407 fsLR vertices beside it (until
+October 2026). The three files are written under temporary names and moved
+into place once all are complete.
 
 **This does not belong on a login node.** The output is 64,984 x 64,984 in
 float32, **16.9 GB on disk**, and the writer needs about 25 GB of memory and

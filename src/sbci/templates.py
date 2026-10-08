@@ -12,12 +12,15 @@ that share a vertex set, which is what :class:`SphereMap` is.
 Two frames are involved, and they are not the same:
 
 - The grid's bundled ``sphere`` is the pipeline's own parameterization. Its
-  vertices are fsaverage vertices (each within half a millimetre of one on the
-  inflated surface), but their sphere coordinates are not those of FreeSurfer's
-  standard sphere: at matched vertices the two differ by 119 degrees on median.
-  ``fsaverage_sphere_ico4.npz`` holds the standard-sphere coordinates of each
-  grid vertex, found by that anatomical match, and :func:`grid_to_fsaverage`
-  is the map between the two parameterizations.
+  vertices are fsaverage vertices -- vertex ``i`` of a hemisphere is
+  fsaverage's vertex ``i``, as the pipeline's ``mapping_avg_ico4.npz`` lists
+  them -- but their sphere coordinates are not those of FreeSurfer's standard
+  sphere: the two differ by 119 degrees on median. ``fsaverage_sphere_ico4.npz``
+  holds each grid vertex's standard-sphere coordinates, and
+  :func:`grid_to_fsaverage` is the map between the two parameterizations.
+  (Until October 2026 the file matched the vertices on the inflated surface,
+  which picked a neighbouring fsaverage vertex for 27 of them, half a degree
+  off.)
 - HCP's ``fs_LR-deformed_to-fsaverage`` sphere places every fs_LR-32k vertex
   on FreeSurfer's standard sphere, and its standard ``sphere.32k_fs_LR`` gives
   the same vertices' fs_LR positions; together they are

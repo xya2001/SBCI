@@ -59,7 +59,10 @@ measurements.
    The gradient it computes is the consistent gradient of that plain sum, so
    this is a discretization choice rather than a bug -- on an icosphere the
    two differ by the spread of vertex areas. ``area_weighted=True`` weights
-   both the cost and its gradient with the areas.
+   both the cost and its gradient with the areas, divided by their mean so
+   that the cost stays on the plain sum's scale: the raw areas made it about
+   40,000 times smaller on ico4, below the stopping threshold, and a
+   registration stopped before its first step (until October 2026).
 6. **Triangle indices are ``int16``**, which overflows once both hemispheres
    exceed 32,767 vertices -- ico6 and finer. The author's ``Encore-main`` copy
    already changes this to ``int32``; this port uses ``int64``.
@@ -1248,6 +1251,40 @@ def rotation_shells():
     return [(r.copy(), k) for r, k in shells]
 
 
+def spin_shells():
+    """Turns about ``+z`` to go with :func:`rotation_shells`: what its caps cannot reach.
+
+    Every rotation in a cap takes ``z`` to a nearby direction, about an axis
+    perpendicular to ``z``, so no shell turns anything about ``z`` itself: an
+    8-degree rotation about ``z`` was left 8 to 9 degrees off, one about ``x``
+    0.07, one about a tilted axis about 3 (until October 2026). Shell for
+    shell, these are the turns about ``z`` within the cap's radius, spaced as
+    the cap's directions are (the mean edge of its icosphere), plus the
+    identity; :meth:`ConSEAL._rigid` tries them after each shell's directions.
+    Returns ``[rotations (n, 3, 3), ...]``.
+    """
+    shells = []
+    for radius, subdivision, _keep in [
+        (20.0, 4, 5),
+        (10.0, 4, 3),
+        (5.0, 5, 1),
+        (2.5, 6, 1),
+        (1.0, 7, 1),
+    ]:
+        vertices, faces = icosphere(subdivision)
+        edges = vertices[faces[:, 0]] * vertices[faces[:, 1]]
+        spacing = float(np.degrees(np.arccos(np.clip(edges.sum(axis=1), -1.0, 1.0)).mean()))
+        steps = int(radius // spacing)
+        rotations = [np.eye(3)]
+        for angle in np.radians(spacing * np.arange(-steps, steps + 1)):
+            if angle == 0.0:
+                continue
+            cos, sin = np.cos(angle), np.sin(angle)
+            rotations.append(np.array([[cos, -sin, 0.0], [sin, cos, 0.0], [0.0, 0.0, 1.0]]))
+        shells.append(np.stack(rotations))
+    return shells
+
+
 # --- registration ---------------------------------------------------------------
 
 
@@ -1329,7 +1366,9 @@ class ConSEAL:
         item 8).
     area_weighted
         Weight the cost and its gradient with the Voronoi areas, as the
-        paper's integral does. Off by default to match the reference (item 5).
+        paper's integral does, in units of their mean, so that the threshold
+        means what it does for the plain sum. Off by default to match the
+        reference (item 5).
     strict_upstream
         Reproduce items 1 to 4, 12, 13 and 15 to 17 of the module docstring. The
         kernel derivative handed to :meth:`register` must then come from
@@ -1359,7 +1398,11 @@ class ConSEAL:
         self.viscosity = float(viscosity)
         self.area_weighted = bool(area_weighted)
         self.strict_upstream = bool(strict_upstream)
-        self._areas = np.concatenate([lh_grid.areas, rh_grid.areas])
+        # In units of the mean area: the weighted cost then sits on the plain sum's scale,
+        # where the stopping threshold is meant; raw areas shrank it ~40,000-fold on ico4.
+        areas = np.concatenate([lh_grid.areas, rh_grid.areas])
+        self._area_unit = float(areas.mean())
+        self._areas = areas / self._area_unit
 
     def new_warps(self):
         """A pair of identity warps with this engine's viscosity."""
@@ -1450,7 +1493,7 @@ class ConSEAL:
             + s3[:, None] * grid.laplacian
         )
         if self.area_weighted:
-            integrand = integrand * grid.areas[:, None]
+            integrand = integrand * (grid.areas / self._area_unit)[:, None]
         coefficients = 2.0 * integrand.sum(axis=0)
         return (coefficients[None, :, None] * grid.basis).sum(axis=1)
 
@@ -1482,6 +1525,21 @@ class ConSEAL:
         initial = self.cost(q1 - q2)
         n_left = moving.n_left
         shells = rotation_shells()
+        # The reference's caps turn nothing about z (spin_shells); each shell's best are
+        # turned about z as well, unless the reference's search is asked for.
+        spins = [None] * len(shells) if self.strict_upstream else spin_shells()
+
+        def refine(candidates, rotations, keep, target, block, grid, query):
+            """The ``keep`` best of every candidate composed with every rotation."""
+            costs = np.zeros((len(candidates), rotations.shape[0]))
+            for k, candidate in enumerate(candidates):
+                for s, rotation in enumerate(rotations):
+                    rotated = self._pull_back(block, grid, query, candidate @ rotation)
+                    costs[k, s] = ((target - rotated) ** 2).sum()
+            order = np.argsort(costs.ravel())[:keep]
+            k_idx, s_idx = np.unravel_index(order, costs.shape)
+            return [candidates[k] @ rotations[s] for k, s in zip(k_idx, s_idx, strict=True)]
+
         best_pull_back = []
         hemispheres = (
             (moving.lh_grid, slice(0, n_left), moving._query[0]),
@@ -1519,18 +1577,14 @@ class ConSEAL:
             g_idx, s_idx = np.unravel_index(order, costs.shape)
             candidates = [rotations[s] @ group[g].T for g, s in zip(g_idx, s_idx, strict=True)]
 
-            # later shells: refine each candidate with a finer cap
-            for rotations, keep in shells[1:]:
-                costs = np.zeros((len(candidates), rotations.shape[0]))
-                for k, candidate in enumerate(candidates):
-                    for s, rotation in enumerate(rotations):
-                        rotated = self._pull_back(block, grid, query, candidate @ rotation)
-                        costs[k, s] = ((target - rotated) ** 2).sum()
-                order = np.argsort(costs.ravel())[:keep]
-                k_idx, s_idx = np.unravel_index(order, costs.shape)
-                candidates = [
-                    candidates[k] @ rotations[s] for k, s in zip(k_idx, s_idx, strict=True)
-                ]
+            here = (target, block, grid, query)
+            if spins[0] is not None:
+                candidates = refine(candidates, spins[0], keep, *here)
+            # later shells: refine each candidate with a finer cap, then turn it about z
+            for (rotations, keep), turns in zip(shells[1:], spins[1:], strict=True):
+                candidates = refine(candidates, rotations, keep, *here)
+                if turns is not None:
+                    candidates = refine(candidates, turns, keep, *here)
             best_pull_back.append(candidates[0])
 
         lh_warp, rh_warp = self.new_warps()

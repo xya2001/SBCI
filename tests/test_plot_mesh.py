@@ -66,3 +66,28 @@ def test_unknown_meshes_are_refused():
         plot_surface(np.zeros(2 * HALF), mesh="fsaverage9")
     with pytest.raises(ValueError, match="mesh"):
         display_mesh("ico4")
+
+
+def test_one_bound_on_a_symmetric_scale_is_mirrored_about_zero(monkeypatch):
+    """A map of both signs is drawn on a scale centred on zero, one bound given or none.
+
+    ``vmin=-0.5`` alone gave ``(-0.5, 0.9)``, the other end the map's largest
+    value, so zero sat off the centre of a diverging colour map.
+    """
+    from nilearn import plotting as nilearn_plotting
+
+    drawn = []
+
+    def plot_surf(*args, **kwargs):
+        drawn.append((kwargs["vmin"], kwargs["vmax"]))
+
+    monkeypatch.setattr(nilearn_plotting, "plot_surf", plot_surf)
+    values = np.linspace(-0.3, 0.9, 2 * HALF)
+    for given, expected in (
+        (dict(vmin=-0.5), (-0.5, 0.5)),
+        (dict(vmax=0.4), (-0.4, 0.4)),
+        ({}, (-0.9, 0.9)),
+        (dict(vmin=-0.2, vmax=0.7), (-0.2, 0.7)),
+    ):
+        plot_surface(values, views=("lateral",), shading=False, **given)
+        assert drawn[-1] == pytest.approx(expected), given

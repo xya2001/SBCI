@@ -139,7 +139,7 @@ each of the eleven subjects' SC with its own FC:
 | --- | --- |
 | global | 0.200 to 0.268 |
 | within Desikan regions | 0.595 to 0.679 |
-| discrete, on the Desikan matrices | 0.271 to 0.370 |
+| discrete, on the Desikan matrices | 0.329 to 0.421 with SC's mean density, `how="mean"` (0.271 to 0.370 with its mass, as quoted until item 18) |
 
 The NaN are the 439 medial-wall vertices and no others, and the global maps
 of two subjects correlate at r = 0.53 to 0.71 (mean 0.62). Averaged over the
@@ -475,17 +475,24 @@ upstream.*
 
 ### Agreement
 
-With the same initialization, the port reproduces the reference exactly:
+With the same initialization and the reference run to its fixed point
+(`tests/reference/fpca_fixed_point.m`: 400 updates, never stopped early), the
+port reproduces the reference on every component. At the reference's default
+tolerance they agree on the first vector, and the scores differ by design
+(item 17): the reference keeps each component's scores from the vector before
+its last update, the port takes those of the vector it returns.
 
-| Quantity | Result |
-| --- | --- |
-| component basis vectors | max difference **2.1e-16** after sign alignment |
-| component scales | float64 rounding, worst 6.2e-15 |
-| subject scores | float64 rounding |
-| explained fraction | identical to 6 decimals |
+| Quantity | At the fixed point | At the default tolerance |
+| --- | --- | --- |
+| component basis vectors | **9.7e-16** at most, all four, after sign alignment | 2.3e-16 for the first; 1e-9 to 6e-5 for the other three, fitted to what the scores leave |
+| component scales | 6.9e-16 relative | 1.6e-5 relative |
+| subject scores | 5.8e-16 | the first vector's own scores to 1.5e-15; the reference records the previous vector's, 2.4e-5 from them |
+| explained fraction | 1.0e-15 | 8.7e-7 |
 
-`tests/test_matlab_reference.py` asserts the basis, scales, explained fraction
-and scores. The tests in `tests/test_reduction.py` check what holds
+Until 7 October 2026 the port kept the reference's scores too, and matched its
+default run to rounding (2.1e-16 on the basis). `tests/test_matlab_reference.py`
+asserts the fixed point in full and, at the default tolerance, the first
+vector and its scores. The tests in `tests/test_reduction.py` check what holds
 without MATLAB: exact recovery of genuinely low-rank data, ordering by weight,
 monotone explained variance, and scores that reproduce their own subjects.
 
@@ -501,10 +508,10 @@ comparable with `Reduction.scores`, which it was not. Since the review of
 5 October 2026 (item 8) it scores a new subject exactly as the fit scored the
 training cohort -- the sequential deflation `c_k = psi_k' Y psi_k - sum_{l<k}
 c_l (psi_k . psi_l)^2`, solved through the overlaps in `O(n^2 K)` -- so
-projecting that cohort returns its scores: to rounding at a converged fit
-(2.5e-16 in the tests), and to the fit's tolerance otherwise, because the fit
-records each score one alternating step before its final component, as the
-reference does (1e-3 at the default `tol_outer`; the reference's triangle form
+projecting that cohort returns its scores, to rounding. Since 7 October 2026
+the fit records the scores of the vectors it returns (item 17); until then it
+kept the reference's, from the vector before each component's last update,
+and the two agreed only to the fit's tolerance (the reference's triangle form
 was off by 5e-2 to 1e-1 on the same cohorts). `project(..., reference=True)`
 keeps the reference's triangle objective, bit for bit.
 
@@ -569,7 +576,9 @@ computes the top `k` eigenvectors of the Gram operator by Lanczos (a few
 seconds on ico4), runs the alternating updates from each and keeps the largest
 component; `candidates=6` finds the bundle in both cases -- at three degrees
 as the second component, with the largest scale of the four and adjusted p
-0.0003, the explained fraction rising from 0.182 to 0.194 -- at about three
+0.0003, the explained fraction rising from 0.181 to 0.193 (the 0.182 and
+0.194 first quoted here were a run before later changes; the code gives
+these before and after item 17, `tests/reference/final_scores_probe.py`) -- at about three
 times the cost of the default (312 s against 94 s for ten subjects at rank
 4). The default stays at 1 because the reference has no such step; making it
 6 is a WP1 decision.
@@ -679,29 +688,39 @@ At rank 20 (`candidates=1`, 27% of the cohort's norm), with sex, the age band
 and the streamline count as covariates, no component tracks the score after
 the false-discovery-rate correction across the twenty. The closest are
 component 13, r = 0.11, adjusted p 0.064, and component 7, r = 0.10, adjusted
-p 0.083; without the covariates both are at 0.051. Counted as 943 independent
-subjects, component 13 passed at 0.023 (and component 7 at 0.029 without the
-covariates), which is what the first version reported, with an effect map in
-right medial occipital cortex. A check that needs no clustering agrees with
-the correction: keeping one subject per family, the first met in a random
-order (`numpy.random.default_rng(seed).permutation`, seeds 0 to 4), leaves
-422 independent subjects, in whom component 13 correlates with the score at
-r = 0.10 to 0.12 with adjusted p 0.22 to 0.48. The effect's size holds; its
+p 0.082; without the covariates both are at 0.051. Counted as 943 independent
+subjects, component 13 passes at 0.024 (and component 7 at 0.029 without the
+covariates); the first version of this analysis counted them so and reported
+component 13, with an effect map in right medial occipital cortex. A check
+that needs no clustering agrees with the correction: keeping one subject per
+family, the first met in a random order
+(`numpy.random.default_rng(seed).permutation`, seeds 0 to 4), leaves 422
+independent subjects, in whom component 13 correlates with the score at
+r = 0.10 to 0.12 with adjusted p 0.22 to 0.43
+(`tests/reference/inference_probe.py`, step 4). The effect's size holds; its
 significance does not.
 
 At rank 4, the first four of the same components (17% of the norm), nothing
-comes close (smallest adjusted p 0.32), while sex shows in all four. At rank
-20 sex, tested with the score among the covariates, shows in eleven
-components (1, 2, 3, 5, 6, 8, 9, 12, 15, 16 and 18; thirteen counted as
-independent), the strongest at adjusted p 2e-8. Its effect map over those
-eleven (`docs/figures/cohort_sex_effect.png`) sits at the occipital poles of
-both hemispheres, where connectivity is relatively higher in men, and nowhere
-else above a twentieth of its largest value. Head size differs between the
-sexes and is not in the model, so part of that may be size. The streamline
-count matters less here than the rank does: it correlates with the first
-component at -0.12 and with no other beyond 0.18. The fit read the cohort one
-file at a time, held it as 199 GB of float64 and peaked at 196 GiB, and took
-5.4 hours on eight threads, loading included.
+comes close (smallest adjusted p 0.33), while sex shows in all four. At rank
+20 sex, tested with the score among the covariates, shows in thirteen
+components (1, 2, 3, 5, 6, 8, 9, 10, 12, 15, 16, 18 and 19; the same thirteen
+counted as independent), the strongest at adjusted p 1e-7. Its effect map
+over those thirteen (`docs/figures/cohort_sex_effect.png`) sits at the
+occipital poles of both hemispheres, where connectivity is relatively higher
+in men, and nowhere else above a twentieth of its largest value. Head size
+differs between the sexes and is not in the model, so part of that may be
+size. The streamline count matters less here than the rank does: it
+correlates with the first component at -0.12 and with no other beyond 0.18.
+The fit read the cohort one file at a time, held it as 199 GB of float64 and
+peaked at 196 GiB, and took 5.4 hours on eight threads, loading included; the
+refit of item 17 took 4.2 hours on another node.
+
+These are the refit's numbers (7 October 2026), with each subject's scores
+taken from the final map of its component (item 17). The fit before it, whose
+scores lagged by a step, put sex in eleven components (1, 2, 3, 5, 6, 8, 9,
+12, 15, 16 and 18), the strongest at 2e-8; component 7 at 0.083 for the trait,
+component 13 at 0.023 counted as independent and at up to 0.48 in one subject
+per family; and the smallest rank-4 adjusted p at 0.32.
 
 ### Estimates, intervals and contrasts (6 October 2026)
 
@@ -720,7 +739,8 @@ Checked against statsmodels (`tests/test_stats_design.py`): coefficients,
 standard errors and intervals, cluster-robust ones included, to 1e-9; the F
 tests of single and joint contrasts, classical and robust, to 1e-8. On the 943
 young adults (`tests/reference/inference_probe.py`), the named design gives
-the published 11 of 20 components for sex bit for bit, and the published 1,020
+the components RESULTS.md publishes for sex bit for bit (13 of 20 since the
+refit of item 17, 11 before it), and the published 1,020
 and 113 vertices of the per-vertex tests of sex and fluid intelligence. A
 contrast against a level as small as the 36+ age band, 9 subjects, leans on
 cluster-robust errors from a handful of families; USAGE.md says so.
@@ -1925,7 +1945,7 @@ Reported as still present:
 | finding 8's shift invariance, with one-hot coding and `add_intercept=False` | **confirmed**, and fixed by 41635ad the same day (item 8, *Finding 8, for an intercept the columns only imply*) | -- | a four-level one-hot probe gives F = 3.12 and 12.08 before and after adding 1e6 |
 | three PALS atlases keep an unassigned `RH_GYRUS` region | **confirmed**: the PALS files name the right hemisphere's unassigned cortex `RH_GYRUS` where the left's is `LH_???` -- in OrbitoFrontal 2,347 vertices against 2,359 | the background pattern of `tools/convert_atlases.py` takes `[LR]H_GYRUS`; the three atlases rebuilt from the toolkit's files, the other 41 unchanged; the coverage floor lowered to 5% so that OrbitoFrontal, at 8.2%, stays | Brodmann 80 -> 79 regions, OrbitoFrontal 48 -> 47, Visuotopic 23 -> 22; OrbitoFrontal labels 203 vertices on the left and 215 on the right, where it labelled the whole right hemisphere; 11,822 bundled regions |
 | ConSEAL's docstrings say `viscosity=0` and `step_clamp=inf` "recover the fork's update rule" | **confirmed**: item 8 of the same docstring lists the fork's other differences, its central-difference gradient and its direct composition | reworded: the two settings remove the regularizations the fork does without, and nothing else | -- |
-| findings 1, 3 and 6 | open, as the review note's *Still open* records (docs/review-2026-10-05.md): the scores the fit records one step early, the re-registration drift of 0.001 degrees, the area weighting | unchanged | -- |
+| findings 1, 3 and 6 | open, as the review note's *Still open* records (docs/review-2026-10-05.md): the scores the fit records one step early, the re-registration drift of 0.001 degrees, the area weighting | unchanged (the first fixed since, item 17) | -- |
 
 New in the third round's commits, and from the audit:
 
@@ -2062,12 +2082,81 @@ intervals, with covariates in large units too; rank-deficient designs against
 a full-rank recoding; the size of the Freedman-Lane permutation test; and
 `icc` against a two-way ANOVA. The suite's own comparisons pin these.
 
+## 17. The scores of the returned vectors, 7 October 2026 -- THE FIT AND `project()` AGREE AT ANY TOLERANCE
+
+`ConConBasis.Fit` alternates two updates for each component -- the subjects'
+scores `s_i = psi' R_i psi`, normalized, for the current vector; then the
+vector, the leading eigenvector of `sum_i s_i R_i` -- and stops after a vector
+update. So it returns each vector with the scores of the vector before it, and
+deflates the residual with those. The stopping rule watches the objective,
+which near the optimum changes with the square of the vector's change, so at
+the default `tol_outer` of 1e-3 the vector, and the scores with it, still move
+by about the square root: on the prediction notebook's rank-15 fits of 240
+young adults the recorded scores lay 1.6% to 2.0% of the largest score from the
+returned vectors' own (up to 3.6% in a component, every component still
+correlating at 0.9997 or more), and on the four released subjects at rank 4
+projected over fitted ran from 0.91 to 1.13. The documents had said 1e-3, which
+holds only for well-separated synthetic components; on a synthetic cohort a
+hundredfold tighter tolerance shrank the gap only tenfold. The reference's own
+sparse branch (`auto_sparse`) takes the scores again after it moves the
+vector; the dense path does not.
+
+Since 7 October 2026 the port scores the vector it returns -- one more pass
+over the cohort per component -- and deflates with those scores. There is no
+switch back to the reference's pairing: it pairs a vector with another
+vector's scores, which nothing downstream should want. `project()` then
+returns `Reduction.scores` on the training cohort to rounding at any tolerance
+(4e-15 to 6e-15 of the largest score on the refitted folds, 1e-16 on synthetic
+cohorts), and each subject's residual keeps nothing along a removed component.
+Against the MATLAB reference (item 5's table): run to its fixed point
+(`tests/reference/fpca_fixed_point.m`) the two agree on every component to
+1e-15; at its default tolerance the first vector agrees to 2.3e-16, the port's
+scores are that vector's own (1.5e-15), the reference's recorded ones 2.4e-5
+from them, and the later components, fitted to what the scores leave, move by
+1e-9 to 6e-5.
+
+What it changed, each measured before and after on the same data:
+
+| Where | Before | After |
+| --- | --- | --- |
+| synthetic cohorts of item 5, ten subjects at rank 4, three starts (`tests/reference/final_scores_probe.py`) | | the same significant components; adjusted p within 0.015 and r within 0.009 of before; the share explained up by at most 8e-6 |
+| the four released subjects at rank 4, recorded before and after on one CPU type | projected over fitted 0.91 to 1.13 | 1, to rounding; the scores moved by 0.3% to 0.7% of the largest, the basis by 2.8e-6, the share explained not in five decimals; every output that is not the reduction's is bit for bit what it was |
+| the reliability notebook, rank 20 on 30 subjects | 32.4% of the norm | 32.1%, a few components in another order; the quoted reliabilities unchanged |
+| the prediction notebook, rank 15 on each fold's 240 | training scores 1.6% to 2.0% of the largest from the vector's own | 4e-15 to 6e-15; sex from the components alone AUC 0.658 to 0.662, fluid intelligence r 0.038 to 0.039, the separable form's cost 0.169 to 0.164; no conclusion moved |
+| the 943 of RESULTS.md, rank 20 | sex in 11 components, the strongest at adjusted p 2e-8 | 13 (10 and 19 now among them), the strongest at 1e-7; fluid intelligence still in none (component 13 at 0.064 both times) |
+
+## 18. The eleventh list, 7 October 2026 -- PERMUTATION TIES, THE FC EXCHANGE AT THE WALL, ConSEAL'S AREA WEIGHTS AND TURNS ABOUT z
+
+A further review found seven bugs that change results and eight failures on
+less common paths. All fifteen hold. Each fix comes with a test that fails
+before it (sixteen tests), and `tests/reference/eleventh_list_probe.py`
+records the sizes on the released subjects and the bundled data.
+
+| # | Finding | Verdict | Fixed by | Size |
+| --- | --- | --- | --- | --- |
+| 1 | permutation p-values too small for discrete scores | **confirmed**: permuted F values equal to the observed one in exact arithmetic fell on either side of it in floating point, and only those above counted | a permuted F within `1e-9 (F + d/q)` of the observed one counts as a tie, as a permutation test counts it | the same discrete scores scaled by 1, 7.3, 0.01 and 1e5 gave p 0.046, 0.044, 0.050 and 0.022 against an exact 0.058 over the same draws; now 0.058 every time |
+| 2 | the FC exchange file shrinks correlations beside the medial wall | **confirmed**: the operator averaged the wall's empty rows in as zeros | FC goes through the operator restricted to cortex, its rows renormalized; a density keeps the whole one | 407 fsLR vertices straddle the wall; their correlations were scaled by 0.125 to 0.889 -- halved at 69, cut by more than half at 157 |
+| 3 | the documented atlas-level coupling takes SC's mass, against FC's mean correlation | **confirmed**: USAGE's recipe used `to_atlas`'s default for SC, which grows with the regions' size | the recipe takes SC's mean density, `how="mean"`; the quoted figures re-measured | on the eleven, 0.271 to 0.370 per subject (sub-100307 0.312) becomes 0.329 to 0.421 (0.364). The review's 0.566 and 0.668 were not reproduced |
+| 4 | ConSEAL's `area_weighted=True` does nothing | **confirmed**: raw Voronoi areas scaled the cost by their mean squared, 2.4e-5 on ico4 (1/41,666), below the stopping threshold, so a registration stopped before its first step | the areas weigh cost and gradient in units of their mean | the weighted cost is now within 25% of the plain one, and a weighted registration takes its steps |
+| 5 | the rigid search cannot undo a turn about z | **confirmed**: every rotation in the reference's caps takes z to a nearby direction, about an axis perpendicular to z | each shell's best candidates are turned about z as well, over the same span and spacing (`spin_shells`); `strict_upstream=True` keeps the reference's search | on ico3, 8 degrees about z was left 9.4 and 8.0 degrees off (left, right), about a tilted axis 3.3 and 3.0; now 0.37 and 0.11, and 0.33 and 0.20; about x 0.07 either way. The search takes half again as long (14 s against 9 there) |
+| 6 | `fsaverage_sphere_ico4.npz` maps 27 grid vertices to the wrong fsaverage vertex | **confirmed**: the file was built by matching the inflated surfaces, nearest to nearest; the pipeline's `mapping_avg_ico4.npz` lists grid vertex `i` as fsaverage vertex `i` | rebuilt from that identity (`tools/build_template_spheres.py`) | 27 vertices (14 left, 13 right) 0.49 to 0.50 degrees off on the standard sphere, which `migrate_warp` carried into every migrated warp there; the other 5097 unchanged |
+| 7 | an endpoint index past its hemisphere switches hemisphere through `save()` and `load()` | **confirmed**: left vertex 2600 is stored as whole-grid 2600 and read back as right vertex 38 | `Endpoints` refuses vertex and triangle indices outside the hemisphere, with the existing hint about one-based indices | -- |
+| a | following `align()`'s advice for a supplied grid on the axis misplaces its warps in `migrate_warp` | **confirmed**: the advised `rotate_off_poles` turned the grid, and nothing recorded the turn | `align()` turns such a grid clear of the axis itself and records the turn in every warp; `grid_rotations=` records a turn made beforehand | the bundled sphere's own turn is 17.2 degrees per hemisphere |
+| b | ENCORE accepts a density that is not symmetric, and one stored as a single triangle never registers | **confirmed** | refused, with the advice to form `D + D.T - diag(D)` | -- |
+| c | global coupling is NaN for every one-vertex region | **confirmed**: the global form keeps the diagonal, and `to_atlas(how="mean")` leaves such a region's NaN there | a NaN on the diagonal is left out of that profile | Schaefer-1000's 21 one-vertex regions, all finite now |
+| d | the ARPACK fallback fails on SciPy 1.10, which the package allows | **confirmed**: SciPy 1.10 multiplies an operator by a matrix in (n, 1) columns, which the deflation broadcast to (n, n) -- "cannot reshape array of size 202500 into shape (450,1)" | the operators flatten what they are given | the forced fallback now runs under SciPy 1.10.1 |
+| e | the cohort loader accepts `.H5` files that `sbci.load` refuses | **confirmed** | `load` and `save` take the suffix in any case | -- |
+| f | `write_cifti` writes its 17 GB onto the final name | **confirmed**: a failure part way left a truncated file there | the three files go under temporary names and are moved into place once all are written | -- |
+| g | the colour scale is not centred on zero when one bound is given | **confirmed**: `vmin=-0.5` alone drew from -0.5 to the map's largest value | on a symmetric scale a single bound is mirrored | -- |
+| h | the release tools would publish HCP-derived data under CC-BY-4.0 without the HCP's terms | **confirmed**: `zenodo_upload.py` set open access and `cc-by-4.0`, and the bundles carried no terms | every bundle, the bundle folder and the cohort manifest carry the HCP's terms (`DATA_USE.txt`); the Zenodo record is restricted, its access conditions the terms, with no licence, and bundles without the terms are refused | -- |
+
 ## Status
 
 All seven ports are done and verified, and the reviews of 5 to 7 October
 2026 have been answered in full: the eight of the code here (items 8 to 15),
-the two of the notebooks in docs/review-2026-10-05.md, and a recheck of all
-of it (item 16, and the review note's last section). What is left is under
-items 4 and 7's *Still open* and the review note's. They were done in the order 3, 1, 2, 5, 4, 6, 7: parcellation
+the two of the notebooks in docs/review-2026-10-05.md, a recheck of all of it
+(item 16), the scores of the returned vectors (item 17) and an eleventh list
+(item 18). What is left is under items 4 and 7's *Still open* and the review
+note's. The ports were done in the order 3, 1, 2, 5, 4, 6, 7: parcellation
 unblocked the first notebook, kernel smoothing the WP3 speed target, and the
 two alignments came last because nothing else depends on them.

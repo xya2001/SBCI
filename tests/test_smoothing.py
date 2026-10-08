@@ -216,16 +216,15 @@ def test_adjacency_totals_count_each_within_hemisphere_streamline_twice(endpoint
 
 
 def test_one_based_indices_are_caught():
-    """MATLAB indices are one-based; using them unconverted must not pass."""
-    bad = Endpoints(
-        surf_in=np.array([0], dtype=np.int8),
-        surf_out=np.array([0], dtype=np.int8),
-        vtx_in=np.array([2]),
-        vtx_out=np.array([1]),
-        n_per_hemi=2,
-    )
+    """MATLAB indices are one-based; unconverted, they are refused as Endpoints are made."""
     with pytest.raises(ValueError, match="One-based indices"):
-        bad.adjacency()
+        Endpoints(
+            surf_in=np.array([0], dtype=np.int8),
+            surf_out=np.array([0], dtype=np.int8),
+            vtx_in=np.array([2]),
+            vtx_out=np.array([1]),
+            n_per_hemi=2,
+        )
 
 
 def test_n_streamlines(endpoints):
@@ -1092,20 +1091,19 @@ def test_the_density_refuses_nan_positions_and_unknown_hemisphere_flags():
 
 
 def test_a_triangle_index_beyond_its_hemisphere_is_refused():
-    from sbci.smoothing import Endpoints, endpoint_positions
+    from sbci.smoothing import Endpoints
 
-    ends = Endpoints(
-        surf_in=np.array([0]),
-        surf_out=np.array([0]),
-        vtx_in=np.array([0]),
-        vtx_out=np.array([1]),
-        tri_in=np.array([6000]),
-        tri_out=np.array([0]),
-        bary_in=np.array([[1.0, 0.0, 0.0]]),
-        bary_out=np.array([[1.0, 0.0, 0.0]]),
-    )
     with pytest.raises(ValueError, match="within a hemisphere"):
-        endpoint_positions(ends)
+        Endpoints(
+            surf_in=np.array([0]),
+            surf_out=np.array([0]),
+            vtx_in=np.array([0]),
+            vtx_out=np.array([1]),
+            tri_in=np.array([6000]),
+            tri_out=np.array([0]),
+            bary_in=np.array([[1.0, 0.0, 0.0]]),
+            bary_out=np.array([[1.0, 0.0, 0.0]]),
+        )
 
 
 def test_the_default_kernel_needs_the_ico4_grid(smoothable, toy_endpoints, toy_basis):
@@ -1121,3 +1119,18 @@ def test_the_default_kernel_needs_the_ico4_grid(smoothable, toy_endpoints, toy_b
     )
     with pytest.raises(ValueError, match="shk smoothing needs"):
         smoothable.smooth(kernel="shk", eigenpairs=toy_basis)
+
+
+def test_an_index_past_its_hemisphere_is_refused_rather_than_moved_to_the_other():
+    """Left vertex 2600 was stored as whole-grid 2600 and read back as right vertex 38."""
+    from sbci.smoothing import Endpoints
+
+    with pytest.raises(ValueError, match=r"vtx_in out of range for 2562 .*\[2600, 2600\]"):
+        Endpoints(surf_in=[0], surf_out=[0], vtx_in=[2600], vtx_out=[5])
+    with pytest.raises(ValueError, match=r"vtx_out out of range .*\[-1, -1\]"):
+        Endpoints(surf_in=[1], surf_out=[1], vtx_in=[3], vtx_out=[-1])
+    weights = np.full((1, 3), 1 / 3)
+    with pytest.raises(ValueError, match=r"tri_out: triangle indices must lie in 0..5119"):
+        Endpoints([0], [0], [3], [5], tri_in=[7], tri_out=[5120], bary_in=weights, bary_out=weights)
+    kept = Endpoints([0, 1], [1, 0], [2561, 0], [0, 2561])
+    assert kept.global_vertex_in.tolist() == [2561, 2562]

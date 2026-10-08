@@ -114,19 +114,18 @@ def test_the_leading_component_finds_the_strongest_truth(cohort):
 
 
 def test_scores_reproduce_the_subjects_they_came_from(cohort):
-    """Projecting the data onto its own basis returns its own scores.
+    """Projecting the data onto its own basis returns its own scores, to rounding.
 
-    To the fit's tolerance: the fit records a component's scores one
-    alternating step before its final vector, so at the default ``tol_outer``
-    the two differ at the 1e-3 level (the fixed-point test below pins the
-    identity itself). The reference form is systematically further off.
+    At the default ``tol_outer``, where the fit stops before its vectors have
+    settled: the scores it records are those of the vectors it returns. (The
+    reference keeps the scores of the vectors before the last update, and the
+    two differed here by 2.1e-3.) The reference's projection is
+    systematically further off.
     """
     matrices, _ = cohort
     result = fit_basis(matrices, np.eye(matrices.shape[1]), rank=4, seed=0)
     again = project(result, matrices)
-    np.testing.assert_allclose(again, result.scores, atol=1e-2)
-    for k in range(result.rank):
-        assert abs(np.corrcoef(again[:, k], result.scores[:, k])[0, 1]) > 0.99
+    np.testing.assert_allclose(again, result.scores, rtol=0, atol=1e-12)
     reference_form = project(result, matrices, reference=True)
     assert np.abs(again - result.scores).max() < np.abs(reference_form - result.scores).max()
 
@@ -400,9 +399,7 @@ def test_projecting_the_training_cohort_recovers_its_own_scores(cohort):
     result = reduce(raw, rank=3, seed=0)
     assert result.mean is not None
     again = project(result, np.stack(raw))
-    np.testing.assert_allclose(again, result.scores, atol=1e-2)
-    for k in range(result.rank):
-        assert abs(np.corrcoef(again[:, k], result.scores[:, k])[0, 1]) > 0.99
+    np.testing.assert_allclose(again, result.scores, rtol=0, atol=1e-12)
     # reconstruct() is the mean plus the components weighted by the subject's scores
     rebuilt_by_hand = result.mean + sum(
         result.scales[k] * result.scores[0, k] * np.outer(result.basis[:, k], result.basis[:, k])
@@ -434,29 +431,50 @@ def _random_cohort(seed=11, n=12, n_subjects=7):
     return matrices - matrices.mean(axis=0, keepdims=True)
 
 
+@pytest.mark.parametrize(
+    "tol_outer", [1e-3, 0.0, -1.0], ids=["default_tolerance", "zero_tolerance", "fixed_point"]
+)
 @pytest.mark.parametrize("rank", [1, 3])
 @pytest.mark.parametrize("uniform", [True, False], ids=["uniform_gram", "diagonal_gram"])
-def test_projecting_the_training_cohort_returns_its_scores_at_the_fixed_point(rank, uniform):
+def test_projecting_the_training_cohort_returns_its_scores(rank, uniform, tol_outer):
     """The default projection is the fit's own scoring, so the training cohort gets its scores back.
 
-    Exactly so once the alternating updates have stopped moving: the fit
-    records a component's scores one step before its final vector, as the
-    reference does, so at the default tolerance the two differ at the 1e-3
-    level, and ``tol_outer=0`` still stops at the first bit-identical
-    objective, where the vector is 1e-8 from its fixed point. A negative
-    tolerance never stops early and runs the updates to the fixed point.
-    Under a non-uniform inner product the components are not Euclidean-
-    orthogonal, and only the sequential deflation gets the scores back.
+    To rounding, however early the fit stops: it scores the vector it returns.
+    The reference scores the vector before the last update, which agrees only
+    once the updates have stopped moving -- on this cohort the two differed by
+    1.6e-3 to 1.2e-2 at the default tolerance, and by 1.9e-9 at ``tol_outer=0``,
+    which stops at the first bit-identical objective with the vector 1e-8 from
+    its fixed point; a negative tolerance never stops early. Under a non-uniform inner product the
+    components are not Euclidean-orthogonal, and only the sequential deflation
+    gets the scores back.
     """
     matrices = _random_cohort()
     n = matrices.shape[1]
     gram = np.ones(n) if uniform else np.random.default_rng(12).uniform(0.5, 2.0, n)
-    result = fit_basis(matrices, gram, rank=rank, seed=0, max_outer=80, tol_outer=-1.0)
-    np.testing.assert_allclose(project(result, matrices), result.scores, atol=1e-10)
+    result = fit_basis(matrices, gram, rank=rank, seed=0, max_outer=80, tol_outer=tol_outer)
+    np.testing.assert_allclose(project(result, matrices), result.scores, rtol=0, atol=1e-12)
     if rank > 1 and not uniform:
         basis = result.basis
         independent = np.stack([(basis * (m @ basis)).sum(axis=0) for m in matrices])
         assert np.abs(independent / result.scales - result.scores).max() > 1e-3
+
+
+def test_the_deflation_removes_each_subjects_whole_coefficient():
+    """What a component leaves behind has nothing more along it, subject by subject.
+
+    The fit subtracts each subject's coefficient on the vector it returns,
+    ``psi' R psi``, so the residual's coefficient there is zero, and the scale
+    times the score is that coefficient. With the scores of the vector before
+    the last update -- the reference's -- a remainder of the size of that
+    update was left for the next component to absorb.
+    """
+    matrices = _random_cohort()
+    residual = matrices.copy()
+    result = fit_basis(residual, np.eye(matrices.shape[1]), rank=1, seed=0, copy=False)
+    psi = result.basis[:, 0]
+    coefficient = (matrices @ psi) @ psi
+    assert np.abs((residual @ psi) @ psi).max() < 1e-12 * np.abs(coefficient).max()
+    np.testing.assert_allclose(result.scales[0] * result.scores[:, 0], coefficient, rtol=1e-12)
 
 
 def test_projection_is_the_sequential_deflation_of_the_fit():
@@ -628,3 +646,26 @@ def test_a_component_the_cohort_leaves_nothing_for_is_named_and_alpha_is_not_bla
     messages = [str(w.message) for w in caught]
     assert any("component 2: the cohort leaves nothing for it" in m for m in messages)
     assert not any("lower alpha" in m for m in messages)
+
+
+def test_the_large_grid_operators_take_a_column_as_well_as_a_vector():
+    """SciPy before 1.11 multiplies an operator by a matrix one (n, 1) column at a time.
+
+    The deflated operator broadcast such a column against a diagonal inner
+    product to (n, n), so the ARPACK fallback, which forms the operator densely,
+    failed on SciPy 1.10 -- the oldest the package allows.
+    """
+    from sbci.reduction import _Deflation, _mode1_gram
+
+    rng = np.random.default_rng(6)
+    n = 450  # above ARPACK_THRESHOLD, where the operator is used
+    kept = np.linalg.qr(rng.standard_normal((n, 2)))[0]
+    matrix = rng.standard_normal((n, n))
+    operator = _Deflation(kept, rng.uniform(0.5, 2.0, n)).sandwich(matrix + matrix.T)
+    vector = rng.standard_normal(n)
+    # what SciPy 1.10 hands the operator's function for each column; the public matvec of a
+    # column is deprecated from SciPy 1.18, so the function is called as SciPy 1.10 calls it
+    np.testing.assert_allclose(operator._matvec(vector[:, None]).ravel(), operator.matvec(vector))
+    cohort = rng.standard_normal((3, n, n))
+    gram = _mode1_gram(cohort)
+    np.testing.assert_allclose(gram(vector[:, None]), gram(vector))

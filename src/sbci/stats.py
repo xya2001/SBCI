@@ -725,7 +725,10 @@ def local_test(
         permuted and its fit added back, which keeps the null exact when the
         tested covariate is correlated with the nuisance ones. Use this when
         the scores are not plausibly Gaussian; the correction is still applied
-        to the permutation p-values, and the intervals stay the model's.
+        to the permutation p-values, and the intervals stay the model's. A
+        permuted statistic equal to the observed one counts as exceeding it,
+        within rounding (1e-9 of ``F + d/q``), so discrete scores, whose
+        permutations tie, give the same p-value however they are scaled.
     seed
         Seed for the permutations.
     groups
@@ -1056,6 +1059,13 @@ def local_test(
         rng = np.random.default_rng(seed)
         residuals = scores - fitted
         exceed = np.zeros(n_columns)
+        # Permutations of discrete scores give statistics equal to the observed one in
+        # exact arithmetic but a few ulps apart in floating point, and which side of it
+        # they land on depends on the order of the sums -- on a rescaling of the scores,
+        # say. F is a ratio of sums of squares that can nearly cancel, so its rounding
+        # scales with F + d / q (the two degrees of freedom); a permuted value within
+        # 1e-9 of that counts as a tie, which a permutation p-value counts as exceeding.
+        tie = 1e-9 * (np.abs(statistic) + denominator_dof / max(numerator_dof, 1))
         for _ in range(permutations):
             surrogate = fitted + residuals[rng.permutation(n_subjects)]
             _, permuted_full = fit(surrogate, matrix)
@@ -1065,7 +1075,7 @@ def local_test(
                 permuted_reduced = (surrogate * surrogate).sum(axis=0)
             permuted = f_statistic(permuted_reduced, permuted_full)
             with np.errstate(invalid="ignore"):
-                exceed += permuted >= statistic
+                exceed += permuted >= statistic - tie
         pvalue = (exceed + 1) / (permutations + 1)
         pvalue = np.where(np.isfinite(statistic), pvalue, np.nan)
     else:

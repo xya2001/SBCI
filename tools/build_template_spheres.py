@@ -7,10 +7,13 @@ Writes two files into ``src/sbci/data``:
 ``surfaces/fsaverage_sphere_ico4.npz``
     FreeSurfer's standard-sphere coordinates of the grid's 5124 vertices
     (``vertices``, unit vectors) and the fsaverage vertex each grid vertex is
-    (``fsaverage_index``). The match is anatomical: each grid vertex to the
-    nearest fsaverage vertex on the inflated surface, which is within half a
-    millimetre for every vertex and is the same vertex index 99.5% of the time.
-    Needs nilearn's fsaverage (fetched once) and HCP's
+    (``fsaverage_index``). The grid's vertex ``i`` of a hemisphere is
+    fsaverage's vertex ``i``: the pipeline built the grid from fsaverage's
+    first 2,562 vertices, and its ``mapping_avg_ico4.npz`` lists them as ids
+    ``0..2561`` on each side. Until October 2026 the match was made on the
+    inflated surfaces instead, nearest vertex to nearest vertex, which picked a
+    neighbouring fsaverage vertex for 27 grid vertices (14 left, 13 right),
+    half a degree off on the standard sphere. Needs HCP's
     ``fsaverage_std_sphere.{L,R}.164k_fsavg_{L,R}.surf.gii``.
 
 ``templates/fslr32k_spheres.npz``
@@ -20,7 +23,7 @@ Writes two files into ``src/sbci/data``:
     standard_mesh_atlases (Washington-University/HCPpipelines,
     ``global/templates/standard_mesh_atlases``), whose licence permits this.
 
-Digests of the files as shipped: fsaverage_sphere_ico4.npz 18f28ec783253006,
+Digests of the files as shipped: fsaverage_sphere_ico4.npz cf7feb4cc89eaf26,
 fslr32k_spheres.npz cee3e4ad50866fd9 (first 16 hex digits of SHA-256).
 """
 
@@ -57,25 +60,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", default=os.path.join("src", "sbci", "data"))
     args = parser.parse_args(argv)
 
-    from nilearn import datasets, surface
-    from scipy.spatial import cKDTree
-
-    import sbci
-
-    fsaverage = datasets.fetch_surf_fsaverage(mesh="fsaverage")
-    inflated = np.asarray(sbci.load_surface("inflated").vertices, dtype=np.float64)
     vertices = np.zeros((2 * HALF, 3))
     index = np.zeros(2 * HALF, dtype=np.int32)
-    for hemisphere, side, lo in (("L", "left", 0), ("R", "right", HALF)):
-        mesh = surface.load_surf_mesh(fsaverage[f"infl_{side}"])
-        coordinates = np.asarray(getattr(mesh, "coordinates", mesh[0]), dtype=np.float64)
-        gap, match = cKDTree(coordinates).query(inflated[lo : lo + HALF])
+    for hemisphere, lo in (("L", 0), ("R", HALF)):
         standard, _ = gifti(
             f"{args.fslr}/fsaverage_std_sphere.{hemisphere}.164k_fsavg_{hemisphere}.surf.gii"
         )
-        vertices[lo : lo + HALF] = unit(standard[match])
-        index[lo : lo + HALF] = match
-        print(f"{hemisphere}: grid vertices matched within {gap.max():.3f} mm")
+        # grid vertex i is fsaverage vertex i, as the pipeline's mapping lists it
+        vertices[lo : lo + HALF] = unit(standard[:HALF])
+        index[lo : lo + HALF] = np.arange(HALF)
     path = os.path.join(args.out, "surfaces", "fsaverage_sphere_ico4.npz")
     np.savez_compressed(path, vertices=vertices, fsaverage_index=index)
 

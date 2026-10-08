@@ -13,7 +13,7 @@ summaries are printed. On Longleaf: ``/work/users/x/y/xya/hcp-ya/full`` and
 
 1. The component test of RESULTS.md, rebuilt with a named design: sex, with
    fluid intelligence, the age band and the streamline count as nuisance and
-   families as clusters, must give the published 11 of 20 components and the
+   families as clusters, must give the published 13 of 20 components and the
    same statistics as the index-based call, bit for bit; then the intervals
    and effect sizes the result now carries.
 2. A contrast: the age band as a factor, its two largest bands against each other.
@@ -21,6 +21,11 @@ summaries are printed. On Longleaf: ``/work/users/x/y/xya/hcp-ya/full`` and
    strength: the published 1,020 vertices for sex and 113 for fluid
    intelligence, and the export of the estimate as a map and of the test as
    a table.
+4. PORTING.md item 5's check that needs no clustering: one subject per
+   family, the first met in a random order (seeds 0 to 4), and fluid
+   intelligence given the rest tested on them as independent subjects.
+
+Components are numbered from 1, as the documents number them.
 """
 
 from __future__ import annotations
@@ -83,7 +88,7 @@ def main() -> int:
     best = int(np.nanargmin(sex.adjusted))
     low, high = sex.interval(0.95)
     print(
-        f"   strongest, component {best}: adjusted p {sex.adjusted[best]:.1e}, estimate "
+        f"   strongest, component {best + 1}: adjusted p {sex.adjusted[best]:.1e}, estimate "
         f"{sex.estimate[best, 0]:+.3g} (95% CI {low[best, 0]:+.3g} to {high[best, 0]:+.3g}, "
         f"{sex.interval_dof} degrees of freedom), partial R2 {sex.partial_r2[best]:.3f}"
     )
@@ -108,9 +113,9 @@ def main() -> int:
     k = int(np.nanargmin(oldest.adjusted))
     low, high = oldest.interval(0.95)
     print(
-        f"   31-35 against 26-30: {oldest.significant().size} of 20; the closest, component {k}, "
-        f"estimate {oldest.estimate[k, 0]:+.3g} (95% CI {low[k, 0]:+.3g} to {high[k, 0]:+.3g}), "
-        f"adjusted p {oldest.adjusted[k]:.2g}"
+        f"   31-35 against 26-30: {oldest.significant().size} of 20; the closest, "
+        f"component {k + 1}, estimate {oldest.estimate[k, 0]:+.3g} "
+        f"(95% CI {low[k, 0]:+.3g} to {high[k, 0]:+.3g}), adjusted p {oldest.adjusted[k]:.2g}"
     )
 
     print("3. Vertex by vertex, on each subject's vertex strength")
@@ -133,6 +138,24 @@ def main() -> int:
     )
     adjusted.to_table(out / "sex_strength.csv", index="vertex")
     print(f"   wrote the map and the table to {out}")
+
+    print("4. One subject per family: fluid intelligence given the rest, as independent subjects")
+    trait = local_test(fit["scores"], named, terms=["fluid_intelligence"], groups=groups)
+    print(f"   all {len(subjects)}, families as clusters: component 13 at {trait.adjusted[12]:.3f}")
+    plain = np.column_stack([fit["trait"], fit["female"], fit["band"], fit["count"]])
+    for seed in range(5):
+        seen, keep = set(), []
+        for i in np.random.default_rng(seed).permutation(len(subjects)):
+            if groups[i] not in seen:  # the first of each family met in this order
+                seen.add(groups[i])
+                keep.append(i)
+        keep = np.sort(keep)
+        alone = local_test(fit["scores"][keep], plain[keep], terms=[1])
+        r = np.corrcoef(fit["scores"][keep, 12], fit["trait"][keep])[0, 1]
+        print(
+            f"   draw {seed}: {keep.size} subjects, {alone.significant().size} of 20 components; "
+            f"component 13 r = {r:.3f}, adjusted p {alone.adjusted[12]:.2f}"
+        )
     print("INFERENCE PROBE DONE")
     return 0
 

@@ -1227,3 +1227,63 @@ def test_an_inverted_warp_says_its_rotation_comes_after_the_flow(bundled_left, t
     ).save(tmp_path / "warp.npz")
     loaded = EndpointWarp.load(saved)
     assert loaded.lh_rigid_after is True and loaded.rh_rigid_after is False
+
+
+def test_area_weighting_keeps_the_cost_on_the_plain_sums_scale(grid, connectome, kernel):
+    """The areas weigh in units of their mean, so the default threshold still means something.
+
+    Raw Voronoi areas made the weighted cost about 40,000 times smaller on ico4
+    (170 times on this ico2 grid), below the stopping threshold: a weighted
+    registration stopped before its first step and moved nothing.
+    """
+    k, dk = kernel
+    rng = np.random.default_rng(12)
+    lh_true, rh_true = StationaryWarp(grid), StationaryWarp(grid)
+    for _ in range(3):
+        lh_true.compose(0.04 * rng.normal(size=(grid.n_vertices, 2)))
+        rh_true.compose(0.04 * rng.normal(size=(grid.n_vertices, 2)))
+    moved = connectome.copy()
+    moved.warp(lh_true, rh_true)
+    moved.commit()
+    plain = ConSEAL(grid, grid, delta=0.05, max_iterations=15)
+    weighted = ConSEAL(grid, grid, delta=0.05, max_iterations=15, area_weighted=True)
+    difference = connectome.q_transform(k) - moved.q_transform(k)
+    assert 0.8 < weighted.cost(difference) / plain.cost(difference) < 1.25
+    _, _, costs, _ = weighted.register(connectome, moved, k, dk)
+    assert len(costs) > 3 and costs[-1] < 0.8 * costs[0]
+
+
+def test_the_rigid_search_undoes_a_turn_about_z(grid, connectome, kernel):
+    """The reference's caps turn about axes perpendicular to z, never about z itself.
+
+    So an 8-degree turn about z was left 9.6 and 8.2 degrees off on this grid; each
+    shell's best are now turned about z as well. ``strict_upstream=True`` keeps the
+    reference's search, and the turn.
+    """
+    angle = np.radians(8.0)
+    truth = np.array(
+        [[np.cos(angle), -np.sin(angle), 0.0], [np.sin(angle), np.cos(angle), 0.0], [0, 0, 1]]
+    )
+    p_in, p_out = connectome.positions()
+    rotated = EndpointConnectome.from_points(
+        grid,
+        grid,
+        p_in @ truth.T,
+        p_out @ truth.T,
+        connectome.hemisphere_in,
+        connectome.hemisphere_out,
+    )
+
+    def degrees_left(rotation):
+        return np.degrees(np.arccos(np.clip((np.trace(rotation @ truth) - 1) / 2, -1, 1)))
+
+    k, dk = kernel
+    lh, rh, _, _ = ConSEAL(grid, grid, max_iterations=0).register(
+        connectome, rotated, k, dk, init_rotation=True
+    )
+    assert degrees_left(lh.rigid) < 1.5 and degrees_left(rh.rigid) < 1.5
+    k, dk = HeatKernelBuilder(grid, grid, degree=12).compute(0.05, strict_upstream=True)
+    lh, _, _, _ = ConSEAL(grid, grid, max_iterations=0, strict_upstream=True).register(
+        connectome, rotated, k, dk, init_rotation=True
+    )
+    assert degrees_left(lh.rigid) > 5.0

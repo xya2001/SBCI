@@ -266,3 +266,20 @@ def test_from_gifti_refuses_two_different_meshes(tmp_path):
     )
     with pytest.raises(ValueError, match="do not share a face list"):
         SphereMap.from_gifti(source, target)
+
+
+def test_each_grid_vertex_is_the_fsaverage_vertex_of_its_own_number():
+    """Grid vertex i of a hemisphere is fsaverage's vertex i, as the pipeline's mapping lists it.
+
+    The bundled file matched them on the inflated surfaces until October 2026,
+    nearest to nearest, and took a neighbouring fsaverage vertex for 27 of
+    them (14 left, 13 right) -- half a degree off on the standard sphere,
+    which migrate_warp carried into every migrated warp there.
+    """
+    from importlib import resources
+
+    with np.load(resources.files("sbci.data.surfaces") / "fsaverage_sphere_ico4.npz") as data:
+        index = np.asarray(data["fsaverage_index"])
+        vertices = np.asarray(data["vertices"])
+    np.testing.assert_array_equal(index, np.tile(np.arange(2562), 2))
+    np.testing.assert_allclose(np.linalg.norm(vertices, axis=1), 1.0, atol=1e-12)

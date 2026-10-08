@@ -11,6 +11,16 @@ short of publishing: open the deposition's page, check it, and press
 Publish; then run ``tools/bundle_hcp_cohort.py manifest --bundles BUNDLES --record ID
 --target src/sbci/data/<cohort>.json``.
 
+The record is **restricted**, with no licence: the files are derived from HCP
+Young Adult data, and the WU-Minn HCP Open Access Data Use Terms let them be
+redistributed only under those same terms, which an open licence such as
+CC-BY or CC0 would not carry. The terms (``DATA_USE.txt``, which
+``tools/bundle_hcp_cohort.py`` writes into every bundle and ``bundles.json``)
+become the record's access conditions and close its description, and access
+is granted on request to those who accept them. A record anyone can download
+behind a click-through acceptance is better made in UNC Dataverse, with the
+terms as custom terms of use and a guestbook.
+
 The token is read from the environment and never written anywhere. With
 ``--sandbox`` everything goes to sandbox.zenodo.org, which takes its own
 tokens and is the place to try this first.
@@ -89,6 +99,27 @@ def upload(base, token, bucket, path: Path, present: dict, report) -> None:
         raise SystemExit(f"upload of {path.name} failed: HTTP {error.code}") from error
 
 
+def record_metadata(title: str, description: str, creators: list, terms: str | None) -> dict:
+    """The deposition's metadata: restricted, its access conditions the HCP's terms, no licence.
+
+    Refused without the terms -- bundles made before they travelled with them --
+    rather than putting HCP-derived data on Zenodo without them.
+    """
+    if not terms or "open-access-data-use-terms" not in terms:  # the terms page's address
+        raise SystemExit(
+            "bundles.json carries no data-use terms; rebuild the bundles with "
+            "tools/bundle_hcp_cohort.py, which writes the HCP's terms into them"
+        )
+    return {
+        "title": title,
+        "upload_type": "dataset",
+        "description": f"{description}<br><br><pre>{terms}</pre>",
+        "creators": creators,
+        "access_right": "restricted",
+        "access_conditions": f"<pre>{terms}</pre>",
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -136,22 +167,16 @@ def main() -> int:
         if affiliation.strip():
             creator["affiliation"] = affiliation.strip()
         creators.append(creator)
-    metadata = {
-        "title": args.title,
-        "upload_type": "dataset",
-        "description": args.description,
-        "creators": creators,
-        "access_right": "open",
-        "license": "cc-by-4.0",
-        "keywords": [
-            "connectome",
-            "Human Connectome Project",
-            "SBCI",
-            "diffusion MRI",
-            "fMRI",
-            "cortical surface",
-        ],
-    }
+    listing = json.loads((Path(args.bundles) / "bundles.json").read_text())
+    metadata = record_metadata(args.title, args.description, creators, listing.get("data_use"))
+    metadata["keywords"] = [
+        "connectome",
+        "Human Connectome Project",
+        "SBCI",
+        "diffusion MRI",
+        "fMRI",
+        "cortical surface",
+    ]
     api(
         base,
         token,
@@ -162,7 +187,7 @@ def main() -> int:
     report("metadata set")
 
     folder = Path(args.bundles)
-    for path in sorted(folder.glob("*.zip")) + [folder / "bundles.json"]:
+    for path in sorted(folder.glob("*.zip")) + [folder / "bundles.json", folder / "DATA_USE.txt"]:
         upload(base, token, bucket, path, present, report)
     report(
         f"done: review and publish at {base}/deposit/{deposition['id']} ; then "

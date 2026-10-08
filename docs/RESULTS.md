@@ -117,12 +117,12 @@ beyond |r| = 0.17, and in no Desikan region pair. Fit at rank 20, which
 captures 27% of the cohort's norm, no component tracks it after the
 false-discovery-rate correction across the twenty: the closest, component 13,
 correlates with the score at r = 0.11 (adjusted p 0.064), and component 7 at
-0.10 (0.083). Counting the 943 as independent would have put component 13 at
-0.023 and the vertices at 217; the families are the difference. A rank-4 fit
-comes nowhere near (smallest adjusted p 0.32).
+0.10 (0.082). Counting the 943 as independent would have put component 13 at
+0.024 and the vertices at 217; the families are the difference. A rank-4 fit
+comes nowhere near (smallest adjusted p 0.33).
 
 Sex, tested in the same model with fluid intelligence as a nuisance, does
-show: in 11 of the 20 components, the strongest at adjusted p 2e-8, in all
+show: in 13 of the 20 components, the strongest at adjusted p 1e-7, in all
 four of a rank-4 fit, and in 1,020 vertices and 761 Desikan pairs. The effect
 map places it at the occipital poles, where connectivity is relatively higher
 in men; head size, which differs between the sexes, is not in the model.
@@ -139,7 +139,7 @@ p-value. Neither survives the correction.*
 
 ![Where sex shows in the structural connectome](figures/cohort_sex_effect.png)
 
-*The effect map over the 11 components that track sex, families as clusters,
+*The effect map over the 13 components that track sex, families as clusters,
 relative to its largest value: the fitted difference in connectivity between
 women and men (positive: higher in women), summed over the other endpoint.*
 
