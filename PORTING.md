@@ -2255,6 +2255,56 @@ unregularized update onto a single subject and kept by the public code's
 regularization or a cohort template, and USAGE.md says when to pass the
 public settings.
 
+### Synthetic warps, 8 October 2026
+
+Three known warps left open whether the fork's lead holds, and whether its
+folding is confined to real data. So the fork, the fork with a guard that
+refuses a hemisphere's step that would fold a triangle (a copy of its
+`Encore.m` changed in those lines only: `tests/reference/fork_case.m` with
+`guard=true`, and `fork_standin/fold_flip.m`), and the package at both
+settings were run on 24 more known warps of sub-100307
+(`tests/reference/fork_synthetic_cases.py`): smooth order-4 warps whose
+largest displacement is 2, 4, 8, 12 and 16 degrees, and warps built the
+fork's way from four composed maps, three seeds each, scored by
+`tests/reference/fork_synthetic_evaluate.py`. The mean endpoint error left,
+in degrees, over the three seeds:
+
+| known warps, mean displacement | the fork | package, the paper's settings | package, public settings |
+| --- | --- | --- | --- |
+| smooth, 0.81 degrees | 0.041 | 0.072 | 0.494 |
+| smooth, 1.63 | 0.052 | 0.086 | 0.642 |
+| smooth, 3.25 | 0.103 | 0.104 | 0.789 |
+| smooth, 4.87 | 0.185 | 0.121 | 0.885 |
+| smooth, 6.48 | 0.290 | 0.142 | 0.977 |
+| composed, 0.56 | 0.039 | 0.067 | 0.414 |
+| composed, 1.11 | 0.046 | 0.080 | 0.569 |
+| composed, 2.22 | 0.068 | 0.096 | 0.716 |
+
+- **Nothing folded.** No method folded a triangle on any of the 24, and the
+  guard never refused a step, so the guarded fork ran exactly as the fork.
+- **The fork is closer on small warps, the velocity field on large ones.**
+  Up to about three degrees the fork ends 30% to 45% closer than the package
+  at the same settings, and it is closest in 17 of the 24. Beyond that the
+  package is: at 4.9 and 6.5 degrees it leaves 0.12 and 0.14 degrees against
+  the fork's 0.19 and 0.29, its 95th percentile 0.41 against 0.72 at the
+  largest, and its warps stretch triangles less (area ratios 0.34 to 3.8
+  against 0.16 to 6.9). Over all 24 the fork undid 95.8%, the package 94.3%
+  and the public code's settings 60.4%.
+- **The fork is faster:** 1.4 to 14 minutes a warp against 8 to 52.
+- **On the real pair the guarded fork folds nothing but stops early,** at
+  its first step refused on both hemispheres: 114 iterations and 6 refused
+  steps, ending at the package's cost 0.1413 where the package and the
+  unguarded fork reach 0.1391.
+
+So the decision holds where the package is used most, registering one
+subject onto another, which moved the pair's endpoints five to six degrees
+on average: in that range the velocity field is ahead on synthetic warps too,
+and it stays unfolded on real ones. For small corrections the fork's update
+is more accurate. Its edge there is not the direct composition, since the
+package composing directly was no closer (above); it is the fork's
+derivative or its cost's scale, which the package could take on without
+giving up the velocity field.
+
 **Still open.** Locating the endpoints again from their last triangles,
 rather than searching the grid afresh each iteration, would make the longer
 runs much cheaper without changing a result.

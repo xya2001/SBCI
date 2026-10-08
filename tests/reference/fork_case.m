@@ -3,6 +3,10 @@
 % 30), Encore(grid,grid,15,0.1,1000,1e-6).
 %     module load matlab/2024b
 %     matlab -batch "case_name='known_007'; run('fork_case.m')"
+%     matlab -batch "case_name='svf140_s101'; guard=true; run('fork_case.m')"
+% guard=true runs a copy of the fork's Encore.m (fork_guard/) that refuses a hemisphere's step
+% which would fold a triangle, tested with fork_standin/fold_flip.m, and saves
+% <case>_fork-guard.mat; the copy differs from the fork only in those lines.
 % Nothing in the fork is changed; the inputs are cases/<case>.mat from fork_cases.py. The fork
 % is the author's and is not distributed with the package. mfallback/ holds two stand-ins:
 % fork_standin/bary_interp_2D_mex.m, and a copy of the fork's Concon.m whose evaluate returns
@@ -22,6 +26,15 @@ addpath('/work/users/x/y/xya/conseal-fork-compare/mfallback');
 assert(startsWith(which('Concon'), '/work/users/x/y/xya/conseal-fork-compare/mfallback/'), 'Concon resolves to %s', which('Concon'));
 assert(startsWith(which('bary_interp_2D_mex'), '/work/users/x/y/xya/conseal-fork-compare/mfallback/'), 'bary_interp_2D_mex resolves to %s', which('bary_interp_2D_mex'));
 fprintf('bary_interp_2D_mex is %s\nConcon is %s\n', which('bary_interp_2D_mex'), which('Concon'));
+suffix = '_fork-cpu';
+if exist('guard', 'var') && guard
+    GUARD = '/work/users/x/y/xya/conseal-fork-compare/fork_guard';
+    addpath(GUARD);
+    assert(startsWith(which('Encore'), [GUARD '/']), 'Encore resolves to %s', which('Encore'));
+    assert(startsWith(which('fold_flip'), [GUARD '/']), 'fold_flip resolves to %s', which('fold_flip'));
+    suffix = '_fork-guard';
+end
+fprintf('Encore is %s\n', which('Encore'));
 OUT = '/work/users/x/y/xya/conseal-fork-compare/cases';
 
 % CPU nodes: no gpuDevice; Encore.register takes its CPU path when gpuDeviceCount is 0.
@@ -47,6 +60,6 @@ fprintf('Total registration time: %.2f seconds\n', elapsed);
 
 [moved_in, moved_out] = F2r.warp_connectome(lh_warp, rh_warp);
 grid_V = ico_mesh.V; grid_T = ico_mesh.T; lh_V = lh_warp.V; rh_V = rh_warp.V;
-save(fullfile(OUT, [case_name '_fork-cpu.mat']), 'cost', 'cost2', 'elapsed', 'moved_in', 'moved_out', ...
+save(fullfile(OUT, [case_name suffix '.mat']), 'cost', 'cost2', 'elapsed', 'moved_in', 'moved_out', ...
      'grid_V', 'grid_T', 'lh_V', 'rh_V', '-v7.3');
 fprintf('FORK CASE %s SAVED\n', case_name);

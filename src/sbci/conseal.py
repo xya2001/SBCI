@@ -85,7 +85,10 @@ and 7 only reaches :meth:`HeatKernelBuilder.cross_validate`. PORTING.md items
    triangles, and this module's update with the fork's direct composition
    folded 166. The stationary velocity field, which refuses a step that would
    fold, folded none, and at the paper's settings undid 93% to 97% of the
-   known warps. So since 7 October 2026 the defaults are the paper's
+   known warps. On 24 more known warps nothing folded: the fork ended closer
+   on warps up to about three degrees on average, the velocity field on
+   larger ones, up to the six degrees the real pair's endpoints moved. So
+   since 7 October 2026 the defaults are the paper's
    settings -- no smoothing, no clamp, a step of 0.1 and a threshold of 1e-6,
    up to 1000 iterations -- with this module's update: the analytic
    derivative and the velocity field. ``strict_upstream=True`` restores the

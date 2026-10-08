@@ -1040,9 +1040,10 @@ caps it. Six things to know:
   passed. The update is still the public code's, a stationary velocity field
   with the analytic derivative, which refuses a step that would fold a
   triangle. The paper's fork composes each step directly onto the last and
-  differentiates by central differences: run beside the package, it undid the
-  known warps a little further (96%), but its warp of two real subjects folded
-  111 triangles, so it is not followed. PORTING.md item 7 explains the
+  differentiates by central differences: run beside the package on 27 known
+  warps, it ended closer on those up to about three degrees and the package on
+  larger ones, and neither folded; but the fork's warp of two real subjects
+  folded 111 triangles, so it is not followed. PORTING.md item 7 explains the
   lineage.
 - **Six errors in the reference are corrected by default.** Its gradient adds
   a term in the wrong tangent frame and differentiates a differently
