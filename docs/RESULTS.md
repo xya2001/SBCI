@@ -204,9 +204,9 @@ degrees on average and 4 at most,
 and the deformed copy was registered back onto the undeformed subject, both
 through the package's smoother. ENCORE, searching its default degree-6 basis,
 undoes 88% of the displacement in eleven steps: the endpoints come back from
-1.63 to 0.20 degrees, and the cost falls to 0.15 of its start. ConSEAL, with
-the unregularized update (the public code without its clamp and smoothing) and
-a stopping threshold of 1e-7, brings them to
+1.63 to 0.20 degrees, and the cost falls to 0.15 of its start. ConSEAL, at
+its default settings, the paper's (no clamp and no smoothing), with a stopping
+threshold of 1e-7, brings them to
 within 0.11 degrees, 93%, in sixty iterations. The figure shows, vertex by
 vertex, how far the endpoints still are from where they started. Two rules
 this test taught, measured in PORTING.md item 7: build every density from the
@@ -234,7 +234,8 @@ changes in it.
 is measured against a planted answer in PORTING.md items 5 and 7: with the
 cohort's anatomy jittered by three degrees the planted effect slips past a
 rank-4 FPCA's default start, `candidates=6` reaches it, ENCORE puts it first,
-and ConSEAL keeps it with its default regularization or a mean template.
+and ConSEAL keeps it onto a mean template, or onto one subject with the
+public code's regularization.
 
 **Aligning the eleven subjects.** Registered onto a template estimated from
 the cohort, with every density from the package's smoother, the subjects grow

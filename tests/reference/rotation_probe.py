@@ -132,7 +132,11 @@ for angle in (150, 60):
             start["moving"] = moving.copy()
             return warps
 
-        engine = ConSEAL(lh, rh, max_iterations=30, threshold=1e-9)
+        # the public code's step, clamp and smoothing, the defaults when this was measured: the
+        # erosion it measures is the smoothing's (PORTING.md item 19 changed the defaults)
+        engine = ConSEAL(
+            lh, rh, delta=0.05, max_iterations=30, threshold=1e-9, step_clamp=0.2, viscosity=0.05
+        )
         engine._rigid = exact_rigid.__get__(engine)
         t = time.time()
         _, _, costs, warped = engine.register(fixed, moving, kernel, derivative, init_rotation=True)

@@ -64,7 +64,9 @@ def main(out):
     print(f"setup {time.time() - t0:.0f} s", flush=True)
 
     t1 = time.time()
-    result = endpoints_align(subjects, grids=(lh, rh), verbose=True)
+    # the public code's settings, the defaults when PORTING.md item 7 recorded this run
+    public = dict(delta=0.05, max_iterations=100, threshold=1e-4, step_clamp=0.2, viscosity=0.05)
+    result = endpoints_align(subjects, grids=(lh, rh), verbose=True, **public)
     elapsed = time.time() - t1
     print(f"alignment {elapsed:.0f} s")
 

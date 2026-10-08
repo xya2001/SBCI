@@ -1346,7 +1346,8 @@ So the paper describes the fork, and the public repository is a later
 refactor that introduced the stationary-velocity warp, the analytic
 derivative, the regularization -- and the errors below. This item ports the
 public code, as asked; `viscosity=0, step_clamp=inf, delta=0.1, threshold=1e-6`
-recovers the fork's update rule (not its finite-difference derivative).
+gives the fork's settings but not its update (its finite-difference derivative
+and direct composition), and since item 19 these settings are the defaults.
 
 ### What matches the MATLAB reference
 
@@ -1417,8 +1418,8 @@ matches the module docstring.
 8. **Undocumented regularization.** The paper says none; the public code
    smooths the velocity field by 5% of its cotangent Laplacian at every
    composition and clamps the largest step to 0.2 (`compute_step_size`). The
-   fork has neither. Both are reproduced here because they are what the public
-   code does.
+   fork has neither. Both were the defaults until item 19 made the paper's
+   settings the defaults; `strict_upstream=True` restores them.
 9. `get_template` counts subjects with `size(Fs, 1)`, so a row cell array
    silently uses one subject; and `acos(trace(Q Q_mu))` is taken without a
    clip, which rounding above 1 turns complex in MATLAB.
@@ -1532,7 +1533,7 @@ and the aligned endpoints are in `/work/users/x/y/xya/conseal-ref/`.
 ```python
 import sbci
 subjects = [sbci.load(p) for p in paths]           # files that carry endpoints with positions
-result = sbci.endpoints_align(subjects)             # the public code's defaults
+result = sbci.endpoints_align(subjects)             # the paper's settings since item 19
 result.warps[0].save("sub-001_conseal_warp.npz")
 aligned = result.aligned_endpoints(0)               # an Endpoints object, ready to re-smooth
 ```
@@ -1677,10 +1678,9 @@ and 6 of 6 and after ENCORE in 4, 6 and 6 of 6; after the paper's ConSEAL in
 
 ### Still open
 
-- The port follows the public code. Reproducing the paper's experiments
-  exactly would need the fork's finite-difference derivative and direct warp
-  composition, which are ENCORE's machinery (`alignment.py`) driving endpoint
-  transport; wiring that combination is a small job if it is wanted.
+- Settled by item 19: the fork was run beside the port on the same subjects.
+  Its direct composition folds triangles on real data, so the port keeps its
+  velocity field and takes the paper's settings as its defaults.
 - The rigid search's cost surface is interpolated on the grid; on ico2 it
   lands a few degrees from a known rotation (test tolerance 0.12 rad). On ico4
   this is a fraction of a degree but has not been measured against a known
@@ -2150,13 +2150,123 @@ records the sizes on the released subjects and the bundled data.
 | g | the colour scale is not centred on zero when one bound is given | **confirmed**: `vmin=-0.5` alone drew from -0.5 to the map's largest value | on a symmetric scale a single bound is mirrored | -- |
 | h | the release tools would publish HCP-derived data under CC-BY-4.0 without the HCP's terms | **confirmed**: `zenodo_upload.py` set open access and `cc-by-4.0`, and the bundles carried no terms | every bundle, the bundle folder and the cohort manifest carry the HCP's terms (`DATA_USE.txt`); the Zenodo record is restricted, its access conditions the terms, with no licence, and bundles without the terms are refused | -- |
 
+## 19. The paper's ConSEAL beside the package's, 7 October 2026 -- THE PAPER'S SETTINGS BY DEFAULT, THE VELOCITY FIELD KEPT
+
+The package ports the public ConSEAL. The paper's experiments ran in the
+author's research fork (item 7 lists the copies), which differs in its update
+-- each step composed directly onto the warp so far, the derivative of `Q` by
+ENCORE's central differences -- and in its settings: step 0.1, threshold
+1e-6, up to 1000 iterations, no clamp and no smoothing. Before deciding which
+the package should follow, the fork was run in MATLAB on the same cases as
+the package, with the criteria fixed first: how far the endpoints end from
+where a known warp moved them from; then how far they move where nothing
+should; then the final mismatch and the time. A folded triangle counts
+against a method.
+
+**The cases** (`tests/reference/fork_cases.py`):
+
+- three known warps of sub-100307's 803,741 streamlines: the recovery
+  figure's smooth degree-4 warp (1.63 degrees on average), the same twice as
+  large (3.26), and one built the fork's way, four smaller maps each composed
+  onto the last (1.13);
+- the split halves of five young adults (386,115 to 466,113 streamlines a
+  half), one half registered onto the other, where the right answer is no
+  motion;
+- the fork's own logged pair, 100206 fixed and 106824 moving.
+
+**The fork as it ran** (`tests/reference/fork_case.m`). Its files are
+unchanged, but two things had to be worked around. Its compiled interpolation
+(`bary_interp_2D_mex`) crashes on Longleaf's CPU and V100 nodes at full size,
+even rebuilt from its own source, so a MATLAB stand-in computing the same
+`W2 * data * W1'` went first on the path
+(`tests/reference/fork_standin/`); it agrees with the MEX to 1.8e-15
+wherever the MEX runs. And the working copy of its `Concon.m` (19 June)
+returns from `evaluate` the raw adjacency rather than the smoothed connectome
+it computes, which made the first step's square root complex; a copy with
+the committed line restored went first as well. So run, the pair reproduces
+the fork's logged run of 6 May to the printed digit: 0.291389 to 0.199431 in
+460 iterations.
+
+**The package** ran at its defaults then, the public code's; at the fork's
+settings; and at the fork's settings with the fork's direct composition in
+place of the velocity field (`tests/reference/fork_package_case.py`). Every
+result was scored by both methods' cost functions
+(`tests/reference/fork_evaluate.py`).
+
+| | the fork | package, public settings | package, the paper's settings | package, the paper's settings, composed directly |
+| --- | --- | --- | --- | --- |
+| known warps: mean error left, degrees | 0.057, 0.114, 0.042 | 0.631, 0.815, 0.540 | 0.091, 0.110, 0.076 | 0.095, 0.143, 0.075 |
+| share of the displacement undone | 96% | 52% to 75% | 93% to 97% | 93% to 96% |
+| split halves: mean motion, degrees | 0.18 to 0.21 | 0.015 to 0.019 | 0.19 to 0.22 | 0.19 to 0.22 |
+| the pair: folded triangles | **111** | 0 | 0 (43 steps refused) | **166** |
+| the pair: area ratios, smallest to largest | -4.9 to 32 | 0.23 to 3.1 | 0.040 to 7.4 | -7.2 to 24 |
+| the pair: final cost, the package's and the fork's | 0.1391, 0.1994 | 0.1537, 0.2217 | 0.1391, 0.2025 | 0.1367, 0.1997 |
+| iterations: known warps, the pair | 50 to 90, 460 | 13 to 39, 67 | 55 to 106, 267 | 56 to 106, 846 |
+| time: known warps, the pair | 2.4 to 4.0 min, 18 min | 4 to 12 min, 20 min | 20 to 33 min, 83 min | 19 to 31 min, 4.8 h |
+
+The fork ran on 12 cores and the package on 8, on different nodes, so the
+times are rough. What the table shows:
+
+- **The settings make most of the difference.** The public code's stop at a
+  change of 1e-4 and undo 52% to 75% of a known warp; at the paper's the
+  package undoes 93% to 97% and the fork 96%. On two of the three warps the
+  fork ends 0.03 degrees closer than the package at its settings, on the
+  third 0.004 further. Composing directly is not what makes the fork better:
+  the package composing directly is no closer (0.104 degrees on average
+  against 0.092). The rest is the fork's derivative or the scale of its cost,
+  1.4 to 2.3 times the package's on the same endpoints, which lengthens the
+  same step; neither was isolated.
+- **Composing directly folds on real data.** On the pair both direct
+  compositions fold triangles, 111 in the fork's warp and 166 in the
+  package's, and stretch others 24 to 32 times. A map that folds is not one
+  to one: endpoints in a folded triangle land on top of others. The velocity
+  field refused the 43 steps that would have folded and stays a
+  diffeomorphism; on the known warps nothing folded.
+- **The paper's settings fit noise, slightly.** On split halves every method
+  at the paper's settings moves the endpoints 0.18 to 0.22 degrees where
+  nothing should move, against 0.015 to 0.019 for the public code's, which
+  stop after one iteration: about a twentieth of the 4.3 degrees between
+  ico4 vertices.
+- **The fork is five to eight times faster** at the same settings. The
+  package's iteration on ico4, with 803,741 streamlines, spends four fifths
+  of its 12 seconds carrying every endpoint with the warp and locating it
+  again on the grid, 9.8 s; the density and its derivatives take 1.6 to 1.7
+  s, the gradient 0.25 s and the step 0.18 s (`tests/reference/conseal_profile.py`).
+  The fork's equivalent takes about 0.6 s.
+
+**The decision.** The package keeps its update -- a stationary velocity
+field that refuses a step that would fold, with the analytic derivative --
+and takes the paper's settings as its defaults: step 0.1, up to 1000
+iterations, threshold 1e-6, no clamp and no smoothing. The fork's direct
+composition is not adopted: it folds on real data and gained nothing in the
+package. `strict_upstream=True` now takes the public code's settings for any
+not given, so it still reproduces the public code's runs, and any setting can
+be passed in either mode. Two tests fail before the change: the settings each
+mode takes, and a known warp on ico2 that the defaults now undo 76% of where
+the public code's settings undid 2%.
+
+**What it changes.** Registrations run longer: 55 to 106 iterations for the
+known warps and 267 for the pair, tens of minutes for two whole subjects on
+eight cores, which `max_iterations` caps. The figures and numbers of
+docs/RESULTS.md were already made at these settings, with a cap and a
+threshold of 1e-7, and stand. Registering onto one subject needs care at
+these settings: item 7's planted bundle was aligned away by the
+unregularized update onto a single subject and kept by the public code's
+regularization or a cohort template, and USAGE.md says when to pass the
+public settings.
+
+**Still open.** Locating the endpoints again from their last triangles,
+rather than searching the grid afresh each iteration, would make the longer
+runs much cheaper without changing a result.
+
 ## Status
 
 All seven ports are done and verified, and the reviews of 5 to 7 October
 2026 have been answered in full: the eight of the code here (items 8 to 15),
 the two of the notebooks in docs/review-2026-10-05.md, a recheck of all of it
 (item 16), the scores of the returned vectors (item 17) and an eleventh list
-(item 18). What is left is under items 4 and 7's *Still open* and the review
-note's. The ports were done in the order 3, 1, 2, 5, 4, 6, 7: parcellation
+(item 18); and the paper's ConSEAL was run beside the package's, which now
+takes the paper's settings (item 19). What is left is under items 4, 7 and
+19's *Still open* and the review note's. The ports were done in the order 3, 1, 2, 5, 4, 6, 7: parcellation
 unblocked the first notebook, kernel smoothing the WP3 speed target, and the
 two alignments came last because nothing else depends on them.

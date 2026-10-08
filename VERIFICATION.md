@@ -171,7 +171,9 @@ the recording was repeated with `tests/reference/record_outputs.py`, which
 runs ENCORE and ConSEAL in the default and in the reference arithmetic: on
 the same CPU type the reference arithmetic reproduces the earlier recording
 bit for bit, and `tests/reference/compare_outputs.py` reports, array by
-array, what the corrections change.
+array, what the corrections change. Since PORTING.md item 19 ConSEAL's
+defaults are the paper's settings, and the recorder takes the defaults, so
+its ConSEAL arrays differ from recordings made before it.
 
 **The exchange file must survive a round trip.**
 `scripts/write_exchange_file.py` writes the 16.9 GB `.dconn.nii`, reads it back

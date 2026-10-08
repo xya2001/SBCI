@@ -995,7 +995,7 @@ the pipeline's output.
 ```python
 import sbci
 subjects = [sbci.load(p) for p in paths]
-result = sbci.endpoints_align(subjects)        # the public code's defaults
+result = sbci.endpoints_align(subjects)        # the paper's settings
 result.template                               # Karcher median, a square-root density
 result.costs[0]                               # the cost trace of subject 1
 result.warps[0].save("sub-001_conseal_warp.npz")
@@ -1024,17 +1024,26 @@ fall at every step.
 **This is a batch job too**, though a lighter one: ConSEAL's heat kernel at
 the paper's bandwidth has 89 nonzeros per row on ico4 (the `shk` smoother
 visits about 31), so an iteration costs
-seconds per 100,000 streamlines rather than minutes. Six things to know:
-- **The defaults are the public code's, not the paper's.** Step 0.05, up to
-  100 iterations, threshold 1e-4, a 0.2 clamp on the largest displacement and
-  5% Laplacian smoothing of the velocity field every step. The paper's own
-  experiments were run from a fork without the clamp and smoothing, at step 0.1
-  and threshold 1e-6; `viscosity=0, step_clamp=float("inf"), delta=0.1,
-  threshold=1e-6` removes the regularization and takes the fork's step and
-  threshold. It is still the public code's update: the fork also composes the
-  vertex map directly and differentiates the kernel its own way, which the
-  package does not reproduce, so call this the unregularized public update,
-  not the paper's. PORTING.md item 7 explains the lineage.
+seconds per 100,000 streamlines rather than minutes: 12 to 20 seconds for a
+whole subject on eight cores, four fifths of it locating the moved endpoints
+on the grid again. At the default settings one whole subject takes 55 to 270
+iterations onto another, 20 minutes to an hour and a half; `max_iterations`
+caps it. Six things to know:
+- **The defaults are the paper's settings, since 7 October 2026.** Step 0.1,
+  up to 1000 iterations, threshold 1e-6, no clamp and no smoothing of the
+  velocity field, as the paper states and its experiments ran. They were the
+  public code's until then -- step 0.05, up to 100 iterations, threshold
+  1e-4, a 0.2 clamp on the largest displacement and 5% Laplacian smoothing
+  every step -- which undid 52% to 75% of three known warps where the paper's
+  settings undo 93% to 97% (PORTING.md item 19). `strict_upstream=True`
+  takes the public code's settings with its arithmetic, and any of them can be
+  passed. The update is still the public code's, a stationary velocity field
+  with the analytic derivative, which refuses a step that would fold a
+  triangle. The paper's fork composes each step directly onto the last and
+  differentiates by central differences: run beside the package, it undid the
+  known warps a little further (96%), but its warp of two real subjects folded
+  111 triangles, so it is not followed. PORTING.md item 7 explains the
+  lineage.
 - **Six errors in the reference are corrected by default.** Its gradient adds
   a term in the wrong tangent frame and differentiates a differently
   normalized kernel; a refused warp step still enters its velocity field; a
@@ -1061,11 +1070,11 @@ seconds per 100,000 streamlines rather than minutes. Six things to know:
   shell's best are now turned about z too, and `strict_upstream=True` keeps
   the reference's search. The exported warp keeps it as `lh_rigid` and `rh_rigid`; its
   vertices are the whole map.
-- **The stopping threshold is absolute.** The public default of 1e-4 is a
-  quarter of the whole cost when two subjects are alike, and stops the
-  registration after a few iterations; `threshold=1e-7` lets it converge. On
-  a known deformation the public defaults undo a third of it, the
-  unregularized update four fifths (PORTING.md item 7).
+- **The stopping threshold is absolute.** The public code's 1e-4 is a
+  quarter of the whole cost when two subjects are alike, and stopped the
+  registration after a few iterations; the default 1e-6 lets it run on, and
+  `threshold=1e-7` further. On a known deformation the public code's settings
+  undo a third of it and the paper's four fifths (PORTING.md item 7).
 - **The Karcher median used to stop on one subject, through rounding.** With
   `template=None` the median starts at the subject nearest the mean and takes
   Weiszfeld steps until one is shorter than 0.005, as `get_template` does.
@@ -1090,15 +1099,16 @@ seconds per 100,000 streamlines rather than minutes. Six things to know:
   machines can still differ. Pass `template=` the subject to hold fixed, or a
   precomputed square-root density -- the normalized mean of the subjects'
   `q_transform(kernel)` arrays, for one -- to choose.
-- **The unregularized update onto one subject can align away a real
-  difference.** With `delta=0.1, step_clamp=inf, viscosity=0` and the template
-  collapsed onto a subject, the planted bundle of the synthetic cohort in
-  PORTING.md item 7 (`anatomy=0.05`) is gone from a rank-4 FPCA that finds it
-  unaligned, after ENCORE, after the same update onto the mean template, and
-  after the public update (clamp 0.2, viscosity 0.05) onto that same subject:
-  an unclamped, unsmoothed warp can match one subject's bundles exactly.
-  Either a chosen template or the public regularization keeps the difference
-  (PORTING.md item 7).
+- **The default settings onto one subject can align away a real
+  difference.** With the paper's settings and the template collapsed onto a
+  subject, the planted bundle of the synthetic cohort in PORTING.md item 7
+  (`anatomy=0.05`) is gone from a rank-4 FPCA that finds it unaligned, after
+  ENCORE, after the same settings onto the mean template, and after the public
+  code's (clamp 0.2, smoothing 5%) onto that same subject: an unclamped,
+  unsmoothed warp can match one subject's bundles exactly. A cohort template
+  keeps the difference, and so does the public code's regularization: when
+  registering a cohort onto one subject and a difference between subjects must
+  survive, pass `step_clamp=0.2, viscosity=0.05` (PORTING.md item 7).
 ![Alignment with a known answer](docs/figures/alignment_recovery.png)
 
 *The endpoints of sub-100307's 803,741 streamlines moved by a known smooth
@@ -1107,8 +1117,8 @@ the undeformed subject, both through the package's smoother. Top: how far the
 endpoints still are from where they started, vertex by vertex. Bottom: the
 same as a histogram, and the cost per iteration. ENCORE, with its default
 degree-6 basis, brings the endpoints back from 1.63 to 0.20 degrees in
-eleven steps; ConSEAL with the unregularized update (`delta=0.1, step_clamp=inf,
-viscosity=0`) and a stopping threshold of 1e-7 to 0.11 degrees in sixty. The
+eleven steps; ConSEAL at its default settings, the paper's, with a stopping
+threshold of 1e-7, to 0.11 degrees in sixty. The
 reference has to go through the same smoother as the deformed copy, and the
 warp has to be one a smoothed density can see; PORTING.md item 7 shows what
 happens otherwise.*

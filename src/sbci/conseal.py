@@ -25,10 +25,10 @@ What was found in the reference while porting
 ---------------------------------------------
 The reference is research code, and this port reproduces its behaviour --
 including the shortcuts below -- when ``strict_upstream=True``. By default
-items 1 to 4 and 12 to 17 are corrected; 5 and 8 are kept as the choices they
-are, 6, 9 and 11 are fixed in both modes, and 7 only reaches
-:meth:`HeatKernelBuilder.cross_validate`. PORTING.md item 7 has the
-measurements.
+items 1 to 4 and 12 to 17 are corrected and item 8's settings are the
+paper's; 5 is kept as the choice it is, 6, 9 and 11 are fixed in both modes,
+and 7 only reaches :meth:`HeatKernelBuilder.cross_validate`. PORTING.md items
+7 and 19 have the measurements.
 
 1. **The gradient contains a term evaluated in the wrong tangent frame.**
    ``Concon.evaluate`` forms ``Dx = dK A K^T`` and then symmetrizes it,
@@ -71,16 +71,25 @@ measurements.
    symmetrized adjacency). Only :meth:`HeatKernelBuilder.cross_validate` is
    affected, and the published pipeline fixes ``sigma = 0.005`` anyway.
 8. **The paper says no explicit regularization**; the public code smooths the
-   velocity field by 5% of its cotangent Laplacian at every step and clamps
-   the largest displacement to 0.2. The author's research fork (``Encore/``
-   on Longleaf, the lineage of the paper's experiments) has neither, uses a
-   step of 0.1 and a threshold of 1e-6 as the paper states, differentiates
-   ``Q`` by ENCORE's central differences instead of the analytic kernel
-   derivative, and composes warps directly rather than through a stationary
-   velocity field. This module ports the public code. ``viscosity=0`` and
-   ``step_clamp=inf`` remove the two regularizations the fork does without,
-   but not its other differences: the gradient stays the analytic one and
-   the warp a stationary velocity field.
+   velocity field by 5% of its cotangent Laplacian at every step, clamps the
+   largest displacement to 0.2, and steps by 0.05 until the cost falls by
+   less than 1e-4. The author's research fork (``Encore/`` on Longleaf, the
+   lineage of the paper's experiments) has neither regularization, steps by
+   0.1 until the cost changes by less than 1e-6, as the paper states,
+   differentiates ``Q`` by ENCORE's central differences instead of the
+   analytic kernel derivative, and composes each step directly onto the
+   warp so far rather than through a stationary velocity field. Run in
+   MATLAB on the same subjects as this module (PORTING.md item 19), the fork
+   undid 96% of each of three known warps, where the public code's settings
+   stopped at 52% to 75%; but its warp of two real subjects folded 111
+   triangles, and this module's update with the fork's direct composition
+   folded 166. The stationary velocity field, which refuses a step that would
+   fold, folded none, and at the paper's settings undid 93% to 97% of the
+   known warps. So since 7 October 2026 the defaults are the paper's
+   settings -- no smoothing, no clamp, a step of 0.1 and a threshold of 1e-6,
+   up to 1000 iterations -- with this module's update: the analytic
+   derivative and the velocity field. ``strict_upstream=True`` restores the
+   public code's settings with its arithmetic.
 9. ``get_template`` sizes the cohort with ``size(Fs, 1)``, so a row cell
    array silently registers one subject, and it takes ``acos`` of an inner
    product that rounding can push past one, which MATLAB returns complex.
@@ -197,18 +206,32 @@ DEFAULT_KERNEL_DEGREE = 30
 DEFAULT_WARP_ORDER = 15
 """Harmonic order of the velocity field's tangent basis (``Encore(..., 15, ...)``)."""
 
-DEFAULT_DELTA = 0.05
-"""Gradient-descent step size (``Encore(..., 0.05, ...)``)."""
+DEFAULT_DELTA = 0.1
+"""Gradient-descent step size: the paper's (``Encore(grid, grid, 15, 0.1, 1000, 1e-6)``)."""
 
-DEFAULT_MAX_ITERATIONS = 100
-DEFAULT_THRESHOLD = 1e-4
-"""Stop when the cost falls by less than this between iterations."""
+DEFAULT_MAX_ITERATIONS = 1000
+DEFAULT_THRESHOLD = 1e-6
+"""Stop when the cost falls by less than this between iterations: the paper's."""
 
-STEP_CLAMP = 0.2
-"""Largest per-vertex displacement allowed in one step (``compute_step_size``)."""
+STEP_CLAMP = float("inf")
+"""Largest per-vertex displacement allowed in one step: none, as in the paper (item 8)."""
 
-VISCOSITY = 0.05
-"""Fraction of the cotangent Laplacian removed from the velocity field each step."""
+VISCOSITY = 0.0
+"""Share of the cotangent Laplacian taken from the velocity field each step: none (the paper)."""
+
+PUBLIC_DELTA = 0.05
+"""The public code's step (``Encore(..., 15, 0.05, 100, 1e-4)``), with ``strict_upstream=True``."""
+
+PUBLIC_MAX_ITERATIONS = 100
+PUBLIC_THRESHOLD = 1e-4
+"""The public code's stopping change in cost, with ``strict_upstream=True``."""
+
+PUBLIC_STEP_CLAMP = 0.2
+"""The public code's largest displacement in one step (``compute_step_size``)."""
+
+PUBLIC_VISCOSITY = 0.05
+"""The public code's smoothing of the velocity field (``SphericalWarp.compose``), and
+:class:`StationaryWarp`'s own default, as the port of that class."""
 
 SQUARINGS = 6
 """Scaling-and-squaring steps in the exponential map."""
@@ -796,7 +819,7 @@ class StationaryWarp:
     def __init__(
         self,
         grid: SphericalGrid,
-        viscosity: float = VISCOSITY,
+        viscosity: float = PUBLIC_VISCOSITY,
         squarings: int = SQUARINGS,
         strict_upstream: bool = False,
     ):
@@ -1360,18 +1383,18 @@ class ConSEAL:
     delta, max_iterations, threshold, step_clamp, viscosity
         Gradient step, iteration cap, stopping change in cost, largest
         per-vertex displacement per step, and Laplacian smoothing of the
-        velocity field. The defaults are the public code's; ``step_clamp=inf``
-        and ``viscosity=0`` drop its two regularizations, which the author's
-        fork does without (its other differences remain; module docstring,
-        item 8).
+        velocity field. Left out, they are the paper's -- 0.1, 1000, 1e-6, no
+        clamp and no smoothing -- or, with ``strict_upstream``, the public
+        code's: 0.05, 100, 1e-4, 0.2 and 5% (module docstring, item 8).
     area_weighted
         Weight the cost and its gradient with the Voronoi areas, as the
         paper's integral does, in units of their mean, so that the threshold
         means what it does for the plain sum. Off by default to match the
         reference (item 5).
     strict_upstream
-        Reproduce items 1 to 4, 12, 13 and 15 to 17 of the module docstring. The
-        kernel derivative handed to :meth:`register` must then come from
+        Reproduce items 1 to 4, 12, 13 and 15 to 17 of the module docstring,
+        and take the public code's settings for any left out. The kernel
+        derivative handed to :meth:`register` must then come from
         :meth:`HeatKernelBuilder.compute` with the same flag (item 2), and
         item 14 lives in the grids (:func:`default_grids` with
         ``reference=True``).
@@ -1381,21 +1404,30 @@ class ConSEAL:
         self,
         lh_grid: SphericalGrid,
         rh_grid: SphericalGrid,
-        delta: float = DEFAULT_DELTA,
-        max_iterations: int = DEFAULT_MAX_ITERATIONS,
-        threshold: float = DEFAULT_THRESHOLD,
-        step_clamp: float = STEP_CLAMP,
-        viscosity: float = VISCOSITY,
+        delta: float | None = None,
+        max_iterations: int | None = None,
+        threshold: float | None = None,
+        step_clamp: float | None = None,
+        viscosity: float | None = None,
         area_weighted: bool = False,
         strict_upstream: bool = False,
     ):
         """Fix the grids and the descent settings."""
         self.lh_grid, self.rh_grid = lh_grid, rh_grid
-        self.delta = float(delta)
-        self.max_iterations = int(max_iterations)
-        self.threshold = float(threshold)
-        self.step_clamp = float(step_clamp)
-        self.viscosity = float(viscosity)
+        public = bool(strict_upstream)
+
+        def chosen(value, paper, public_value):
+            if value is not None:
+                return value
+            return public_value if public else paper
+
+        self.delta = float(chosen(delta, DEFAULT_DELTA, PUBLIC_DELTA))
+        self.max_iterations = int(
+            chosen(max_iterations, DEFAULT_MAX_ITERATIONS, PUBLIC_MAX_ITERATIONS)
+        )
+        self.threshold = float(chosen(threshold, DEFAULT_THRESHOLD, PUBLIC_THRESHOLD))
+        self.step_clamp = float(chosen(step_clamp, STEP_CLAMP, PUBLIC_STEP_CLAMP))
+        self.viscosity = float(chosen(viscosity, VISCOSITY, PUBLIC_VISCOSITY))
         self.area_weighted = bool(area_weighted)
         self.strict_upstream = bool(strict_upstream)
         # In units of the mean area: the weighted cost then sits on the plain sum's scale,
@@ -1751,11 +1783,11 @@ def endpoints_align(
     sigma: float = DEFAULT_SIGMA,
     kernel_degree: int = DEFAULT_KERNEL_DEGREE,
     order: int = DEFAULT_WARP_ORDER,
-    delta: float = DEFAULT_DELTA,
-    max_iterations: int = DEFAULT_MAX_ITERATIONS,
-    threshold: float = DEFAULT_THRESHOLD,
-    step_clamp: float = STEP_CLAMP,
-    viscosity: float = VISCOSITY,
+    delta: float | None = None,
+    max_iterations: int | None = None,
+    threshold: float | None = None,
+    step_clamp: float | None = None,
+    viscosity: float | None = None,
     template_iterations: int = 100,
     init_rotation: bool = False,
     area_weighted: bool = False,
@@ -1786,8 +1818,14 @@ def endpoints_align(
     sigma, kernel_degree
         Heat-kernel bandwidth and truncation degree (0.005 and 30 in the paper).
     order, delta, max_iterations, threshold, step_clamp, viscosity
-        Velocity-basis order and gradient-descent settings; the defaults are
-        the public code's (15, 0.05, 100, 1e-4, 0.2, 0.05).
+        Velocity-basis order and gradient-descent settings. The order is 15;
+        the others, left out, are the paper's -- step 0.1, up to 1000
+        iterations, threshold 1e-6, no clamp and no smoothing -- and with
+        ``strict_upstream`` the public code's (0.05, 100, 1e-4, 0.2, 0.05).
+        Before 7 October 2026 the public code's were the defaults; the
+        paper's undo 93% to 97% of a known warp where they stopped at 52% to
+        75% (module docstring, item 8). Two whole subjects take tens of
+        minutes on eight cores; ``max_iterations`` caps it.
     init_rotation
         Search rotations per hemisphere before the diffeomorphic step. The 60
         icosahedral rotations are fitted to the grid rather than assumed, and
@@ -1796,8 +1834,9 @@ def endpoints_align(
     area_weighted
         See :class:`ConSEAL`.
     strict_upstream
-        Reproduce the reference's errors: items 1 to 4 and 12 to 17 of the
-        module docstring. Item 14 lives in the shared geometry -- the Legendre
+        Reproduce the reference's errors, items 1 to 4 and 12 to 17 of the
+        module docstring, with its settings for any left out. Item 14 lives
+        in the shared geometry -- the Legendre
         recurrence behind the tangent basis, whose ``m = 0`` term makes the
         divergence of every zonal basis field too large
         (:class:`~sbci.alignment.SphericalGrid`) -- so the default grids are

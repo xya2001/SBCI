@@ -495,6 +495,68 @@ def test_registration_reduces_the_cost_of_a_warped_copy(grid, connectome, kernel
     assert (lh.jacobian > 0).all() and (rh.jacobian > 0).all()
 
 
+def test_the_defaults_are_the_papers_settings_and_strict_upstream_the_public_codes(grid):
+    """Since 7 October 2026 (PORTING.md item 19): no smoothing, no clamp, step 0.1, 1e-6.
+
+    ``strict_upstream=True`` takes the public code's settings for any not given, and a
+    setting given is kept in either mode.
+    """
+
+    def settings(engine):
+        return (
+            engine.delta,
+            engine.max_iterations,
+            engine.threshold,
+            engine.step_clamp,
+            engine.viscosity,
+        )
+
+    paper = ConSEAL(grid, grid)
+    assert settings(paper) == (0.1, 1000, 1e-6, np.inf, 0.0)
+    assert all(warp.viscosity == 0.0 for warp in paper.new_warps())
+    public = ConSEAL(grid, grid, strict_upstream=True)
+    assert settings(public) == (0.05, 100, 1e-4, 0.2, 0.05)
+    assert all(warp.viscosity == 0.05 for warp in public.new_warps())
+    given = ConSEAL(grid, grid, delta=0.2, viscosity=0.01, strict_upstream=True)
+    assert settings(given) == (0.2, 100, 1e-4, 0.2, 0.01)
+    assert settings(ConSEAL(grid, grid, threshold=1e-3)) == (0.1, 1000, 1e-3, np.inf, 0.0)
+
+
+def test_the_default_settings_undo_more_of_a_known_warp_than_the_public_codes(
+    grid, connectome, kernel
+):
+    """A smooth warp the basis can represent, moved back: the measure the defaults were chosen by.
+
+    On ico4 the paper's settings undid 93% to 97% of three known warps and the
+    public code's 52% to 75% (PORTING.md item 19); on this ico2 grid 76% against 2%,
+    because 1e-4 stops the public descent after its first step.
+    """
+    k, dk = kernel
+    rng = np.random.default_rng(0)
+    truth = []
+    for _ in range(2):
+        warp = StationaryWarp(grid, viscosity=0.0)
+        field = (rng.normal(size=grid.basis.shape[1])[None, :, None] * grid.basis).sum(axis=1)
+        warp.compose(field * (0.08 / np.linalg.norm(field, axis=1).max()))
+        truth.append(warp)
+    moved = connectome.copy()
+    moved.warp(*truth)
+    moved.commit()
+
+    def degrees_off(warped):
+        ends = zip(connectome.positions(), warped.positions(), strict=True)
+        return np.mean([np.degrees(np.arccos(np.clip((a * b).sum(1), -1, 1))) for a, b in ends])
+
+    before = degrees_off(moved)
+    public = dict(delta=0.05, max_iterations=100, threshold=1e-4, step_clamp=0.2, viscosity=0.05)
+    errors = {
+        name: degrees_off(ConSEAL(grid, grid, **settings).register(connectome, moved, k, dk)[3])
+        for name, settings in (("paper", {}), ("public", public))
+    }
+    assert errors["paper"] < 0.35 * before
+    assert errors["paper"] < 0.5 * errors["public"]
+
+
 def test_the_rigid_search_recovers_a_rotation(grid, connectome, kernel):
     k, dk = kernel
     angle = np.radians(14.0)
