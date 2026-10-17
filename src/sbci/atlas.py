@@ -1,0 +1,305 @@
+"""Bundled atlases, as per-vertex label vectors on the ico4 grid.
+
+Atlases ship inside the package (44 of them, 238 kB all told) so that
+:meth:`sbci.ContinuousConnectome.to_atlas` never needs a network call, a
+FreeSurfer installation, or MATLAB. They are generated once by
+``tools/convert_atlases.py`` and committed.
+
+In every bundled atlas, label ``0`` means "no region": the medial wall, and for
+partial-coverage atlases such as ``PALS_B12_Visuotopic`` everything outside the
+atlas. Regions are numbered ``1..K`` with no gaps, and ``names[i]`` names label
+``i + 1``.
+
+``PALS_B12_Lobes`` is a coarse ten-lobe parcellation, five lobes a
+hemisphere. Its 394 unlabelled vertices are the medial wall as PALS draws it
+(spelt ``MEDIAL.WALL`` in the source files), which is not quite the pipeline's:
+89 of the mask's 439 medial-wall vertices carry a lobe. A connectome carries
+its own medial-wall mask, and ``to_atlas`` gives masked vertices no area, so a
+lobe matrix built from it still counts cortex only.
+"""
+
+from __future__ import annotations
+
+import difflib
+import re
+from dataclasses import dataclass
+from functools import lru_cache
+from importlib import resources
+
+import numpy as np
+
+from .errors import SbciError
+
+SUFFIX = "_ico4.npz"
+
+
+class UnknownAtlasError(SbciError, ValueError):
+    """No bundled atlas goes by that name."""
+
+
+class UnknownRegionError(SbciError, ValueError):
+    """An atlas has no region of that name or label."""
+
+
+#: Short names accepted in place of the file name an atlas is stored under.
+#: The brief's five-minute start calls ``load_atlas("Schaefer200")``, so the
+#: short forms are part of the public API, not a convenience.
+ALIASES: dict[str, str] = {
+    "desikan": "aparc",
+    "desikan-killiany": "aparc",
+    "dk": "aparc",
+    "destrieux": "aparc.a2009s",
+    "destrieux2005": "aparc.a2005s",
+    "glasser": "HCPMMP1",
+    "brainnetome": "BN_Atlas",
+    "yeo7": "Yeo2011_7Networks_N1000",
+    "yeo17": "Yeo2011_17Networks_N1000",
+    **{
+        f"schaefer{n}": f"Schaefer2018_{n}Parcels_7Networks_order"
+        for n in (100, 200, 300, 400, 500, 600, 700, 800, 900, 1000)
+    },
+}
+
+
+#: How to spell each short name back to a user. The alias table is keyed on
+#: lowercase so lookup can be case-insensitive, but a suggestion should read
+#: the way the documentation writes it.
+DISPLAY: dict[str, str] = {
+    "dk": "DK",
+    "desikan-killiany": "Desikan-Killiany",
+    "destrieux2005": "Destrieux2005",
+    "yeo7": "Yeo7",
+    "yeo17": "Yeo17",
+    **{f"schaefer{n}": f"Schaefer{n}" for n in range(100, 1100, 100)},
+}
+
+
+@dataclass(frozen=True)
+class Atlas:
+    """A parcellation defined on the computational grid.
+
+    Attributes
+    ----------
+    name
+        Atlas name as passed to :func:`load_atlas`.
+    labels
+        Integer label per vertex, length ``n_vertices``. Label ``0`` is
+        unassigned and is dropped by
+        :meth:`sbci.ContinuousConnectome.to_atlas`.
+    names
+        Region names, ``names[i]`` naming ``region_ids[i]``.
+    """
+
+    name: str
+    labels: np.ndarray
+    names: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        """Check that every label has a name, and freeze the atlas's own copy of the labels."""
+        labels = np.array(self.labels)  # a copy: the caller's array stays writable
+        if labels.dtype.kind == "f":
+            # 1.5 would be counted in region 1 by to_atlas and in no region by region_mask
+            if labels.size and not np.all(np.isfinite(labels) & (labels == np.round(labels))):
+                raise ValueError(f"{self.name}: labels are region numbers, whole numbers")
+            labels = labels.astype(np.int64)
+        elif labels.dtype.kind not in "biu":
+            raise ValueError(f"{self.name}: labels are region numbers, not {labels.dtype} values")
+        if labels.size and (labels.min() < 0 or labels.max() > len(self.names)):
+            raise ValueError(
+                f"{self.name}: labels run {labels.min()}..{labels.max()} but "
+                f"{len(self.names)} names were given; label i names names[i - 1]"
+            )
+        labels.setflags(write=False)
+        object.__setattr__(self, "labels", labels)
+
+    @property
+    def region_ids(self) -> np.ndarray:
+        """The label ids ``1..K``, one per name -- present in the labels or not.
+
+        Derived from the names rather than from the labels found, so that a
+        region with no vertex at this resolution keeps its row rather than
+        shifting every later region onto the wrong name.
+        """
+        return np.arange(1, len(self.names) + 1)
+
+    @property
+    def n_regions(self) -> int:
+        """Number of regions, excluding the unassigned label."""
+        return len(self.names)
+
+    @property
+    def coverage(self) -> float:
+        """Fraction of vertices assigned to some region.
+
+        Well under 1.0 even for whole-cortex atlases, because the medial wall
+        carries no region. About 0.08 for a partial atlas such as
+        ``PALS_B12_OrbitoFrontal``, which labels the orbital and medial
+        prefrontal cortex alone.
+        """
+        return float((np.asarray(self.labels) != 0).mean())
+
+    def region_mask(self, region):
+        """Boolean mask over vertices for one region, by name or label id.
+
+        This is what :meth:`sbci.ContinuousConnectome.seed` wants for its
+        ``region=`` argument, so a region profile reads as one line.
+
+        Parameters
+        ----------
+        region
+            A region name as it appears in :attr:`names`, matched ignoring
+            case, or an integer label from :attr:`region_ids`.
+
+        Examples
+        --------
+        >>> from sbci import load_atlas
+        >>> atlas = load_atlas("Desikan")
+        >>> mask = atlas.region_mask("LH_bankssts")
+        >>> bool(mask.any()), mask.dtype == bool
+        (True, True)
+        >>> bool((atlas.region_mask(1) == mask).all())
+        True
+        """
+        labels = np.asarray(self.labels)
+        if isinstance(region, (int, np.integer)) and not isinstance(region, bool):
+            if int(region) not in set(self.region_ids.tolist()):
+                raise UnknownRegionError(
+                    f"{self.name} has no region {int(region)}; labels run 1..{self.n_regions}"
+                )
+            return labels == int(region)
+
+        wanted = str(region).strip().lower()
+        for index, candidate in enumerate(self.names):
+            if candidate.strip().lower() == wanted:
+                return labels == index + 1
+
+        close = difflib.get_close_matches(str(region), list(self.names), n=3, cutoff=0.5)
+        if close:
+            joined = " or ".join(repr(c) for c in close)
+            hint = f" Did you mean {joined}?"
+        else:
+            hint = ""
+        raise UnknownRegionError(f"{self.name} has no region named {region!r}.{hint}")
+
+    def __repr__(self) -> str:  # pragma: no cover - cosmetic
+        return f"<Atlas {self.name} with {self.n_regions} regions>"
+
+
+def _directory():
+    return resources.files("sbci.data.atlases")
+
+
+@lru_cache(maxsize=1)
+def list_atlases() -> tuple[str, ...]:
+    """Names of every bundled atlas, sorted.
+
+    Examples
+    --------
+    >>> from sbci import list_atlases
+    >>> "aparc" in list_atlases()
+    True
+    """
+    return tuple(
+        sorted(
+            entry.name[: -len(SUFFIX)]
+            for entry in _directory().iterdir()
+            if entry.name.endswith(SUFFIX)
+        )
+    )
+
+
+def _key(name: str) -> str:
+    """Normalize a name for lookup: case, spaces, hyphens and underscores.
+
+    Applied to both sides of the alias table, so ``"desikan-killiany"``,
+    ``"Desikan Killiany"`` and ``"DESIKAN_KILLIANY"`` all resolve alike.
+    """
+    return re.sub(r"[\s\-_]+", "", name).lower()
+
+
+def resolve(name: str) -> str:
+    """Map a short name such as ``"Schaefer200"`` to its bundled file name.
+
+    A name that is already a bundled atlas is returned unchanged, so exact
+    names keep working and are matched case-insensitively.
+
+    Examples
+    --------
+    >>> resolve("Schaefer200")
+    'Schaefer2018_200Parcels_7Networks_order'
+    >>> resolve("Desikan")
+    'aparc'
+    >>> resolve("aparc")
+    'aparc'
+    """
+    available = list_atlases()
+    if name in available:
+        return name
+
+    key = _key(name)
+    normalized = {_key(alias): target for alias, target in ALIASES.items()}
+    if key in normalized:
+        return normalized[key]
+
+    for candidate in available:
+        if _key(candidate) == key:
+            return candidate
+
+    lookup = {_key(c): c for c in available}
+    lookup.update({_key(a): DISPLAY.get(a, a.title()) for a in ALIASES})
+    close = difflib.get_close_matches(_key(name), list(lookup), n=3, cutoff=0.6)
+    suggestions = [lookup[c] for c in close]
+    if suggestions:
+        joined = " or ".join(repr(s) for s in suggestions)
+        hint = f" Did you mean {joined}?"
+    else:
+        hint = " Call sbci.list_atlases() for the full set."
+    raise UnknownAtlasError(f"unknown atlas {name!r}.{hint}")
+
+
+@lru_cache(maxsize=8)
+def load_atlas(name: str) -> Atlas:
+    """Load a bundled atlas on the ico4 grid.
+
+    Parameters
+    ----------
+    name
+        A bundled atlas name, or one of the short forms in :data:`ALIASES`
+        such as ``"Schaefer200"``, ``"Desikan"`` or ``"Glasser"``.
+
+    Examples
+    --------
+    >>> from sbci import load_atlas
+    >>> load_atlas("Schaefer200").n_regions
+    200
+    >>> load_atlas("Desikan").n_regions
+    68
+    >>> load_atlas("Desikan").names[0]
+    'LH_bankssts'
+    """
+    resolved = resolve(name)
+    path = _directory() / f"{resolved}{SUFFIX}"
+    with np.load(path, allow_pickle=False) as data:
+        return Atlas(
+            name=resolved,
+            labels=np.asarray(data["labels"], dtype=np.int32),
+            names=tuple(str(n) for n in data["names"]),
+        )
+
+
+def cortex_mask() -> np.ndarray:
+    """``True`` on cortex and ``False`` on the medial wall, over the whole grid.
+
+    The wall is where the bundled Desikan atlas assigns no region (label 0):
+    the cut surface between the hemispheres, which carries no cortex and no
+    connectivity. This is the mask the synthetic examples use and the one
+    figures shade flat.
+
+    Examples
+    --------
+    >>> from sbci.atlas import cortex_mask
+    >>> mask = cortex_mask()
+    >>> mask.shape, int(mask.sum())
+    ((5124,), 4685)
+    """
+    return load_atlas("Desikan").labels != 0

@@ -1,0 +1,217 @@
+"""The data behind notebooks/prediction.ipynb: a family-aware sample, one reduction per fold.
+
+    python scripts/prediction_data.py sample      # the sample and its folds
+    python scripts/prediction_data.py fold K      # K = 0..4, a batch job each
+    python scripts/prediction_data.py atlas       # Schaefer-200 SC for the sample
+    python scripts/prediction_data.py gram        # every pair of subjects' SC, multiplied
+    python scripts/prediction_data.py covariates  # head size and streamline count
+
+The lab's paths on Longleaf. ``sample`` draws whole families of the young
+adults with a fluid-intelligence score until there are 300 subjects, and
+deals the families to five folds of near-equal size, so that no family is
+split between training and test. The families are restricted HCP data: the
+sample and fold file stays under ``/work`` and the scripts print counts only.
+
+``fold K`` fits the reduction -- the cohort mean and a rank-15 basis -- to
+the four other folds and scores every subject on it with ``project``, the
+held-out fold ``K`` and the training subjects alike, so the two are scored
+the same way and the held-out subjects never touch the basis. ``atlas`` computes each
+subject's Schaefer-200 SC matrix, for the atlas-based comparison, whose PCA
+the notebook fits inside each training fold the same way; with it, each
+region's mass with itself, and every region pair's connectivity summed with
+each vertex pair counted alike -- as the functional PCA's fit counts them --
+with each region's number of cortical vertices. ``gram`` multiplies every
+pair of subjects' connectomes entry by entry and sums, over the vertex pairs
+counted alike: the inner products a PCA of the connectomes themselves needs,
+in the functional PCA's own, so the notebook can fit one per fold beside
+it. ``covariates``
+records what the baselines use: each subject's brain-mask volume, from the
+pipeline's skull-stripped T1 (``t1_brain.nii.gz``, 1.25 mm), as a measure of
+head size, and the number of streamlines in its SC file.
+"""
+
+from __future__ import annotations
+
+import csv
+import sys
+import time
+from collections import defaultdict
+from pathlib import Path
+
+import nibabel as nib
+import numpy as np
+
+import sbci
+from sbci.io import read_header
+from sbci.parcellation import parcellate, region_weights
+
+ROOT = Path("/work/users/x/y/xya/hcp-ya")
+SC = ROOT / "full" / "data"
+OUT = ROOT / "prediction"
+PIPELINE = Path("/overflow/zzhanglab/encore_project/encore_paper_code/prediction_subs")
+SIZE = 300
+FOLDS = 5
+RANK = 15
+SEED = 2026
+
+
+def read_sample() -> list:
+    with open(OUT / "sample.csv", newline="") as handle:
+        return [(row["subject"], int(row["fold"])) for row in csv.DictReader(handle)]
+
+
+def sample() -> None:
+    with open(ROOT / "open_access_traits.csv", newline="") as handle:
+        scored = [
+            row["subject"]
+            for row in csv.DictReader(handle)
+            if row["fluid_intelligence_pmat24"].strip() not in ("", "NA")
+        ]
+    with open(ROOT / "restricted" / "families.csv", newline="") as handle:
+        family = {row["subject"]: row["group"] for row in csv.DictReader(handle)}
+    members = defaultdict(list)
+    for subject in scored:
+        members[family[subject]].append(subject)
+    rng = np.random.default_rng(SEED)
+    chosen, families = [], []
+    for name in rng.permutation(sorted(members)):
+        if len(chosen) >= SIZE:
+            break
+        chosen += members[name]
+        families.append(name)
+    load = [0] * FOLDS
+    fold_of = {}
+    for name in sorted(families, key=lambda f: (-len(members[f]), f)):
+        k = int(np.argmin(load))
+        fold_of[name] = k
+        load[k] += len(members[name])
+    OUT.mkdir(parents=True, exist_ok=True)
+    with open(OUT / "sample.csv", "w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["subject", "fold"])
+        for subject in sorted(chosen):
+            writer.writerow([subject, fold_of[family[subject]]])
+    print(f"{len(chosen)} subjects in {len(families)} families; folds of {sorted(load)}")
+
+
+def fold(k: int) -> None:
+    rows = read_sample()
+    train = [s for s, f in rows if f != k]
+    test = [s for s, f in rows if f == k]
+    start = time.time()
+    reduction = sbci.reduce([SC / f"{s}_sc.h5" for s in train], rank=RANK)
+    fitted = time.time() - start
+
+    def scores(subjects):
+        dense = (sbci.load(SC / f"{s}_sc.h5").dense(np.float64) for s in subjects)
+        return np.vstack([sbci.project(reduction, matrix) for matrix in dense])
+
+    train_scores, test_scores = scores(train), scores(test)
+    np.savez_compressed(
+        OUT / f"fold{k}.npz",
+        train=np.array(train),
+        test=np.array(test),
+        train_scores=train_scores,
+        test_scores=test_scores,
+        fit_scores=reduction.scores,
+        explained=reduction.explained,
+        scales=reduction.scales,
+        basis=reduction.basis,
+    )
+    drift = np.abs(train_scores - reduction.scores).max() / np.abs(reduction.scores).max()
+    print(
+        f"fold {k}: rank {RANK} on {len(train)} training subjects in {fitted:.0f}s, "
+        f"{reduction.explained[-1]:.1%} of the norm; all {len(train) + len(test)} scored in "
+        f"{time.time() - start - fitted:.0f}s; the training scores differ from the fit's own "
+        f"by {drift:.1e} of the largest"
+    )
+
+
+def atlas() -> None:
+    subjects = [s for s, _ in read_sample()]
+    schaefer = sbci.load_atlas("Schaefer200")
+    upper = np.triu_indices(schaefer.n_regions, 1)
+    masses, sums, cortex = [], [], None
+    for subject in subjects:
+        connectome = sbci.load(SC / f"{subject}_sc.h5")
+        ones = np.where(connectome.mask, 1.0, 0.0)
+        if cortex is None:
+            cortex = ones
+        elif not np.array_equal(ones, cortex):
+            raise ValueError(f"{subject}'s cortex differs from the first subject's")
+        masses.append(connectome.to_atlas(schaefer))
+        # The same blocks with every vertex pair counted alike, as the functional PCA's fit
+        # counts them: its areas only keep its components apart (sbci.reduction.fit_basis).
+        sums.append(parcellate(connectome.dense(np.float64), schaefer, cortex, how="mass"))
+    vertices = np.asarray(region_weights(schaefer, cortex)[0].sum(axis=0)).ravel()
+    np.savez_compressed(
+        OUT / "atlas.npz",
+        subjects=np.array(subjects),
+        schaefer200=np.vstack([m[upper] for m in masses]),
+        schaefer200_within=np.vstack([np.diagonal(m) for m in masses]),
+        schaefer200_sums=np.vstack([s[upper] for s in sums]),
+        schaefer200_within_sums=np.vstack([np.diagonal(s) for s in sums]),
+        schaefer200_vertices=vertices,
+    )
+    print(
+        f"Schaefer-200 SC for {len(subjects)} subjects: {upper[0].size:,} region pairs each, "
+        "and each region with itself"
+    )
+
+
+def gram() -> None:
+    subjects = [s for s, _ in read_sample()]
+    start = time.time()
+    data = None
+    for index, subject in enumerate(subjects):
+        values = sbci.load(SC / f"{subject}_sc.h5").data  # the upper triangle, float32
+        if data is None:
+            data = np.empty((len(subjects), values.size), dtype=np.float32)
+        data[index] = values
+    # Summed in float64 a block of pairs at a time: the products are small and many.
+    products = np.zeros((len(subjects), len(subjects)))
+    step = 1 << 20
+    for first in range(0, data.shape[1], step):
+        block = data[:, first : first + step].astype(np.float64)
+        products += block @ block.T
+    np.savez_compressed(OUT / "gram.npz", subjects=np.array(subjects), gram=products)
+    print(
+        f"{len(subjects)} subjects' SC multiplied pairwise over {data.shape[1]:,} vertex pairs "
+        f"({time.time() - start:.0f}s)"
+    )
+
+
+def covariates() -> None:
+    subjects = [s for s, _ in read_sample()]
+    volume, streamlines = [], []
+    for subject in subjects:
+        image = nib.load(PIPELINE / subject.removeprefix("sub-") / "t1_brain.nii.gz")
+        voxel = float(np.prod(image.header.get_zooms()[:3]))
+        volume.append(np.count_nonzero(np.asarray(image.dataobj)) * voxel / 1e6)
+        streamlines.append(read_header(SC / f"{subject}_sc.h5")["n_endpoints"])
+    np.savez_compressed(
+        OUT / "covariates.npz",
+        subjects=np.array(subjects),
+        brain_volume=np.array(volume),
+        streamlines=np.array(streamlines),
+    )
+    print(
+        f"{len(subjects)} subjects: brain-mask volume {min(volume):.2f} to {max(volume):.2f} L, "
+        f"{min(streamlines):,} to {max(streamlines):,} streamlines"
+    )
+
+
+if __name__ == "__main__":
+    command = sys.argv[1]
+    if command == "sample":
+        sample()
+    elif command == "fold":
+        fold(int(sys.argv[2]))
+    elif command == "atlas":
+        atlas()
+    elif command == "gram":
+        gram()
+    elif command == "covariates":
+        covariates()
+    else:
+        raise SystemExit("sample, fold K, atlas, gram or covariates")

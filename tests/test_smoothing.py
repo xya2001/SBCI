@@ -1,0 +1,1226 @@
+"""The kernel smoothing port.
+
+The kernels are checked against closed forms on an orthonormal basis, where
+``U diag(rho) U'`` reduces to something writable by hand, and against the
+limiting behaviour the maths dictates: as the bandwidth grows, every mode but
+the constant one is suppressed and the kernel must collapse to rank one.
+"""
+
+from __future__ import annotations
+
+import pathlib
+
+import numpy as np
+import pytest
+
+from sbci.metadata import template as metadata_template
+from sbci.smoothing import (
+    TRUNCATION_FLOOR,
+    Endpoints,
+    diffusion_kernel,
+    kappa_candidates,
+    matern_kernel,
+    smooth_endpoints,
+)
+
+
+@pytest.fixture
+def basis():
+    """An orthonormal basis and a spectrum, so the kernels have a closed form."""
+    rng = np.random.default_rng(0)
+    q, _ = np.linalg.qr(rng.standard_normal((12, 12)))
+    eigenvalues = np.linspace(0.0, 1.0, 12)
+    return eigenvalues, q
+
+
+# --- the kernels ----------------------------------------------------------
+
+
+def test_diffusion_kernel_matches_its_closed_form(basis):
+    """With an orthonormal U, K = U diag(rho) U' and rho is exp(-k^2 L / 2)."""
+    eigenvalues, u = basis
+    kappa = 1.7
+    expected = u @ np.diag(np.exp(-(kappa**2) / 2 * eigenvalues)) @ u.T
+    np.testing.assert_allclose(diffusion_kernel(eigenvalues, u, kappa), expected)
+
+
+def test_matern_kernel_matches_its_closed_form(basis):
+    eigenvalues, u = basis
+    kappa, nu = 1.3, 2.0
+    rho = (2 * nu / kappa**2 + eigenvalues) ** (-nu - 1)
+    np.testing.assert_allclose(matern_kernel(eigenvalues, u, kappa, nu), u @ np.diag(rho) @ u.T)
+
+
+@pytest.mark.parametrize("build", [diffusion_kernel, matern_kernel])
+def test_kernels_are_symmetric(basis, build):
+    eigenvalues, u = basis
+    kernel = build(eigenvalues, u, 1.1)
+    np.testing.assert_allclose(kernel, kernel.T, atol=1e-12)
+
+
+@pytest.mark.parametrize("build", [diffusion_kernel, matern_kernel])
+def test_kernels_are_positive_semidefinite(basis, build):
+    """A positive rho means U diag(rho) U' has no negative eigenvalue."""
+    eigenvalues, u = basis
+    assert np.linalg.eigvalsh(build(eigenvalues, u, 1.1)).min() > -1e-12
+
+
+def test_diffusion_kernel_collapses_to_rank_one(basis):
+    """Large bandwidth suppresses every mode but the one at lambda = 0."""
+    eigenvalues, u = basis
+    kernel = diffusion_kernel(eigenvalues, u, kappa=400.0)
+    spectrum = np.linalg.eigvalsh(kernel)
+    significant = spectrum > 1e-6 * spectrum.max()
+    assert significant.sum() == 1, f"rank {significant.sum()}, expected 1"
+    np.testing.assert_allclose(kernel, np.outer(u[:, 0], u[:, 0]), atol=1e-9)
+
+
+def test_smaller_bandwidth_keeps_more_modes(basis):
+    """Monotone in the only sense the maths guarantees: modes retained."""
+    eigenvalues, u = basis
+    counts = []
+    for kappa in (1.0, 10.0, 100.0, 400.0):
+        rho = np.exp(-(kappa**2) / 2 * eigenvalues)
+        counts.append(int((rho > TRUNCATION_FLOOR).sum()))
+    assert counts == sorted(counts, reverse=True), counts
+
+
+@pytest.mark.parametrize("build", [diffusion_kernel, matern_kernel])
+def test_kernels_reject_a_nonpositive_bandwidth(basis, build):
+    eigenvalues, u = basis
+    with pytest.raises(ValueError, match="kappa must be positive"):
+        build(eigenvalues, u, 0.0)
+
+
+def test_matern_rejects_a_nonpositive_nu(basis):
+    eigenvalues, u = basis
+    with pytest.raises(ValueError, match="nu must be positive"):
+        matern_kernel(eigenvalues, u, 1.0, nu=0.0)
+
+
+def test_kernel_rejects_a_mismatched_spectrum(basis):
+    _, u = basis
+    with pytest.raises(ValueError, match="eigenvalues for"):
+        diffusion_kernel(np.zeros(5), u, 1.0)
+
+
+@pytest.mark.parametrize("build", [diffusion_kernel, matern_kernel])
+def test_kernels_reject_an_infinite_bandwidth(basis, build):
+    """exp(-inf) is a kernel of zeros, which only fails later as 'no positive mass'."""
+    eigenvalues, u = basis
+    with pytest.raises(ValueError, match="positive and finite"):
+        build(eigenvalues, u, np.inf)
+
+
+def test_descending_eigenvalues_are_refused_where_they_are_consumed(basis):
+    """``load_eigenpairs`` checks the files; arrays passed in directly were not checked.
+
+    The default bandwidth reads the spectrum by position, so a descending
+    array gave a default kappa of 26,899 where the ascending one gives 1.41.
+    """
+    eigenvalues, u = basis
+    descending, flipped = eigenvalues[::-1], u[:, ::-1]
+    with pytest.raises(ValueError, match="ascending"):
+        diffusion_kernel(descending, flipped, 1.0)
+    with pytest.raises(ValueError, match="ascending"):
+        matern_kernel(descending, flipped, 1.0)
+    with pytest.raises(ValueError, match="ascending"):
+        kappa_candidates(np.linspace(0.54, 0.0, 2562))
+    # ties are ascending enough: a repeated eigenvalue is not a reversal
+    np.testing.assert_allclose(
+        diffusion_kernel(np.array([0.0, 0.5, 0.5]), np.eye(3), 1.0),
+        np.diag(np.exp(-0.5 * np.array([0.0, 0.5, 0.5]))),
+    )
+
+
+def test_smooth_refuses_a_descending_basis(smoothable, toy_basis):
+    (eigenvalues, u), _ = toy_basis
+    reversed_basis = ((eigenvalues[::-1], u[:, ::-1]),) * 2
+    with pytest.raises(ValueError, match="ascending"):
+        smoothable.smooth(kernel="rdk", eigenpairs=reversed_basis)
+    with pytest.raises(ValueError, match="ascending"):
+        smoothable.smooth(kernel="rdk", bandwidth=1.0, eigenpairs=reversed_basis)
+
+
+@pytest.mark.parametrize("bad", [0.0, -0.005, np.nan, np.inf])
+def test_smooth_refuses_a_bandwidth_that_is_not_a_positive_number(smoothable, toy_basis, bad):
+    """Zero and negative sigma went through and were recorded in the metadata as used."""
+    with pytest.raises(ValueError, match="bandwidth must be positive and finite"):
+        smoothable.smooth(kernel="shk", bandwidth=bad)
+    with pytest.raises(ValueError, match="bandwidth must be positive and finite"):
+        smoothable.smooth(kernel="rdk", bandwidth=bad, eigenpairs=toy_basis)
+
+
+# --- bandwidth selection ---------------------------------------------------
+
+
+def test_kappa_candidates_are_increasing_and_the_right_count():
+    eigenvalues = np.linspace(0.0, 0.54, 2562)
+    candidates = kappa_candidates(eigenvalues, n=10)
+    assert candidates.size == 10
+    assert np.all(np.diff(candidates) > 0)
+
+
+def test_kappa_candidates_match_the_reference_formula():
+    """The bounds are the ones rdk_smoothed_concon_compute.m computes."""
+    eigenvalues = np.linspace(0.0, 0.54, 2562)
+    candidates = kappa_candidates(eigenvalues, n=10, index=200)
+    assert candidates[0] == pytest.approx(np.sqrt(-2 * np.log(0.9) / eigenvalues[-1]))
+    assert candidates[-1] == pytest.approx(np.sqrt(-2 * np.log(0.001) / eigenvalues[199]))
+
+
+def test_kappa_candidates_need_enough_spectrum():
+    with pytest.raises(ValueError, match="at least 200 eigenvalues"):
+        kappa_candidates(np.linspace(0.0, 1.0, 50))
+
+
+# --- endpoints -------------------------------------------------------------
+
+
+@pytest.fixture
+def endpoints():
+    """Four streamlines over a two-vertex-per-hemisphere toy surface.
+
+    left-left   : vertex 0 <-> vertex 1
+    right-right : vertex 0 <-> vertex 0 (a self connection)
+    left-right  : left 1 -> right 0
+    right-left  : right 1 -> left 0
+    """
+    return Endpoints(
+        surf_in=np.array([0, 1, 0, 1], dtype=np.int8),
+        surf_out=np.array([0, 1, 1, 0], dtype=np.int8),
+        vtx_in=np.array([0, 0, 1, 1]),
+        vtx_out=np.array([1, 0, 0, 0]),
+        n_per_hemi=2,
+    )
+
+
+def test_adjacency_is_built_by_hand(endpoints):
+    a11, a22, a12 = endpoints.adjacency()
+
+    # One left-left streamline 0->1, symmetrized to both off-diagonal entries.
+    np.testing.assert_array_equal(a11, [[0, 1], [1, 0]])
+
+    # One right-right self connection, doubled by the symmetrization -- which
+    # is what the reference does, so the released data carries it too.
+    np.testing.assert_array_equal(a22, [[2, 0], [0, 0]])
+
+    # left 1 -> right 0, plus right 1 -> left 0 transposed into the same block.
+    np.testing.assert_array_equal(a12, [[0, 1], [1, 0]])
+
+
+def test_adjacency_totals_count_each_within_hemisphere_streamline_twice(endpoints):
+    a11, a22, _ = endpoints.adjacency()
+    left_left = int(((endpoints.surf_in == 0) & (endpoints.surf_out == 0)).sum())
+    assert a11.sum() == 2 * left_left
+
+
+def test_one_based_indices_are_caught():
+    """MATLAB indices are one-based; unconverted, they are refused as Endpoints are made."""
+    with pytest.raises(ValueError, match="One-based indices"):
+        Endpoints(
+            surf_in=np.array([0], dtype=np.int8),
+            surf_out=np.array([0], dtype=np.int8),
+            vtx_in=np.array([2]),
+            vtx_out=np.array([1]),
+            n_per_hemi=2,
+        )
+
+
+def test_n_streamlines(endpoints):
+    assert endpoints.n_streamlines == 4
+
+
+# --- the smoothing itself --------------------------------------------------
+
+
+def test_smoothing_produces_a_density(endpoints):
+    """Symmetric, nonnegative, and summing to one over the whole matrix."""
+    kernel = np.eye(2)
+    density = smooth_endpoints(endpoints, kernel, kernel)
+
+    assert density.shape == (4, 4)
+    np.testing.assert_allclose(density, density.T)
+    assert (density >= 0).all()
+    assert density.sum() == pytest.approx(1.0)
+
+
+def test_smoothing_with_an_identity_kernel_just_normalizes(endpoints):
+    """With K = I the congruence is a no-op, so the result is A scaled to one."""
+    a11, a22, a12 = endpoints.adjacency()
+    total = a11.sum() + a22.sum() + 2 * a12.sum()
+    density = smooth_endpoints(endpoints, np.eye(2), np.eye(2))
+
+    np.testing.assert_allclose(density[:2, :2], a11 / total)
+    np.testing.assert_allclose(density[2:, 2:], a22 / total)
+    np.testing.assert_allclose(density[:2, 2:], a12 / total)
+
+
+def test_smoothing_clips_negatives_from_spectral_truncation():
+    """Truncation can make K A K negative; those entries become zero."""
+    endpoints = Endpoints(
+        surf_in=np.array([0], dtype=np.int8),
+        surf_out=np.array([0], dtype=np.int8),
+        vtx_in=np.array([0]),
+        vtx_out=np.array([1]),
+        n_per_hemi=2,
+    )
+    # A kernel with a negative off-diagonal drives one entry of K A K negative.
+    kernel = np.array([[1.0, -0.6], [-0.6, 1.0]])
+    density = smooth_endpoints(endpoints, kernel, np.eye(2))
+    assert (density >= 0).all()
+    assert density.sum() == pytest.approx(1.0)
+
+
+def test_smoothing_rejects_a_mismatched_kernel(endpoints):
+    with pytest.raises(ValueError, match="kernel_left has shape"):
+        smooth_endpoints(endpoints, np.eye(3), np.eye(2))
+
+
+def test_smoothing_rejects_empty_endpoints():
+    empty = Endpoints(
+        surf_in=np.array([], dtype=np.int8),
+        surf_out=np.array([], dtype=np.int8),
+        vtx_in=np.array([], dtype=np.int64),
+        vtx_out=np.array([], dtype=np.int64),
+        n_per_hemi=2,
+    )
+    with pytest.raises(ValueError, match="no positive mass"):
+        smooth_endpoints(empty, np.eye(2), np.eye(2))
+
+
+@pytest.fixture
+def toy_endpoints():
+    """Six streamlines over a toy grid of three vertices per hemisphere."""
+    from sbci.smoothing import Endpoints
+
+    return Endpoints(
+        surf_in=np.array([0, 0, 0, 1, 1, 0], dtype=np.int8),
+        surf_out=np.array([0, 1, 1, 1, 0, 0], dtype=np.int8),
+        vtx_in=np.array([0, 1, 2, 0, 1, 2]),
+        vtx_out=np.array([1, 0, 2, 2, 0, 1]),
+        n_per_hemi=3,
+    )
+
+
+@pytest.fixture
+def toy_basis():
+    """An orthonormal eigenbasis for that toy hemisphere."""
+    u = np.linalg.qr(np.random.default_rng(0).standard_normal((3, 3)))[0]
+    eigenvalues = np.array([0.0, 0.5, 1.0])
+    return ((eigenvalues, u), (eigenvalues, u))
+
+
+@pytest.fixture
+def smoothable(sc_metadata, toy_endpoints):
+    """A six-vertex SC connectome carrying those endpoints."""
+    from sbci.connectome import ContinuousConnectome
+    from sbci.grid import to_condensed
+
+    rng = np.random.default_rng(1)
+    matrix = rng.random((6, 6))
+    matrix = matrix + matrix.T
+    np.fill_diagonal(matrix, 0.0)
+    area = np.full(6, 2.0)
+    matrix /= area @ matrix @ area
+    return ContinuousConnectome(
+        data=to_condensed(matrix).astype(np.float32),
+        area=area,
+        mask=np.ones(6, dtype=bool),
+        metadata=sc_metadata,
+        endpoints=toy_endpoints,
+    )
+
+
+def test_smooth_says_so_when_the_file_carries_no_endpoints(connectome):
+    """A file without the optional group cannot be re-smoothed."""
+    assert not connectome.has_endpoints
+    with pytest.raises(ValueError, match="no streamline endpoints"):
+        connectome.smooth(kernel="rdk")
+
+
+def _offline(*args, **kwargs):
+    raise OSError("no route to raw.githubusercontent.com")
+
+
+def test_smooth_says_so_when_the_basis_is_missing(smoothable, monkeypatch):
+    """With endpoints present, the next thing needed is the eigenbasis."""
+    from sbci import download, smoothing
+
+    assert smoothable.has_endpoints
+    monkeypatch.setattr(smoothing, "find_basis", lambda: None)
+    monkeypatch.setattr(download, "fetch_basis", _offline)  # never the network, in a test
+    with pytest.raises(ValueError, match="Laplace-Beltrami basis"):
+        smoothable.smooth(kernel="rdk")
+
+
+def test_the_failure_names_every_place_it_looked(smoothable, monkeypatch):
+    """A path error should say where to put the files, not just that they are absent."""
+    from sbci import download, smoothing
+
+    monkeypatch.setattr(smoothing, "find_basis", lambda: None)
+    monkeypatch.setattr(download, "fetch_basis", _offline)
+    with pytest.raises(ValueError) as caught:
+        smoothable.smooth(kernel="rdk")
+    message = str(caught.value)
+    assert smoothing.EIGENPAIR_ENV in message
+    assert ".cache" in message
+    for name in smoothing.EIGENPAIR_FILES:
+        assert name in message
+    assert "no route to raw.githubusercontent.com" in message  # why the fetch failed
+    assert "sbci basis" in message  # and how to fetch it where the network is
+
+
+def test_a_basis_found_nowhere_is_fetched_where_it_will_be_found_again(
+    smoothable, toy_basis, tmp_path, monkeypatch, capsys
+):
+    """The first rdk or matern smoothing on a machine fetches the basis, and says so."""
+    import scipy.io
+
+    from sbci import download, smoothing
+
+    files = zip(toy_basis, "LR", smoothing.EIGENPAIR_FILES, strict=True)
+    for (eigenvalues, vectors), side, name in files:
+        scipy.io.savemat(tmp_path / name, {f"Lambda_{side}": eigenvalues, f"U_{side}": vectors})
+    asked = []
+    monkeypatch.setattr(smoothing, "find_basis", lambda: None)
+    monkeypatch.setattr(download, "fetch_basis", lambda **kwargs: asked.append(kwargs) or tmp_path)
+    fetched = smoothable.smooth(kernel="rdk", bandwidth=1.0)
+    given = smoothable.smooth(kernel="rdk", bandwidth=1.0, eigenpairs=toy_basis)
+    np.testing.assert_array_equal(np.asarray(fetched.data), np.asarray(given.data))
+    assert len(asked) == 1
+    assert "fetching it once, 100 MB" in capsys.readouterr().err
+
+
+def test_the_basis_is_fetched_where_find_basis_looks(tmp_path, monkeypatch):
+    """Fetched into $SBCI_LBO_DIR, or else ~/.cache/sbci/lbo: found there the next time."""
+    from sbci import download, smoothing
+
+    monkeypatch.delenv(smoothing.EIGENPAIR_ENV, raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert download.basis_dir() in smoothing._candidate_basis_directories()
+    monkeypatch.setenv(smoothing.EIGENPAIR_ENV, str(tmp_path / "lbo"))
+    assert download.basis_dir() == tmp_path / "lbo"
+    assert download.basis_dir() == smoothing._candidate_basis_directories()[0]
+    assert tuple(download.BASIS_FILES) == smoothing.EIGENPAIR_FILES
+
+
+def test_the_basis_is_found_from_the_environment(tmp_path, monkeypatch):
+    """SBCI_LBO_DIR saves passing eigenpairs= on every call."""
+    from sbci import smoothing
+
+    for name in smoothing.EIGENPAIR_FILES:
+        (tmp_path / name).write_bytes(b"")
+    monkeypatch.setenv(smoothing.EIGENPAIR_ENV, str(tmp_path))
+    assert smoothing.find_basis() == tmp_path
+
+
+def test_a_directory_missing_one_hemisphere_is_not_accepted(tmp_path, monkeypatch):
+    """Half a basis is not a basis."""
+    from sbci import smoothing
+
+    (tmp_path / smoothing.EIGENPAIR_FILES[0]).write_bytes(b"")
+    monkeypatch.setenv(smoothing.EIGENPAIR_ENV, str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    assert smoothing.find_basis() is None
+
+
+def test_smooth_rejects_a_directory_without_the_basis(smoothable, tmp_path):
+    with pytest.raises(FileNotFoundError, match="EV_LBO_ds_ico4_L.mat"):
+        smoothable.smooth(kernel="rdk", eigenpairs=tmp_path)
+
+
+@pytest.mark.parametrize("kernel", ["rdk", "matern"])
+def test_smooth_returns_a_connectome_that_records_how_it_was_made(smoothable, toy_basis, kernel):
+    """The whole path: endpoints in, a renormalized connectome out."""
+    out = smoothable.smooth(kernel=kernel, bandwidth=1.0, eigenpairs=toy_basis)
+
+    assert type(out) is type(smoothable)
+    assert out.data.shape == smoothable.data.shape
+    assert out.metadata["kernel"] == kernel
+    assert out.metadata["bandwidth"] == 1.0
+    assert out.endpoints is smoothable.endpoints
+    # Unit mass is the package's convention, and re-smoothing must preserve it.
+    area = np.asarray(out.area)
+    assert area @ out.dense() @ area == pytest.approx(1.0, rel=1e-6)
+
+
+def test_smooth_leaves_the_original_alone(smoothable, toy_basis):
+    before = smoothable.data.copy()
+    smoothable.smooth(kernel="rdk", bandwidth=1.0, eigenpairs=toy_basis)
+    np.testing.assert_array_equal(smoothable.data, before)
+
+
+def test_smooth_method_still_validates_its_arguments(connectome):
+    with pytest.raises(ValueError, match="kernel must be one of"):
+        connectome.smooth(kernel="gaussian")
+
+
+# --- the spherical heat kernel -------------------------------------------
+
+
+def _fine_sphere(subdivisions=3):
+    """A sphere fine enough to integrate on, with its vertex areas."""
+    import sys
+
+    sys.path.insert(0, str(pathlib.Path(__file__).parent))
+    from sbci.alignment import voronoi_areas
+    from test_alignment import icosphere
+
+    vertices, faces = icosphere(subdivisions)
+    return vertices, voronoi_areas(vertices, faces)
+
+
+def test_the_kernel_does_not_integrate_to_one():
+    """The kernel concon applies is not a probability density, and that is fine.
+
+    A heat kernel integrates to 1 because its weight is (2l+1)/4pi and only the
+    l=0 term survives integration. concon's weight is (2l+1)^(3/2)/sqrt(4pi),
+    so the surviving term leaves sqrt(4pi) instead. The pipeline divides by the
+    streamline count afterwards rather than normalizing the kernel, so this
+    factor is part of what the released files carry.
+    """
+    from sbci.smoothing import spherical_heat_kernel
+
+    pole = np.array([0.0, 0.0, 1.0])
+
+    def integral(subdivisions):
+        vertices, areas = _fine_sphere(subdivisions)
+        return float(spherical_heat_kernel(vertices @ pole, 0.005, epsilon=None) @ areas)
+
+    # The kernel spans about 12 degrees, so a coarse grid under-resolves it;
+    # refining converges on sqrt(4 pi), which is what pins the constant.
+    coarse, fine = integral(4), integral(5)
+    target = np.sqrt(4 * np.pi)
+    assert abs(fine - target) < abs(coarse - target), "should converge as the grid refines"
+    assert fine == pytest.approx(target, rel=5e-3)
+    assert fine > 3.0, "and so emphatically not 1"
+
+
+def test_the_kernel_falls_from_its_centre_then_stops_dead():
+    """Inside the cutoff it decays; beyond it, it is exactly zero.
+
+    The truncated series would ring past the cutoff, but concon never evaluates
+    it there: compute_kernel.cpp only visits vertices within the cutoff angle,
+    so the kernel has compact support and no ringing survives into the output.
+    """
+    from sbci.smoothing import kernel_cutoff, spherical_heat_kernel
+
+    angles = np.linspace(0.0, np.pi, 400)
+    values = spherical_heat_kernel(np.cos(angles), sigma=0.005)
+    cutoff = kernel_cutoff(0.005)
+
+    assert values[0] == values.max()
+    inside = angles < cutoff
+    assert np.all(np.diff(values[inside]) < 0), "should fall away from its centre"
+    assert np.all(values[~inside] == 0.0), "and be exactly zero beyond the cutoff"
+    assert values.min() >= 0.0, "so nothing rings negative"
+
+
+def test_the_kernel_matches_the_binary_it_ports():
+    """Pinned against c3_main itself, run on a single streamline.
+
+    One streamline gives D(i,j) = K(theta_i) K(theta_j), so the output is the
+    kernel. These are the values it produced at sigma 0.005, at the ico4 ring
+    distances from a grid vertex; tests/reference/concon_probe.py regenerates
+    them. The heat kernel this package used to implement misses them by 0.09.
+    """
+    from sbci.smoothing import spherical_heat_kernel
+
+    angle = np.array([0.0, 3.962, 6.430, 7.930, 9.960, 11.890])
+    measured = np.array([1.0000, 0.7441, 0.4442, 0.2751, 0.1035, 0.01016])
+
+    values = spherical_heat_kernel(np.cos(np.radians(angle)), sigma=0.005)
+    ratio = values / values[0]
+    assert np.sqrt(np.mean((ratio - measured) ** 2)) < 0.0005
+
+    # The absolute scale is right too, not just the shape: concon's own peak
+    # was 270.10, read off a run whose endpoints sat exactly on vertices.
+    assert float(values[0]) == pytest.approx(270.10, rel=1e-3)
+
+
+def test_the_cutoff_reproduces_the_binarys_support():
+    """The predicted cutoff has to keep exactly the vertices concon keeps.
+
+    Measured from c3_main: 16, 31 and 61 vertices at sigma 0.0025, 0.005 and
+    0.01, whose outermost rings sit at 7.932, 11.894 and 16.528 degrees.
+    """
+    from sbci.smoothing import kernel_cutoff
+
+    for sigma, outermost, next_ring in [
+        (0.0025, 7.932, 8.9),
+        (0.005, 11.894, 12.61),
+        (0.01, 16.528, 17.5),
+    ]:
+        cutoff = np.degrees(kernel_cutoff(sigma))
+        assert outermost < cutoff < next_ring, (
+            f"sigma {sigma}: cutoff {cutoff:.3f} must keep the ring at "
+            f"{outermost} and drop the next"
+        )
+
+
+def test_a_wider_kernel_is_flatter():
+    from sbci.smoothing import spherical_heat_kernel
+
+    angles = np.linspace(0.0, np.pi, 60)
+    narrow = spherical_heat_kernel(np.cos(angles), sigma=0.002)
+    wide = spherical_heat_kernel(np.cos(angles), sigma=0.05)
+    assert narrow.max() > wide.max()
+    assert narrow.std() > wide.std()
+
+
+def test_a_very_wide_kernel_goes_flat():
+    """At a large bandwidth every term but l=0 dies, leaving a constant.
+
+    That constant is 1/sqrt(4pi), not the heat kernel's 1/4pi, for the same
+    reason the kernel does not integrate to one.
+    """
+    from sbci.smoothing import spherical_heat_kernel
+
+    values = spherical_heat_kernel(np.cos(np.linspace(0, np.pi, 50)), sigma=5.0)
+    np.testing.assert_allclose(values, 1 / np.sqrt(4 * np.pi), rtol=1e-3)
+
+
+def test_the_truncation_is_thirty_two_and_is_part_of_the_definition():
+    """The binary hardcodes 33 terms, and 33 is not converged.
+
+    The pipeline passes --OPT_VAL_num_harm 33, but c3_main ignores it: it
+    prints "num_harmonics now global constant (for speed)" and subject.cpp
+    prints so at startup. Feeding the binary 9, 17, 25, 33, 49 and 65 gives a
+    bit-identical kernel. The count was pinned at 33 by matching the binary's
+    peak across bandwidths 0.00125 to 0.02, where 32 drifts to 4% and 34
+    overshoots. Since the sum is not converged, a port that "improved" on it by
+    summing further would stop reproducing the released cohorts.
+    """
+    from sbci.smoothing import NUM_HARMONICS, spherical_heat_kernel
+
+    assert NUM_HARMONICS == 33, "33 terms, l = 0..32, whatever the flag says"
+
+    cosine = np.cos(np.linspace(0, np.radians(12.0), 200))
+    truncated = spherical_heat_kernel(cosine, sigma=0.005, epsilon=None)
+    further = spherical_heat_kernel(cosine, sigma=0.005, harmonics=65, epsilon=None)
+    assert np.abs(truncated - further).max() / truncated.max() > 1e-3, (
+        "32 terms is not converged, so the truncation has to be matched"
+    )
+
+
+def test_endpoint_density_is_symmetric_and_hemisphere_respecting():
+    from sbci.smoothing import endpoint_density
+
+    vertices, _ = _fine_sphere(2)
+    n = vertices.shape[0]
+    vertex_hemisphere = np.zeros(n, dtype=int)
+    vertex_hemisphere[n // 2 :] = 1
+
+    rng = np.random.default_rng(0)
+    points = vertices[rng.integers(0, n, 40)]
+    hemisphere = vertex_hemisphere[rng.integers(0, n, 40)]
+
+    density = endpoint_density(
+        vertices,
+        points,
+        points,
+        hemisphere,
+        hemisphere,
+        vertex_hemisphere,
+        sigma=0.01,
+    )
+    assert density.shape == (n, n)
+    np.testing.assert_allclose(density, density.T, atol=1e-12)
+    assert density.min() >= 0
+
+
+def test_endpoint_density_puts_mass_where_the_endpoints_are():
+    """A single streamline should light up its own two endpoints."""
+    from sbci.smoothing import endpoint_density
+
+    vertices, _ = _fine_sphere(3)
+    n = vertices.shape[0]
+    vertex_hemisphere = np.zeros(n, dtype=int)
+
+    first, second = 10, 400
+    density = endpoint_density(
+        vertices,
+        vertices[[first]],
+        vertices[[second]],
+        np.array([0]),
+        np.array([0]),
+        vertex_hemisphere,
+        sigma=0.005,
+    )
+    peak = np.unravel_index(np.argmax(density), density.shape)
+    for index in peak:
+        angle = np.degrees(np.arccos(np.clip(vertices[index] @ vertices[first], -1, 1)))
+        other = np.degrees(np.arccos(np.clip(vertices[index] @ vertices[second], -1, 1)))
+        assert min(angle, other) < 10.0, "the peak is nowhere near an endpoint"
+
+
+def test_endpoint_density_validates_its_arguments():
+    from sbci.smoothing import endpoint_density
+
+    vertices, _ = _fine_sphere(1)
+    n = vertices.shape[0]
+    zero = np.zeros(n, dtype=int)
+    with pytest.raises(ValueError, match="endpoints disagree"):
+        endpoint_density(
+            vertices,
+            vertices[:3],
+            vertices[:2],
+            np.zeros(3, int),
+            np.zeros(2, int),
+            zero,
+            sigma=0.01,
+        )
+    with pytest.raises(ValueError, match="normalize must be"):
+        endpoint_density(
+            vertices,
+            vertices[:2],
+            vertices[:2],
+            np.zeros(2, int),
+            np.zeros(2, int),
+            zero,
+            sigma=0.01,
+            normalize="area",
+        )
+
+
+def test_reading_the_concon_endpoint_file(tmp_path):
+    """The .tsv c3_main takes: a count header, then ten columns per streamline."""
+    from sbci.smoothing import read_concon_endpoints
+
+    path = tmp_path / "subject_xing_sphere_avg_coords.tsv"
+    path.write_text(
+        "#2\n"
+        "0\t 1\t 1.0\t 0.0\t 0.0\t 0\t 0\t 0.0\t 1.0\t 0.0\n"
+        "0\t 0\t 0.0\t 0.0\t 1.0\t 0\t 1\t 0.0\t 0.0\t -1.0\n"
+    )
+    points_in, points_out, hemisphere_in, hemisphere_out = read_concon_endpoints(path)
+
+    assert points_in.shape == (2, 3)
+    np.testing.assert_allclose(np.linalg.norm(points_in, axis=1), 1.0)
+    # The file stores 1 - surface, so a 1 in the column means the left hemisphere.
+    np.testing.assert_array_equal(hemisphere_in, [0, 1])
+    np.testing.assert_array_equal(hemisphere_out, [1, 0])
+
+
+def test_endpoint_positions_rebuilds_points_on_the_sphere():
+    """The shk path needs continuous positions, and nothing else exercised it.
+
+    Wiring smooth(kernel="shk") up the first time crashed here on a real file,
+    because the triangle offset was read from an attribute Endpoints does not
+    carry. Every unit test passed regardless: none of them had barycentric
+    endpoints. This one does.
+    """
+    from sbci.smoothing import Endpoints, endpoint_positions
+    from sbci.surface import load_surface
+
+    sphere = load_surface("sphere")
+    faces_per_hemi = sphere.faces.shape[0] // 2
+    rng = np.random.default_rng(0)
+    count = 64
+
+    tri_in = rng.integers(0, faces_per_hemi, count)
+    tri_out = rng.integers(0, faces_per_hemi, count)
+    surf_in = rng.integers(0, 2, count).astype(np.int8)
+    surf_out = rng.integers(0, 2, count).astype(np.int8)
+    bary = rng.random((count, 3))
+    bary /= bary.sum(axis=1, keepdims=True)
+
+    endpoints = Endpoints(
+        surf_in=surf_in,
+        surf_out=surf_out,
+        vtx_in=np.zeros(count, int),
+        vtx_out=np.zeros(count, int),
+        tri_in=tri_in,
+        tri_out=tri_out,
+        bary_in=bary,
+        bary_out=bary.copy(),
+    )
+    points_in, points_out = endpoint_positions(endpoints, surface=sphere)
+
+    assert points_in.shape == (count, 3)
+    np.testing.assert_allclose(np.linalg.norm(points_in, axis=1), 1.0, atol=1e-12)
+    np.testing.assert_allclose(np.linalg.norm(points_out, axis=1), 1.0, atol=1e-12)
+
+    # A point must lie in its own triangle, so the nearest vertex of that
+    # triangle is nearer than the triangle's own circumradius is wide.
+    corners = sphere.vertices[
+        sphere.faces[tri_in + Endpoints.global_hemisphere_offset(surf_in, faces_per_hemi)]
+    ]
+    corners = corners / np.linalg.norm(corners, axis=2, keepdims=True)
+    inside = np.einsum("sj,skj->sk", points_in, corners).max(axis=1)
+    assert np.all(inside > np.cos(np.radians(5.0))), "should sit inside its own triangle"
+
+
+def test_endpoint_positions_refuses_a_file_without_them():
+    from sbci.errors import MissingDataError
+    from sbci.smoothing import Endpoints, endpoint_positions
+
+    bare = Endpoints(
+        surf_in=np.zeros(3, np.int8),
+        surf_out=np.zeros(3, np.int8),
+        vtx_in=np.zeros(3, int),
+        vtx_out=np.zeros(3, int),
+    )
+    with pytest.raises(MissingDataError, match="barycentric"):
+        endpoint_positions(bare)
+
+
+@pytest.mark.parametrize(
+    "shape", [(), (1,), (5,), (3, 4), (2, 3, 4)], ids=["scalar", "one", "vector", "2d", "3d"]
+)
+def test_the_kernel_preserves_the_shape_it_is_given(shape):
+    """Including a scalar, which is a 0-d array and cannot be an `out=` target.
+
+    The recurrence writes through `out=` buffers to avoid allocating 168 MB per
+    term when smoothing a subject. numpy refuses a 0-d array there, so
+    `spherical_heat_kernel(1.0, ...)` raised TypeError until the series learned
+    to work on a flat view and reshape back.
+    """
+    from sbci.smoothing import spherical_heat_kernel
+
+    cosine = np.full(shape, 0.999) if shape else 0.999
+    assert np.shape(spherical_heat_kernel(cosine, 0.005)) == shape
+
+
+def test_the_kernel_is_elementwise():
+    """Evaluating together or one at a time has to give the same answer."""
+    from sbci.smoothing import spherical_heat_kernel
+
+    cosine = np.cos(np.radians(np.array([0.0, 4.0, 8.0, 12.0, 30.0])))
+    together = spherical_heat_kernel(cosine, 0.005)
+    apart = np.array([float(spherical_heat_kernel(c, 0.005)) for c in cosine])
+    np.testing.assert_allclose(together, apart, rtol=0, atol=1e-12)
+
+
+def test_resmoothing_leaves_the_medial_wall_as_the_reference_does():
+    """smooth() must not silently mask, however tempting it is.
+
+    The format requires a stored file to carry nothing on the medial wall, but
+    neither reference produces one: c3_main's released output puts 0.87% of its
+    mass there, and MATLAB's rdk density does too. Zeroing it inside smooth()
+    would make the method diverge from both and break
+    test_smooth_method_matches_matlab, so the conflict is recorded as
+    SPEC_QUESTIONS.md item 14 rather than papered over. This pins the choice.
+    """
+    from sbci.smoothing import _finish
+
+    n = 8
+    rng = np.random.default_rng(0)
+    dense = rng.random((n, n))
+    dense = dense + dense.T
+    mask = np.ones(n, dtype=bool)
+    mask[[2, 5]] = False
+
+    class Fake:
+        def __init__(self, data, area, mask, metadata, coords, endpoints):
+            self.data, self.area, self.mask = data, area, mask
+            self.metadata, self.coords, self.endpoints = metadata, coords, endpoints
+
+    connectome = Fake(None, np.full(n, 1.0 / n), mask, metadata_template("sc"), None, None)
+    out = _finish(connectome, dense.copy(), "shk", 0.005)
+
+    from sbci.grid import to_dense
+
+    result = to_dense(out.data, n)
+    assert float(np.abs(result[~mask]).sum()) > 0.0, "the wall keeps what the reference gives it"
+    assert float(connectome.area @ result.astype(np.float64) @ connectome.area) == pytest.approx(
+        1.0, rel=1e-6
+    )
+
+
+def test_the_quantized_kernel_reproduces_the_binarys_peak_entry_exactly():
+    """c3_main reads the kernel through two truncation-indexed lookup tables.
+
+    On a single streamline its peak entry is K(dot_1) * K(dot_2) with one dot
+    rounding into the exact x = 1.0 bucket and the other one truncation step
+    below. The measured peaks were 270.1035 at sigma 0.005 and 1005.4661 at
+    0.00125; the geometric mean of the two buckets has to give them back. The
+    exact series cannot: it is 0.06% high at the peak, which is the 0.14%
+    amplitude offset the densities used to carry.
+    """
+    from sbci.smoothing import concon_kernel_table
+
+    for sigma, measured in ((0.005, 270.1035), (0.00125, 1005.4661), (0.02, 48.3245)):
+        table = concon_kernel_table(sigma)
+        peak = float(np.sqrt(table(1.0) * table(1.0 - 1e-12)))
+        assert peak == pytest.approx(measured, rel=2e-5), (sigma, peak, measured)
+
+
+def test_quantized_and_exact_kernels_differ_only_by_the_table_bias():
+    from sbci.smoothing import spherical_heat_kernel
+
+    cosine = np.cos(np.radians(np.linspace(0.0, 11.5, 50)))
+    quantized = spherical_heat_kernel(cosine, 0.005)
+    exact = spherical_heat_kernel(cosine, 0.005, quantized=False)
+    ratio = quantized / exact
+    assert np.all(ratio <= 1.0 + 1e-12), "truncation only ever rounds the kernel down"
+    assert ratio.min() > 0.995, "and by well under one percent"
+
+
+def test_quantized_and_exact_share_the_cutoff():
+    from sbci.smoothing import concon_kernel_table, kernel_cutoff
+
+    for sigma in (0.0025, 0.005, 0.01):
+        assert concon_kernel_table(sigma).cutoff == pytest.approx(kernel_cutoff(sigma), abs=2e-4)
+
+
+def test_sparse_density_matches_dense():
+    """The KD-tree path has to give the dense evaluation's answer, not an approximation."""
+    from sbci.grid import hemisphere_labels
+    from sbci.smoothing import endpoint_density
+    from sbci.surface import load_surface
+
+    sphere = load_surface("sphere")
+    vertices = sphere.vertices / np.linalg.norm(sphere.vertices, axis=1, keepdims=True)
+    hemi = hemisphere_labels(vertices.shape[0])
+    rng = np.random.default_rng(0)
+    count = 600
+    p_in = rng.normal(size=(count, 3))
+    p_in /= np.linalg.norm(p_in, axis=1, keepdims=True)
+    p_out = rng.normal(size=(count, 3))
+    p_out /= np.linalg.norm(p_out, axis=1, keepdims=True)
+    h_in = rng.integers(0, 2, count)
+    h_out = rng.integers(0, 2, count)
+
+    dense = endpoint_density(
+        vertices, p_in, p_out, h_in, h_out, hemi, 0.005, method="dense", block=256
+    )
+    sparse = endpoint_density(
+        vertices, p_in, p_out, h_in, h_out, hemi, 0.005, method="sparse", block=256
+    )
+    assert dense.max() > 0
+    np.testing.assert_allclose(sparse, dense, rtol=0, atol=1e-9 * dense.max())
+
+
+def test_progress_callback_reports_every_block():
+    from sbci.grid import hemisphere_labels
+    from sbci.smoothing import endpoint_density
+    from sbci.surface import load_surface
+
+    sphere = load_surface("sphere")
+    vertices = sphere.vertices / np.linalg.norm(sphere.vertices, axis=1, keepdims=True)
+    hemi = hemisphere_labels(vertices.shape[0])
+    rng = np.random.default_rng(1)
+    pts = rng.normal(size=(100, 3))
+    pts /= np.linalg.norm(pts, axis=1, keepdims=True)
+    seen = []
+    endpoint_density(
+        vertices,
+        pts,
+        pts[::-1],
+        np.zeros(100, int),
+        np.zeros(100, int),
+        hemi,
+        0.005,
+        block=30,
+        progress=lambda done, total: seen.append((done, total)),
+    )
+    assert seen == [(30, 100), (60, 100), (90, 100), (100, 100)]
+
+
+def test_mask_medial_wall_option_zeroes_the_wall_and_keeps_unit_mass():
+    """The caller can choose the format's side of SPEC_QUESTIONS item 14."""
+    from sbci.grid import to_dense
+    from sbci.smoothing import _finish
+
+    n = 8
+    rng = np.random.default_rng(0)
+    dense = rng.random((n, n))
+    dense = dense + dense.T
+    mask = np.ones(n, dtype=bool)
+    mask[[2, 5]] = False
+
+    class Fake:
+        def __init__(self, data, area, mask, metadata, coords, endpoints):
+            self.data, self.area, self.mask = data, area, mask
+            self.metadata, self.coords, self.endpoints = metadata, coords, endpoints
+
+    connectome = Fake(None, np.full(n, 1.0 / n), mask, metadata_template("sc"), None, None)
+    out = to_dense(_finish(connectome, dense.copy(), "shk", 0.005, mask_medial_wall=True).data, n)
+    assert float(np.abs(out[~mask]).sum()) == 0.0 and float(np.abs(out[:, ~mask]).sum()) == 0.0
+    assert float(connectome.area @ out.astype(np.float64) @ connectome.area) == pytest.approx(
+        1.0, rel=1e-6
+    )
+
+
+def test_final_threshold_matches_compute_kernel_cpp():
+    """`if(temp > final_thold)` on the per-streamline scale, nothing else."""
+    from sbci.smoothing import FINAL_THRESHOLD, apply_final_threshold
+
+    assert FINAL_THRESHOLD == 1e-9, "--final_thold 0.000000001"
+    n = 1_000_000
+    density = np.array(
+        [[0.0, 2e-9 * n, 1e-9 * n], [2e-9 * n, 0.0, 0.5e-9 * n], [1e-9 * n, 0.5e-9 * n, 0.0]]
+    )
+    out = apply_final_threshold(density.copy(), n)
+    assert out[0, 1] == 2e-9 * n, "above the threshold survives"
+    assert out[0, 2] == 0.0, "exactly at the threshold is dropped: the test is strictly greater"
+    assert out[1, 2] == 0.0, "below is dropped"
+
+
+# --- validation and the default path, end to end -----------------------------
+
+
+def test_from_global_refuses_inconsistent_triangles():
+    from sbci.smoothing import Endpoints
+
+    vertex_in, vertex_out = np.array([1, 3000]), np.array([2, 3001])
+    good = Endpoints.from_global(
+        vertex_in,
+        vertex_out,
+        triangle_in=[5, 5125],
+        triangle_out=[6, 5126],
+        barycentric_in=np.full((2, 3), 1 / 3),
+        barycentric_out=np.full((2, 3), 1 / 3),
+    )
+    np.testing.assert_array_equal(good.tri_in, [5, 5])
+    with pytest.raises(ValueError, match="other hemisphere"):
+        Endpoints.from_global(
+            vertex_in,
+            vertex_out,
+            triangle_in=[5125, 5],
+            triangle_out=[6, 5126],
+            barycentric_in=np.full((2, 3), 1 / 3),
+            barycentric_out=np.full((2, 3), 1 / 3),
+        )
+    with pytest.raises(ValueError, match="out of range"):
+        Endpoints.from_global(
+            vertex_in,
+            vertex_out,
+            triangle_in=[5, 20000],
+            triangle_out=[6, 5126],
+            barycentric_in=np.full((2, 3), 1 / 3),
+            barycentric_out=np.full((2, 3), 1 / 3),
+        )
+    with pytest.raises(ValueError, match="positions need all"):
+        Endpoints.from_global(vertex_in, vertex_out, triangle_in=[5, 5125])
+
+
+def test_endpoints_check_their_own_consistency():
+    from sbci.smoothing import Endpoints
+
+    with pytest.raises(ValueError, match="entries"):
+        Endpoints(surf_in=[0, 0], surf_out=[0], vtx_in=[1, 2], vtx_out=[3, 4])
+    with pytest.raises(ValueError, match="0 .* or 1"):
+        Endpoints(surf_in=[0, 2], surf_out=[0, 0], vtx_in=[1, 2], vtx_out=[3, 4])
+    with pytest.raises(ValueError, match="positions need all"):
+        Endpoints(surf_in=[0], surf_out=[0], vtx_in=[1], vtx_out=[3], tri_in=[2])
+
+
+def test_endpoint_density_validates_its_inputs():
+    from sbci.smoothing import endpoint_density
+
+    vertices = np.eye(3)
+    points = np.array([[1.0, 0.0, 0.0]])
+    with pytest.raises(ValueError, match="one entry per streamline"):
+        endpoint_density(vertices, points, points, [0, 0], [0], [0, 0, 0], sigma=0.005)
+    with pytest.raises(ValueError, match="finite unit vectors"):
+        endpoint_density(2 * vertices, points, points, [0], [0], [0, 0, 0], sigma=0.005)
+
+
+def test_the_kernel_without_a_cutoff_is_the_closed_form_series():
+    """``epsilon=None`` studies the series itself; the table is only meaningful inside its cutoff.
+
+    Inside the cutoff the table tracks the series to a few tenths of a percent
+    (the truncation bias grows with the angle); beyond it the series goes
+    negative while the table holds the binary's 1e-20 floor.
+    """
+    from sbci.smoothing import concon_kernel_table, spherical_heat_kernel
+
+    cosines = np.cos(np.radians(np.array([0.0, 5.0, 11.0, 20.0, 40.0])))
+    table = concon_kernel_table(0.005)
+    truncated = spherical_heat_kernel(cosines, 0.005)
+    untruncated = spherical_heat_kernel(cosines, 0.005, epsilon=None)
+    assert truncated[-1] == 0.0 and untruncated[-1] != 0.0
+    # No cutoff means the closed-form series, not the table read past its cutoff:
+    # the table clamps the negative lobes to 1e-20, so it is a floor out there.
+    np.testing.assert_array_equal(
+        untruncated, spherical_heat_kernel(cosines, 0.005, epsilon=None, quantized=False)
+    )
+    assert untruncated[-1] < 0.0 < table(cosines, truncate=False)[-1] <= 1e-19
+    np.testing.assert_allclose(truncated[:3], untruncated[:3], rtol=3e-3)
+
+
+def test_smooth_shk_end_to_end_from_barycentric_endpoints():
+    """The default kernel's whole path on the real grid: locate, spread, threshold, finish."""
+    import sbci
+    from sbci.alignment import MeshQuery
+    from sbci.grid import to_dense
+    from sbci.smoothing import (
+        Endpoints,
+        apply_final_threshold,
+        endpoint_density,
+        endpoint_positions,
+    )
+    from sbci.surface import load_surface
+
+    rng = np.random.default_rng(21)
+    sphere = load_surface("sphere")
+    half, faces_per_hemi = sphere.n_vertices // 2, len(sphere.faces) // 2
+    n = 300
+    points = rng.normal(size=(2 * n, 3))
+    points /= np.linalg.norm(points, axis=1, keepdims=True)
+    hemispheres = np.r_[np.zeros(n, int), np.ones(n, int)]
+    vertex = np.empty(2 * n, dtype=np.int64)
+    triangle = np.empty(2 * n, dtype=np.int64)
+    bary = np.empty((2 * n, 3))
+    for side, name in ((0, "L"), (1, "R")):
+        part = sphere.hemisphere(name)
+        w, i, f = MeshQuery(part.vertices, part.faces).query_faces(points[hemispheres == side])
+        vertex[hemispheres == side] = i[np.arange(len(i)), np.argmax(w, axis=1)] + side * half
+        triangle[hemispheres == side] = f + side * faces_per_hemi
+        bary[hemispheres == side] = w
+    endpoints = Endpoints.from_global(
+        vertex[:n],
+        vertex[n:],
+        triangle_in=triangle[:n],
+        triangle_out=triangle[n:],
+        barycentric_in=bary[:n],
+        barycentric_out=bary[n:],
+    )
+
+    cc = sbci.example("sc")
+    cc.endpoints = endpoints
+    smoothed = cc.smooth(kernel="shk")
+    dense = smoothed.dense().astype(np.float64)
+    assert smoothed.metadata["kernel"] == "shk" and smoothed.metadata["bandwidth"] == 0.005
+    assert float(cc.area @ dense @ cc.area) == pytest.approx(1.0, rel=1e-6)
+    assert (dense >= 0).all() and np.allclose(dense, dense.T)
+
+    # the same density by the dense path, finished the same way
+    p_in, p_out = endpoint_positions(endpoints)
+    vertices = sphere.vertices / np.linalg.norm(sphere.vertices, axis=1, keepdims=True)
+    labels = np.r_[np.zeros(half, np.int8), np.ones(half, np.int8)]
+    check = endpoint_density(
+        vertices,
+        p_in,
+        p_out,
+        endpoints.surf_in,
+        endpoints.surf_out,
+        labels,
+        sigma=0.005,
+        method="dense",
+    )
+    apply_final_threshold(check, n)
+    np.fill_diagonal(check, 0.0)
+    check /= cc.area @ check @ cc.area
+    np.testing.assert_allclose(
+        to_dense(smoothed.data.astype(np.float64)), check, rtol=1e-5, atol=1e-12
+    )
+
+
+def test_the_density_refuses_nan_positions_and_unknown_hemisphere_flags():
+    from sbci.smoothing import endpoint_density
+
+    vertices = np.eye(3)
+    points = np.array([[1.0, 0.0, 0.0]])
+    good = dict(
+        vertices=vertices,
+        hemisphere_in=np.array([0]),
+        hemisphere_out=np.array([0]),
+        vertex_hemisphere=np.zeros(3, dtype=int),
+        sigma=0.5,
+    )
+    with pytest.raises(ValueError, match="finite unit vectors"):
+        endpoint_density(points_in=np.array([[np.nan, 0.0, 0.0]]), points_out=points, **good)
+    with pytest.raises(ValueError, match="match no vertex hemisphere"):
+        endpoint_density(
+            points_in=points,
+            points_out=points,
+            **{**good, "hemisphere_out": np.array([1])},
+        )
+
+
+def test_a_triangle_index_beyond_its_hemisphere_is_refused():
+    from sbci.smoothing import Endpoints
+
+    with pytest.raises(ValueError, match="within a hemisphere"):
+        Endpoints(
+            surf_in=np.array([0]),
+            surf_out=np.array([0]),
+            vtx_in=np.array([0]),
+            vtx_out=np.array([1]),
+            tri_in=np.array([6000]),
+            tri_out=np.array([0]),
+            bary_in=np.array([[1.0, 0.0, 0.0]]),
+            bary_out=np.array([[1.0, 0.0, 0.0]]),
+        )
+
+
+def test_the_default_kernel_needs_the_ico4_grid(smoothable, toy_endpoints, toy_basis):
+    from dataclasses import replace
+
+    corner = np.tile([1.0, 0.0, 0.0], (6, 1))
+    smoothable.endpoints = replace(  # positioned, so the grid is the next thing checked
+        toy_endpoints,
+        tri_in=np.zeros(6, dtype=int),
+        tri_out=np.zeros(6, dtype=int),
+        bary_in=corner,
+        bary_out=corner,
+    )
+    with pytest.raises(ValueError, match="shk smoothing needs"):
+        smoothable.smooth(kernel="shk", eigenpairs=toy_basis)
+
+
+def test_an_index_past_its_hemisphere_is_refused_rather_than_moved_to_the_other():
+    """Left vertex 2600 was stored as whole-grid 2600 and read back as right vertex 38."""
+    from sbci.smoothing import Endpoints
+
+    with pytest.raises(ValueError, match=r"vtx_in out of range for 2562 .*\[2600, 2600\]"):
+        Endpoints(surf_in=[0], surf_out=[0], vtx_in=[2600], vtx_out=[5])
+    with pytest.raises(ValueError, match=r"vtx_out out of range .*\[-1, -1\]"):
+        Endpoints(surf_in=[1], surf_out=[1], vtx_in=[3], vtx_out=[-1])
+    weights = np.full((1, 3), 1 / 3)
+    with pytest.raises(ValueError, match=r"tri_out: triangle indices must lie in 0..5119"):
+        Endpoints([0], [0], [3], [5], tri_in=[7], tri_out=[5120], bary_in=weights, bary_out=weights)
+    kept = Endpoints([0, 1], [1, 0], [2561, 0], [0, 2561])
+    assert kept.global_vertex_in.tolist() == [2561, 2562]
+
+
+# --- the review of 11 October 2026 -------------------------------------------------
+
+
+def test_hemisphere_flags_and_vertices_are_checked_before_they_are_stored():
+    """int8 wrapped 256 to 0 and truncated 1.9 to 1; a vertex 5.9 was stored as 5."""
+    from sbci.smoothing import Endpoints
+
+    for wrong in ([256], [257], [-255], [1.9]):
+        with pytest.raises(ValueError, match="0 \\(left\\) or 1 \\(right\\)"):
+            Endpoints(surf_in=wrong, surf_out=[0], vtx_in=[5], vtx_out=[5])
+    with pytest.raises(ValueError, match="whole numbers"):
+        Endpoints(surf_in=[0], surf_out=[0], vtx_in=[5.9], vtx_out=[5])
+    assert Endpoints(surf_in=[1.0], surf_out=[0], vtx_in=[5.0], vtx_out=[5]).vtx_in.tolist() == [5]
+
+
+def test_smooth_refuses_a_functional_connectome():
+    """Endpoints on an FC connectome were smoothed into a unit-mass density labelled 'fc'."""
+    import sbci
+
+    sc, fc = sbci.example(), sbci.example("fc")
+    mixed = sbci.ContinuousConnectome(
+        fc.data, fc.area, fc.mask, fc.metadata, endpoints=sc.endpoints
+    )
+    with pytest.raises(ValueError, match="structural connectome"):
+        mixed.smooth(kernel="shk")
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("surf_in", 1.9, "0 \\(left\\) or 1"),
+        ("surf_in", 256.0, "0 \\(left\\) or 1"),
+        ("vtx_in", 2.5, "whole"),
+    ],
+)
+def test_from_matlab_hands_the_constructor_the_values_as_stored(tmp_path, field, value, message):
+    """It cast first: 1.9 became hemisphere 1, 256 hemisphere 0, vertex 2.5 vertex 1."""
+    import scipy.io
+
+    values = {"surf_in": [[0.0], [1.0]], "surf_out": [[0.0], [1.0]], "vtx_in": [[1.0], [2.0]]}
+    values["vtx_out"] = [[1.0], [2.0]]
+    values[field] = [[0.0], [value]] if field.startswith("surf") else [[1.0], [value]]
+    path = tmp_path / "mesh_intersections.mat"
+    scipy.io.savemat(path, values)
+    with pytest.raises(ValueError, match=message):
+        Endpoints.from_matlab(path, n_per_hemi=10)

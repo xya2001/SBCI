@@ -1,0 +1,91 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sbci"
+version = "0.0.1.dev0"
+description = "Continuous brain connectivity on the ico4 surface grid: connectome I/O, parcellation, smoothing, structure-function coupling, alignment, reduction and inference"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "The SBCI developers" }]
+keywords = ["neuroimaging", "connectome", "tractography", "cifti", "surface"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Medical Science Apps.",
+]
+
+# Hard dependencies, per WP2 engineering rules. Keep this list short:
+# anything added here has to install cleanly on a cluster login node.
+dependencies = [
+  "numpy>=1.24",
+  "scipy>=1.10",
+  "nibabel>=5.0",
+  "h5py>=3.8",
+]
+
+[project.optional-dependencies]
+plotting = ["nilearn>=0.10", "matplotlib>=3.7"]
+render = ["sbci[plotting]", "pyvista>=0.43"]
+# CuPy for CUDA 12, for align(device="gpu") and endpoints_align(device="gpu"); another CUDA
+# takes its own CuPy package (USAGE.md, *Running the alignments on a GPU*). 14.2 is tested.
+gpu = ["cupy-cuda12x>=14"]
+# statsmodels is the independent implementation local_test(groups=) is checked against.
+test = ["pytest>=7.4", "pytest-cov>=4.1", "statsmodels>=0.14"]
+# build makes the wheel VERIFICATION.md tier 1 checks, as CI does.
+dev = ["sbci[render,test]", "ruff>=0.5", "build>=1.0"]
+
+[project.scripts]
+sbci = "sbci.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/xya2001/SBCI"
+Documentation = "https://github.com/xya2001/SBCI/blob/main/USAGE.md"
+Issues = "https://github.com/xya2001/SBCI/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sbci"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "src"]
+addopts = "--doctest-modules --strict-markers --ignore=tests/reference"
+# tests/reference holds MATLAB-facing generators that are run by hand.
+# --doctest-modules imports every .py it collects, and importing a script
+# runs it, so they are kept out of collection entirely.
+doctest_optionflags = "ELLIPSIS NORMALIZE_WHITESPACE"
+markers = [
+  "needs_data: needs data outside the repository, the downloaded tutorial subject (SBCI_HCP_DIR or SBCI_DOWNLOAD=1) or the lab's MATLAB references (the SBCI_* paths in tests/test_matlab_reference.py); skips without it",
+]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "D"]
+# D105: magic methods do not need docstrings.
+# D401: "imperative mood" fights the noun-phrase docstrings that read better
+#       for scientific accessors ("Per-vertex area weights", not "Get the ...").
+ignore = ["D203", "D213", "D105", "D401"]
+
+[tool.ruff.lint.per-file-ignores]
+# A test's name is its docstring; requiring both duplicates the sentence.
+"tests/*" = ["D100", "D103"]
+# scripts/ and tools/ are narrative programs meant to be read top to bottom:
+# their module docstrings carry indented shell blocks (D208), tour.py imports
+# each module at the point where it is being explained (E402), and their local
+# print helpers do not need docstrings (D103).
+"scripts/*" = ["D103", "D208", "E402"]
+"tools/*" = ["D103", "D208", "E402"]
+# Reference generators are run by hand against MATLAB output, not imported.
+"tests/reference/*" = ["D100", "D103", "D208", "D400", "E402"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"

@@ -1,0 +1,524 @@
+"""The fsLR-32k exchange file: the overlap matrix, the blocked product, the axis.
+
+The written file itself is 16.9 GB, so it cannot appear in a unit test. What can
+be tested here is everything the file's correctness rests on: that the overlap
+matrix partitions the same fsaverage vertices the pipeline's own area vector
+does, that resampling conserves the area-weighted mass the specification checks
+rather than merely the sum of the entries, that the blocked product agrees with
+a plain triple matrix product, and that the CIFTI axis describes the mesh the
+header claims.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+from sbci.io import cifti
+
+N_ICO4 = 5124
+N_ICO4_PER_HEMI = 2562
+N_FSAVERAGE = 2 * 163842
+
+
+@pytest.fixture(scope="module")
+def overlap():
+    """The bundled ico4 <-> fsLR-32k overlap matrix."""
+    return cifti.load_overlap()
+
+
+def test_overlap_has_the_shape_the_format_promises(overlap):
+    assert overlap.shape == (cifti.N_FSLR, N_ICO4)
+    assert overlap.nnz > 0
+    assert overlap.data.min() > 0.0
+
+
+def test_every_fsaverage_vertex_is_counted_exactly_once(overlap):
+    """The entries are counts of a partition, so both margins hit 327,684."""
+    fslr_area, ico4_area = cifti.vertex_areas()
+    assert overlap.sum() == pytest.approx(N_FSAVERAGE)
+    assert fslr_area.sum() == pytest.approx(N_FSAVERAGE)
+    assert ico4_area.sum() == pytest.approx(N_FSAVERAGE)
+    np.testing.assert_allclose(overlap.data, np.round(overlap.data))
+
+
+def test_the_ico4_margin_is_the_grids_own_area_vector(overlap):
+    """Column sums must be vertex areas: 5124 vertices over a 327,684 mesh."""
+    _, ico4_area = cifti.vertex_areas()
+    assert ico4_area.min() >= 50
+    assert ico4_area.max() <= 75
+    assert ico4_area.mean() == pytest.approx(N_FSAVERAGE / N_ICO4)
+
+
+def test_no_fslr_vertex_is_left_without_a_source(overlap):
+    fslr_area, _ = cifti.vertex_areas()
+    assert fslr_area.min() >= 1
+
+
+def test_the_operator_averages_rather_than_distributes():
+    """Row-stochastic is what a density needs; column-stochastic is not."""
+    operator = cifti.transfer()
+    row_sums = np.asarray(operator.sum(axis=1)).ravel()
+    np.testing.assert_allclose(row_sums, 1.0, atol=1e-12)
+
+
+def test_the_operator_carries_fslr_areas_back_to_ico4_areas():
+    """``P' a_fsLR == a_ico4`` is what makes the mass identity hold exactly."""
+    operator = cifti.transfer()
+    fslr_area, ico4_area = cifti.vertex_areas()
+    np.testing.assert_allclose(operator.T @ fslr_area, ico4_area, atol=1e-9)
+
+
+def test_area_weighted_mass_is_conserved_on_the_real_operator():
+    """The specification's ``area @ D @ area`` must survive the resampling.
+
+    Checked in factored form, since the resampled square is 16.9 GB:
+    ``a' (P D P') a' == (P' a')' D (P' a')``.
+    """
+    operator = cifti.transfer()
+    fslr_area, ico4_area = cifti.vertex_areas()
+    rng = np.random.default_rng(0)
+    dense = rng.random((N_ICO4, N_ICO4))
+    dense = dense + dense.T
+
+    pushed = operator.T @ fslr_area
+    before = ico4_area @ dense @ ico4_area
+    after = pushed @ dense @ pushed
+    assert abs(after - before) < 1e-9 * before
+
+
+def test_the_hemispheres_do_not_leak_into_each_other(overlap):
+    """A left ico4 vertex must land only on left fsLR vertices, and vice versa."""
+    coo = overlap.tocoo()
+    left_column = coo.col < N_ICO4_PER_HEMI
+    left_row = coo.row < cifti.N_FSLR_PER_HEMI
+    assert np.array_equal(left_column, left_row)
+
+
+def test_blocked_product_equals_the_plain_triple_product(monkeypatch):
+    """The blocking exists only to bound memory; it must not change the answer."""
+    from scipy import sparse
+
+    rng = np.random.default_rng(1)
+    small = rng.random((40, 7))
+    small[small < 0.8] = 0.0
+    small[0] = 1.0  # so that no row and no column is empty
+    small[:, 0] = np.where(rng.random(40) < 0.3, 1.0, small[:, 0])
+    fake = sparse.csr_matrix(small)
+    monkeypatch.setattr(cifti, "load_overlap", lambda: fake)
+    operator = cifti.transfer()
+
+    dense = rng.random((7, 7))
+    dense = dense + dense.T
+
+    expected = operator @ dense @ operator.T
+    for block in (1, 3, 40, 100):
+        np.testing.assert_allclose(cifti.resample(dense, block=block), expected, rtol=1e-5)
+
+
+def test_resample_rejects_a_matrix_on_the_wrong_grid():
+    with pytest.raises(ValueError, match="5124x5124"):
+        cifti.resample(np.zeros((10, 10)))
+
+
+def test_the_axis_describes_both_fslr_hemispheres():
+    axis = cifti._brain_model_axis()
+    assert len(axis) == cifti.N_FSLR
+    assert set(axis.name[: cifti.N_FSLR_PER_HEMI]) == {"CIFTI_STRUCTURE_CORTEX_LEFT"}
+    assert set(axis.name[cifti.N_FSLR_PER_HEMI :]) == {"CIFTI_STRUCTURE_CORTEX_RIGHT"}
+    assert axis.nvertices["CIFTI_STRUCTURE_CORTEX_LEFT"] == cifti.N_FSLR_PER_HEMI
+    assert axis.nvertices["CIFTI_STRUCTURE_CORTEX_RIGHT"] == cifti.N_FSLR_PER_HEMI
+    np.testing.assert_array_equal(
+        axis.vertex[: cifti.N_FSLR_PER_HEMI], np.arange(cifti.N_FSLR_PER_HEMI)
+    )
+
+
+def test_reading_back_to_ico4_refuses_rather_than_degrading():
+    """The resampling is many-to-one; the inverse would quietly lose data."""
+    with pytest.raises(NotImplementedError, match="lossy"):
+        cifti.read_cifti("anything.dconn.nii")
+
+
+def _toy_export(monkeypatch, modality):
+    """A connectome-shaped object on a fake 40 x 7 overlap, so an export is kilobytes, not 17 GB."""
+    from scipy import sparse
+
+    from sbci.metadata import template
+
+    rng = np.random.default_rng(2)
+    small = rng.random((40, 7))
+    small[small < 0.7] = 0.0
+    small[0] = 1.0
+    small[:, 0] = np.where(rng.random(40) < 0.3, 1.0, small[:, 0])
+    fake = sparse.csr_matrix(small)
+    monkeypatch.setattr(cifti, "load_overlap", lambda: fake)
+    monkeypatch.setattr(cifti, "N_FSLR_PER_HEMI", 20)
+    monkeypatch.setattr(cifti, "N_FSLR", 40)
+
+    common = dict(registration_reference="fsaverage", pipeline_version="x", container_version="y")
+    if modality == "sc":
+        metadata = template(
+            "sc",
+            normalization="unit-mass",
+            streamline_count=1,
+            streamline_weighting="none",
+            kernel="shk",
+            bandwidth=0.005,
+            **common,
+        )
+    else:
+        metadata = template("fc", normalization="none", fc_nuisance_model="36p", **common)
+
+    class Toy:
+        def dense(self):
+            dense = rng.random((7, 7)).astype(np.float32)
+            dense = dense + dense.T
+            return dense - 1.0 if modality == "fc" else dense  # correlations are signed
+
+    toy = Toy()
+    toy.metadata = metadata
+    toy.mask = np.ones(7, dtype=bool)
+    return toy
+
+
+def test_write_cifti_sets_the_intent_codes_and_writes_the_companions(tmp_path, monkeypatch):
+    """On a fake 40 x 7 overlap: the .dconn intent, the areas' intent, the JSON sidecar."""
+    import json
+
+    import nibabel as nib
+
+    path = cifti.write_cifti(
+        tmp_path / "sub-toy_sc.dconn.nii", _toy_export(monkeypatch, "sc"), block=16
+    )
+    image = nib.load(str(path))
+    assert image.nifti_header.get_intent()[0] == "ConnDense"
+    areas = nib.load(str(tmp_path / "sub-toy_sc_vertexarea.dscalar.nii"))
+    assert areas.nifti_header.get_intent()[0] == "ConnDenseScalar"
+    sidecar = json.loads((tmp_path / "sub-toy_sc.json").read_text())
+    assert sidecar["exchange_space"] == "fsLR" and sidecar["kernel"] == "shk"
+
+
+def test_the_sidecar_names_correlations_for_fc_and_a_density_for_sc(tmp_path, monkeypatch):
+    """FC goes through the same operator as SC; its sidecar must not call the values a density."""
+    import json
+
+    cifti.write_cifti(tmp_path / "sub-toy_fc.dconn.nii", _toy_export(monkeypatch, "fc"), block=16)
+    fc = json.loads((tmp_path / "sub-toy_fc.json").read_text())
+    assert fc["included_connections"] == "fc"
+    assert "correlation" in fc["exchange_values"] and "density" not in fc["exchange_values"]
+    assert "Fisher" in fc["exchange_values"]  # says the averaging was direct
+
+    cifti.write_cifti(tmp_path / "sub-toy_sc.dconn.nii", _toy_export(monkeypatch, "sc"), block=16)
+    sc = json.loads((tmp_path / "sub-toy_sc.json").read_text())
+    assert sc["exchange_values"] == "density per fsaverage vertex squared"
+
+
+def test_fc_pairs_within_one_ico4_cell_read_the_self_correlation(tmp_path, monkeypatch):
+    """The stored diagonal is zero by the format; resampled as is, a same-cell fsLR pair reads 0.
+
+    For FC the diagonal is set to 1, the self-correlation, before resampling,
+    so such a pair reads 1 and the rest of the matrix is ``P D P'`` as before.
+    A density keeps its zero diagonal, as the format has it, and its
+    area-weighted mass.
+    """
+    import nibabel as nib
+
+    written = {}
+    for modality in ("sc", "fc"):
+        toy = _toy_export(monkeypatch, modality)
+        dense = toy.dense().astype(np.float64)
+        np.fill_diagonal(dense, 0.0)  # as the format stores it
+        toy.dense = lambda dense=dense: dense.copy()
+        path = cifti.write_cifti(tmp_path / f"sub-toy_{modality}.dconn.nii", toy, block=16)
+        written[modality] = (dense, np.asarray(nib.load(str(path)).get_fdata()))
+    operator = cifti.transfer().toarray()
+    # fsLR rows drawing on one ico4 vertex only, grouped by that vertex
+    sources: dict[int, list[int]] = {}
+    for k, row in enumerate(operator):
+        if np.count_nonzero(row) == 1:
+            sources.setdefault(int(np.flatnonzero(row)[0]), []).append(k)
+    shared = [rows for rows in sources.values() if len(rows) > 1]
+    assert shared, "the toy overlap has to put two fsLR vertices in one ico4 cell"
+
+    dense, out = written["fc"]
+    for rows in shared:
+        assert out[rows[0], rows[1]] == pytest.approx(1.0, abs=1e-6)
+    expected = dense.copy()
+    np.fill_diagonal(expected, 1.0)
+    np.testing.assert_allclose(out, operator @ expected @ operator.T, rtol=1e-5, atol=1e-6)
+
+    dense, out = written["sc"]
+    for rows in shared:
+        assert out[rows[0], rows[1]] == 0.0
+    np.testing.assert_allclose(out, operator @ dense @ operator.T, rtol=1e-5, atol=1e-6)
+    fslr_area, ico4_area = cifti.vertex_areas()
+    assert fslr_area @ out @ fslr_area == pytest.approx(ico4_area @ dense @ ico4_area, rel=1e-5)
+
+
+def test_the_medial_wall_keeps_a_zero_diagonal_in_the_fc_exchange_file(tmp_path, monkeypatch):
+    """The self-correlation goes on cortex only: the medial wall has no FC to correlate.
+
+    Set on every vertex, it made fsLR vertices in one medial-wall cell read a
+    correlation of 1 with each other, where FC has no data at all.
+    """
+    import nibabel as nib
+
+    wall = 6
+    toy = _toy_export(monkeypatch, "fc")
+    dense = toy.dense().astype(np.float64)
+    dense[wall, :] = 0.0  # no FC on the medial wall, as in a real file
+    dense[:, wall] = 0.0
+    np.fill_diagonal(dense, 0.0)
+    toy.dense = lambda: dense.copy()
+    toy.mask = np.arange(7) != wall
+    resampled = []
+    real = cifti.resample
+
+    def keeping(matrix, block, cortex=None):
+        resampled.append(matrix.copy())
+        return real(matrix, block=block, cortex=cortex)
+
+    monkeypatch.setattr(cifti, "resample", keeping)
+    path = cifti.write_cifti(tmp_path / "sub-toy_fc.dconn.nii", toy, block=16)
+
+    (given,) = resampled
+    assert given[wall, wall] == 0.0
+    np.testing.assert_array_equal(np.diagonal(given)[toy.mask], 1.0)
+    expected = dense.copy()
+    expected[toy.mask, toy.mask] = 1.0
+    np.testing.assert_array_equal(given, expected)
+    operator = cifti.transfer(cortex=toy.mask).toarray()  # averaged over cortex only
+    out = np.asarray(nib.load(str(path)).get_fdata())
+    np.testing.assert_allclose(out, operator @ expected @ operator.T, rtol=1e-5, atol=1e-6)
+    whole = cifti.transfer().toarray()
+    walled = np.flatnonzero(whole[:, wall] == 1.0)  # fsLR vertices on the medial wall alone
+    assert walled.size > 1, "the toy overlap has to put two fsLR vertices on the medial wall"
+    np.testing.assert_array_equal(out[np.ix_(walled, walled)], 0.0)
+
+
+def _refuse_to_resample(*_args, **_kwargs):
+    raise AssertionError("resample ran before the name and the metadata were checked")
+
+
+def test_a_wrong_name_is_refused_before_the_resampling(tmp_path, monkeypatch):
+    """A name nibabel would refuse is refused first, not at ``to_filename`` after the resample.
+
+    On the real grid that is the 16.9 GB product. A dense connectome ends in
+    ``.dconn.nii``, uncompressed, since nibabel writes CIFTI under no suffix
+    but ``.nii``; another ``.nii`` name would be written, but would not say
+    what the file holds.
+    """
+    toy = _toy_export(monkeypatch, "sc")
+    monkeypatch.setattr(cifti, "resample", _refuse_to_resample)
+    for name in ("sub-toy_sc.dconn.nii.gz", "sub-toy_sc.nii", "sub-toy_sc.dscalar.nii", "x.h5"):
+        with pytest.raises(ValueError, match="does not end in .dconn.nii"):
+            cifti.write_cifti(tmp_path / name, toy, block=16)
+    assert not list(tmp_path.iterdir())
+
+
+def test_invalid_metadata_is_refused_before_the_resampling(tmp_path, monkeypatch, connectome):
+    """Validated as ``load`` validates it, through ``write_cifti`` and through ``to_cifti``.
+
+    The constructor does not validate, so a connectome built in memory could
+    carry an unfilled bandwidth or another grid into the sidecar.
+    """
+    from sbci.metadata import MetadataError
+
+    toy = _toy_export(monkeypatch, "sc")
+    monkeypatch.setattr(cifti, "resample", _refuse_to_resample)
+    toy.metadata.fields["bandwidth"] = None
+    with pytest.raises(MetadataError, match="bandwidth"):
+        cifti.write_cifti(tmp_path / "sub-toy_sc.dconn.nii", toy, block=16)
+    toy.metadata.fields["bandwidth"] = 0.005
+    toy.metadata.fields["grid"] = "fsaverage5"
+    with pytest.raises(MetadataError, match="grid"):
+        cifti.write_cifti(tmp_path / "sub-toy_sc.dconn.nii", toy, block=16)
+
+    connectome.metadata.fields["kernel"] = None
+    with pytest.raises(MetadataError, match="kernel"):
+        connectome.to_cifti(tmp_path / "sub-toy_sc.dconn.nii")
+    with pytest.raises(ValueError, match="does not end in .dconn.nii"):
+        connectome.to_cifti(tmp_path / "sub-toy_sc.h5")
+    assert not list(tmp_path.iterdir())
+
+
+def test_companion_files_keep_a_dotted_name(tmp_path, monkeypatch):
+    """Only the ``.dconn.nii`` comes off, so two sessions of one subject keep their own sidecars.
+
+    Cut at the first dot, ``sub-01.ses-1_sc`` and ``sub-01.ses-2_fc`` both
+    wrote ``sub-01.json``, and the second overwrote the first with the other
+    modality's metadata.
+    """
+    import json
+
+    cifti.write_cifti(
+        tmp_path / "sub-01.ses-1_sc.dconn.nii", _toy_export(monkeypatch, "sc"), block=16
+    )
+    cifti.write_cifti(
+        tmp_path / "sub-01.ses-2_fc.dconn.nii", _toy_export(monkeypatch, "fc"), block=16
+    )
+    assert not (tmp_path / "sub-01.json").exists()
+    sc = json.loads((tmp_path / "sub-01.ses-1_sc.json").read_text())
+    fc = json.loads((tmp_path / "sub-01.ses-2_fc.json").read_text())
+    assert sc["included_connections"] == "sc" and fc["included_connections"] == "fc"
+    assert sc["exchange_vertex_areas"] == "sub-01.ses-1_sc_vertexarea.dscalar.nii"
+    assert (tmp_path / sc["exchange_vertex_areas"]).exists()
+    assert (tmp_path / "sub-01.ses-2_fc_vertexarea.dscalar.nii").exists()
+    assert cifti.companion_stem("sub-01_sc.dconn.nii.gz") == "sub-01_sc"
+    assert cifti.companion_stem("sub-01_sc.nii") == "sub-01_sc"
+
+
+def test_the_sidecar_refuses_metadata_without_a_modality(tmp_path, monkeypatch):
+    """Rather than labelling unknown values a density -- and before the dense file is written."""
+    from sbci.metadata import MetadataError
+
+    with pytest.raises(MetadataError, match="included_connections"):
+        cifti.sidecar({"streamline_count": 1}, "sub-x")
+    toy = _toy_export(monkeypatch, "sc")
+    del toy.metadata.fields["included_connections"]
+    with pytest.raises(MetadataError, match="included_connections"):
+        cifti.write_cifti(tmp_path / "sub-toy_sc.dconn.nii", toy, block=16)
+    assert not (tmp_path / "sub-toy_sc.dconn.nii").exists()
+
+
+def test_the_sidecar_serializes_numpy_scalars_and_carries_the_exchange_keys():
+    """json.dumps alone refuses np.int64; the sidecar must not, after the 17 GB file is written."""
+    import json
+
+    text = cifti.sidecar(
+        {
+            "included_connections": "sc",
+            "streamline_count": np.int64(803_741),
+            "bandwidth": np.float32(0.005),
+        },
+        "sub-x",
+    )
+    fields = json.loads(text)
+    assert fields["streamline_count"] == 803_741
+    assert fields["exchange_space"] == "fsLR" and fields["exchange_density"] == "32k"
+    assert fields["exchange_vertex_areas"] == "sub-x_vertexarea.dscalar.nii"
+
+
+def test_an_uppercase_name_is_a_dense_connectome_name(tmp_path):
+    """The writer takes ``X.DCONN.NII`` as nibabel does, as it takes ``x.dconn.nii``.
+
+    It reaches the next check, the directory, rather than being refused for
+    its suffix (fourth review); its companions take the name without it.
+    """
+    import pytest
+
+    import sbci
+    from sbci.io.cifti import companion_stem, write_cifti
+
+    assert companion_stem("sub-01_SC.DCONN.NII") == "sub-01_SC"
+    with pytest.raises(OSError, match="cannot write to"):
+        write_cifti(tmp_path / "missing" / "SUB-01_SC.DCONN.NII", sbci.example())
+
+
+def test_fc_is_averaged_over_cortex_only_beside_the_medial_wall():
+    """A correlation of 0.6 everywhere in cortex reads 0.6 at every fsLR vertex mostly on cortex.
+
+    The medial wall's rows are zero for want of a value. Averaged in, as the
+    whole operator does, they scaled the 407 fsLR vertices that straddle the
+    wall by their cortical share of area -- to 0.075 at the least. A vertex at
+    most half over cortex counts with the wall, as save_map leaves it missing.
+    """
+    from sbci.atlas import cortex_mask
+
+    mask = np.asarray(cortex_mask(), dtype=bool)
+    overlap = cifti.load_overlap()
+    total = np.asarray(overlap.sum(axis=1)).ravel()
+    wall = np.asarray(overlap[:, ~mask].sum(axis=1)).ravel()
+    straddling = (wall > 0) & (wall < total)
+    assert straddling.sum() == 407
+    share = 1 - wall / total
+    field = np.where(mask, 0.6, 0.0)
+    moved = cifti.transfer(cortex=mask) @ field
+    np.testing.assert_allclose(moved[share > 0.5], 0.6, rtol=1e-12)
+    assert moved[share <= 0.5].max() == 0.0
+    assert (cifti.transfer() @ field)[straddling].min() < 0.1  # what the whole operator gave
+
+
+def test_the_fc_exchange_and_save_map_leave_the_same_vertices_missing(tmp_path):
+    """A vertex at most half on cortex had a full FC row, and was missing from save_map's maps.
+
+    Compared with a map save_map writes, vertex by vertex, so that a change to either rule
+    shows here.
+    """
+    import nibabel as nib
+
+    import sbci
+    from sbci.atlas import cortex_mask
+    from sbci.export import COVERAGE
+
+    mask = np.asarray(cortex_mask(), dtype=bool)
+    carried = np.asarray(abs(cifti.transfer(cortex=mask)).sum(axis=1)).ravel() > 0
+    (written,) = sbci.save_map(np.ones(mask.size), tmp_path / "ones.dscalar.nii")
+    values = np.asarray(nib.load(written).get_fdata()).ravel()
+    assert values.size == carried.size
+    np.testing.assert_array_equal(carried, np.isfinite(values))
+    support = cifti.transfer() @ mask.astype(np.float64)
+    assert ((support > 0) & (support <= COVERAGE)).sum() == 226  # the vertices the rule moved
+
+
+def test_write_cifti_averages_fc_over_cortex_and_sc_over_everything(tmp_path, monkeypatch):
+    """FC goes through the operator restricted to the mask; a density through the whole one."""
+    import nibabel as nib
+
+    for modality in ("sc", "fc"):
+        toy = _toy_export(monkeypatch, modality)
+        toy.mask = np.array([True] * 6 + [False])  # the seventh toy vertex is medial wall
+        dense = np.abs(toy.dense().astype(np.float64))
+        dense[6, :] = dense[:, 6] = 0.0
+        toy.dense = lambda dense=dense: dense.copy()
+        path = cifti.write_cifti(tmp_path / f"sub-toy_{modality}.dconn.nii", toy, block=16)
+        written = np.asarray(nib.load(str(path)).get_fdata())
+        expected = dense.copy()
+        if modality == "fc":
+            np.fill_diagonal(expected[:6, :6], 1.0)
+            operator = cifti.transfer(cortex=toy.mask).toarray()
+        else:
+            operator = cifti.transfer().toarray()
+        np.testing.assert_allclose(written, operator @ expected @ operator.T, rtol=1e-5, atol=1e-6)
+
+
+def test_a_failed_write_leaves_no_file_under_the_name(tmp_path, monkeypatch):
+    """The 17 GB file is written under a temporary name and moved into place once complete."""
+    from nibabel import cifti2
+
+    toy = _toy_export(monkeypatch, "sc")
+
+    def failing(self, filename, *args, **kwargs):
+        with open(filename, "wb") as handle:
+            handle.write(b"half a file")
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(cifti2.Cifti2Image, "to_filename", failing)
+    with pytest.raises(OSError, match="No space"):
+        cifti.write_cifti(tmp_path / "sub-toy_sc.dconn.nii", toy, block=16)
+    assert list(tmp_path.iterdir()) == []
+
+
+# --- the review of 11 October 2026 -------------------------------------------------
+
+
+def test_an_unwritable_target_is_refused_before_resampling(tmp_path, monkeypatch):
+    """A folder under the name was found only after the 17 GB resampling."""
+    import sbci
+
+    calls = []
+
+    def resample(*args, **kwargs):
+        calls.append(1)
+        raise AssertionError("resampled before the targets were checked")
+
+    monkeypatch.setattr(cifti, "resample", resample)
+    target = tmp_path / "sub-01_fc.dconn.nii"
+    target.mkdir()
+    with pytest.raises(IsADirectoryError):
+        cifti.write_cifti(target, sbci.example("fc"))
+    sidecar = tmp_path / "sub-02_fc.json"
+    sidecar.mkdir()
+    with pytest.raises(IsADirectoryError):
+        cifti.write_cifti(tmp_path / "sub-02_fc.dconn.nii", sbci.example("fc"))
+    assert calls == []

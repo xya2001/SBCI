@@ -1,0 +1,720 @@
+"""Reduced-rank representation: the properties that hold without MATLAB.
+
+The numerical comparison against a real run of ``SBCI_Modeling_FPCA`` is in
+``test_matlab_reference.py`` and skips without it. What is asserted here is
+what the method guarantees: with the plain inner product a monotone increase
+in what the fit explains, exact recovery of data that is genuinely low rank,
+and scores that reproduce the subject they came from; and on the test cohort
+the leading component carrying the most weight, which in general it need not.
+"""
+
+from __future__ import annotations
+
+import warnings
+
+import numpy as np
+import pytest
+
+from sbci.reduction import (
+    Reduction,
+    fit_basis,
+    power_iteration,
+    project,
+    reduce,
+    sparse_power_iteration,
+)
+
+
+@pytest.fixture
+def cohort():
+    """Twelve subjects built from three separable components plus noise."""
+    rng = np.random.default_rng(4)
+    n, n_subjects, true_rank = 24, 12, 3
+    truth = rng.standard_normal((n, true_rank))
+    truth /= np.linalg.norm(truth, axis=0, keepdims=True)
+    weights = rng.standard_normal((n_subjects, true_rank)) * np.array([4.0, 2.0, 1.0])
+
+    matrices = np.stack(
+        [
+            sum(weights[i, k] * np.outer(truth[:, k], truth[:, k]) for k in range(true_rank))
+            for i in range(n_subjects)
+        ]
+    )
+    noise = rng.standard_normal(matrices.shape) * 0.05
+    matrices = matrices + (noise + np.transpose(noise, (0, 2, 1))) / 2
+    matrices -= matrices.mean(axis=0, keepdims=True)
+    return matrices, truth
+
+
+def test_power_iteration_finds_the_leading_eigenvector():
+    rng = np.random.default_rng(0)
+    vectors = np.linalg.qr(rng.standard_normal((8, 8)))[0]
+    values = np.array([9.0, 4.0, 2.0, 1.0, 0.5, 0.2, 0.1, 0.05])
+    matrix = vectors @ np.diag(values) @ vectors.T
+
+    found = power_iteration(matrix, rng.standard_normal(8), max_iter=200, tol=1e-14)
+    assert abs(abs(found @ vectors[:, 0]) - 1.0) < 1e-8
+
+
+def test_the_sparse_power_iteration_respects_its_support():
+    rng = np.random.default_rng(1)
+    matrix = rng.standard_normal((10, 10))
+    matrix = matrix @ matrix.T
+    found = sparse_power_iteration(
+        matrix, np.eye(10), rng.standard_normal(10), support=3, max_iter=100, tol=1e-12
+    )
+    assert int((np.abs(found) > 0).sum()) <= 3
+
+
+def test_a_genuinely_low_rank_cohort_is_recovered_exactly():
+    """With no noise, three components must reproduce the data."""
+    rng = np.random.default_rng(2)
+    n, true_rank = 20, 3
+    truth = np.linalg.qr(rng.standard_normal((n, n)))[0][:, :true_rank]
+    weights = rng.standard_normal((8, true_rank)) * np.array([5.0, 3.0, 1.0])
+    matrices = np.stack(
+        [
+            sum(weights[i, k] * np.outer(truth[:, k], truth[:, k]) for k in range(true_rank))
+            for i in range(8)
+        ]
+    )
+    matrices -= matrices.mean(axis=0, keepdims=True)
+
+    result = fit_basis(matrices, np.eye(n), rank=true_rank, seed=0, max_outer=200, tol_outer=1e-12)
+    assert result.explained[-1] > 0.999
+    rebuilt = np.stack([result.reconstruct(i) for i in range(8)])
+    assert np.abs(rebuilt - matrices).max() < 1e-6 * np.abs(matrices).max()
+
+
+def test_the_first_component_carries_the_most_weight(cohort):
+    """On this cohort the leading component dominates; in general the scales are not ordered.
+
+    Greedy deflation maximizes the objective in the space orthogonal to the
+    components already taken, which does not force the *scales* to decrease.
+    On a real ico4 cohort they do not: 4.29, 4.03, 3.89, 3.55, 3.75 (x1e-08),
+    with the fifth above the fourth, and on synthetic cohorts the first is not
+    always the largest either. With the plain inner product, as here, the
+    explained fraction does only grow, which is asserted separately.
+    """
+    matrices, _ = cohort
+    result = fit_basis(matrices, np.eye(matrices.shape[1]), rank=4, seed=0)
+    assert np.abs(result.scales[0]) >= np.abs(result.scales[1:]).max()
+
+
+def test_what_the_fit_explains_only_increases(cohort):
+    matrices, _ = cohort
+    result = fit_basis(matrices, np.eye(matrices.shape[1]), rank=5, seed=0)
+    assert np.all(np.diff(result.explained) >= -1e-12)
+    assert 0.0 < result.explained[0] <= result.explained[-1] <= 1.0 + 1e-12
+
+
+def test_the_leading_component_finds_the_strongest_truth(cohort):
+    matrices, truth = cohort
+    result = fit_basis(matrices, np.eye(matrices.shape[1]), rank=3, seed=0)
+    assert abs(np.corrcoef(result.basis[:, 0], truth[:, 0])[0, 1]) > 0.95
+
+
+def _lower_triangle_scores(result, matrices):
+    """``ConConSmooth.smooth``'s scores: least squares on the lower triangle, diagonal included."""
+    lower = np.tril_indices(result.basis.shape[0])
+    design = np.column_stack([np.outer(b, b)[lower] for b in result.basis.T])
+    fitted = np.stack([np.linalg.lstsq(design, m[lower], rcond=None)[0] for m in matrices])
+    return fitted / result.scales
+
+
+def test_scores_reproduce_the_subjects_they_came_from(cohort):
+    """Projecting the data onto its own basis returns its own scores, to rounding.
+
+    At the default ``tol_outer``, where the fit stops before its vectors have
+    settled: the scores it records are those of the vectors it returns. (The
+    reference keeps the scores of the vectors before the last update, and the
+    two differed here by 2.1e-3.) The reference's projection is
+    systematically further off.
+    """
+    matrices, _ = cohort
+    result = fit_basis(matrices, np.eye(matrices.shape[1]), rank=4, seed=0)
+    again = project(result, matrices)
+    np.testing.assert_allclose(again, result.scores, rtol=0, atol=1e-12)
+    reference_form = _lower_triangle_scores(result, matrices)
+    assert np.abs(again - result.scores).max() < np.abs(reference_form - result.scores).max()
+
+
+def test_a_higher_rank_never_explains_less(cohort):
+    matrices, _ = cohort
+    gram = np.eye(matrices.shape[1])
+    low = fit_basis(matrices, gram, rank=2, seed=0).explained[-1]
+    high = fit_basis(matrices, gram, rank=5, seed=0).explained[-1]
+    assert high >= low - 1e-12
+
+
+def test_supplying_the_start_makes_the_fit_deterministic(cohort):
+    matrices, _ = cohort
+    n = matrices.shape[1]
+    start = np.linalg.qr(np.random.default_rng(3).standard_normal((n, n)))[0][:, :3]
+    first = fit_basis(matrices, np.eye(n), rank=3, start=start)
+    second = fit_basis(matrices, np.eye(n), rank=3, start=start)
+    np.testing.assert_allclose(first.basis, second.basis)
+    np.testing.assert_allclose(first.scales, second.scales)
+
+
+def test_reduce_is_deterministic_by_default(cohort):
+    """The start is drawn from seed 0 unless told otherwise, so a run repeats exactly."""
+    matrices, _ = cohort
+    first = reduce(list(matrices), rank=3)
+    second = reduce(list(matrices), rank=3)
+    np.testing.assert_allclose(first.basis, second.basis)
+    np.testing.assert_allclose(first.scores, second.scores)
+    fresh = reduce(list(matrices), rank=3, seed=None)  # a fresh draw is still allowed
+    assert fresh.basis.shape == first.basis.shape
+
+
+def test_candidate_starts_are_deterministic_and_keep_the_larger_component(cohort):
+    """Starting from the leading Gram eigenvectors and keeping the best repeats, and is no worse."""
+    matrices, _ = cohort
+    n = matrices.shape[1]
+    reference = fit_basis(matrices, np.eye(n), rank=2, seed=0)
+    first = fit_basis(matrices, np.eye(n), rank=2, candidates=3)
+    second = fit_basis(matrices, np.eye(n), rank=2, candidates=3)
+    np.testing.assert_allclose(first.basis, second.basis)
+    np.testing.assert_allclose(first.scores, second.scores)
+    assert first.scales[0] >= reference.scales[0] * (1 - 1e-9)
+    assert first.explained[-1] > 0
+
+
+def test_candidates_must_be_positive(cohort):
+    matrices, _ = cohort
+    with pytest.raises(ValueError, match="candidates"):
+        fit_basis(matrices, np.eye(matrices.shape[1]), rank=1, candidates=0)
+
+
+def test_a_supplied_start_overrides_the_candidates(cohort):
+    matrices, _ = cohort
+    n = matrices.shape[1]
+    start = np.linalg.qr(np.random.default_rng(5).standard_normal((n, n)))[0][:, :2]
+    plain = fit_basis(matrices, np.eye(n), rank=2, start=start)
+    with_candidates = fit_basis(matrices, np.eye(n), rank=2, start=start, candidates=4)
+    np.testing.assert_allclose(plain.basis, with_candidates.basis)
+
+
+def test_reduce_accepts_a_cohort_of_arrays(cohort):
+    matrices, _ = cohort
+    result = reduce(list(matrices), rank=3, seed=0)
+    assert isinstance(result, Reduction)
+    assert result.basis.shape == (matrices.shape[1], 3)
+    assert result.scores.shape == (matrices.shape[0], 3)
+
+
+def test_reduce_accepts_a_single_connectome(cohort):
+    """One subject is the one-subject case, not an error."""
+    matrices, _ = cohort
+    result = reduce(matrices[0], rank=3, seed=0)
+    assert result.scores.shape == (1, 3)
+    assert result.rank == 3
+
+
+def test_reduce_reads_a_lazy_sequence_one_subject_at_a_time(cohort):
+    """The same fit from a list, a generator and a sequence that loads on access."""
+    matrices, _ = cohort
+    expected = reduce(list(matrices), rank=3)
+
+    class Lazy:
+        def __init__(self, source):
+            self.source, self.held, self.most = source, 0, 0
+
+        def __len__(self):
+            return len(self.source)
+
+        def __getitem__(self, index):
+            if index >= len(self.source):
+                raise IndexError(index)
+            self.held += 1  # a fresh copy, as a file loaded on access would be
+            self.most = max(self.most, self.held)
+            copy = np.array(self.source[index])
+            self.held -= 1
+            return copy
+
+    lazy = Lazy(matrices)
+    for items in (lazy, (m for m in matrices)):
+        result = reduce(items, rank=3)
+        np.testing.assert_array_equal(result.basis, expected.basis)
+        np.testing.assert_array_equal(result.scores, expected.scores)
+    assert lazy.most == 1
+    with pytest.raises(ValueError, match="at least one"):
+        reduce([], rank=2)
+
+
+def test_reduce_reads_files_by_path(tmp_path):
+    """Paths give the fit the loaded connectomes give, one file at a time."""
+    import sbci
+
+    subjects = [sbci.example(seed=seed, n_streamlines=2000) for seed in (1, 2, 3)]
+    paths = [subject.save(tmp_path / f"sub-{i}_sc.h5") for i, subject in enumerate(subjects)]
+    expected = reduce(subjects, rank=1, seed=0)
+    for items in (paths, [str(p) for p in paths]):
+        result = reduce(items, rank=1, seed=0)
+        np.testing.assert_array_equal(result.basis, expected.basis)
+        np.testing.assert_array_equal(result.scores, expected.scores)
+    assert reduce(paths[0], rank=1, seed=0).scores.shape == (1, 1)
+
+
+def test_reduce_refuses_mismatched_grids(cohort):
+    matrices, _ = cohort
+    with pytest.raises(ValueError, match="different grids"):
+        reduce([matrices[0], matrices[1][:-2, :-2]], rank=2)
+
+
+def test_fit_basis_validates_its_arguments(cohort):
+    matrices, _ = cohort
+    n = matrices.shape[1]
+    with pytest.raises(ValueError, match="expected"):
+        fit_basis(matrices[0], np.eye(n), rank=2)
+    with pytest.raises(ValueError, match="rank must be at least 1"):
+        fit_basis(matrices, np.eye(n), rank=0)
+    with pytest.raises(ValueError, match="gram is"):
+        fit_basis(matrices, np.eye(n - 1), rank=2)
+
+
+def _ring_laplacian(n):
+    """A one-dimensional Laplacian, as a stand-in roughness penalty."""
+    ring = np.zeros((n, n))
+    for i in range(n):
+        ring[i, i] = 2.0
+        ring[i, (i + 1) % n] = ring[(i + 1) % n, i] = -1.0
+    return ring
+
+
+def test_the_roughness_penalty_smooths_the_components(cohort):
+    """Within its working range, more penalty means less local variation."""
+    matrices, _ = cohort
+    n = matrices.shape[1]
+    ring = _ring_laplacian(n)
+
+    roughness = [
+        (lambda v: v @ ring @ v)(
+            fit_basis(matrices, np.eye(n), ring, rank=1, alpha=alpha, seed=0).basis[:, 0]
+        )
+        for alpha in (0.0, 0.1, 0.5, 1.0)
+    ]
+    assert roughness == sorted(roughness, reverse=True), roughness
+
+
+def test_too_large_a_penalty_inverts_and_selects_the_roughest_mode(cohort):
+    """A trap inherited from the reference, worth pinning down.
+
+    The component is chosen with ``eigs(M, 1)``, whose default is the
+    eigenvalue of largest *magnitude*, and the penalty enters as
+    ``- alpha * R``. Once ``alpha * R`` outweighs the data term the
+    largest-magnitude eigenvalue is the most negative one, so the fit returns
+    the roughest direction instead of the smoothest and explains almost
+    nothing. On this cohort the turn happens between alpha 1 and 5.
+    """
+    matrices, _ = cohort
+    n = matrices.shape[1]
+    ring = _ring_laplacian(n)
+
+    working = fit_basis(matrices, np.eye(n), ring, rank=1, alpha=1.0, seed=0)
+    inverted = fit_basis(matrices, np.eye(n), ring, rank=1, alpha=5.0, seed=0)
+
+    working_roughness = working.basis[:, 0] @ ring @ working.basis[:, 0]
+    inverted_roughness = inverted.basis[:, 0] @ ring @ inverted.basis[:, 0]
+
+    assert inverted_roughness > working_roughness
+    assert inverted_roughness == pytest.approx(np.linalg.eigvalsh(ring).max(), rel=0.01)
+    assert inverted.explained[-1] < 0.1 * working.explained[-1]
+
+
+def test_the_large_grid_path_matches_the_dense_one(monkeypatch):
+    """Above ARPACK_THRESHOLD the projector and operator are applied, not formed.
+
+    Force the dense path on the same problem and the two must agree: same
+    mathematics, different evaluation order.
+    """
+    import sbci.reduction as reduction
+
+    rng = np.random.default_rng(6)
+    n, n_subjects, true_rank = reduction.ARPACK_THRESHOLD + 40, 5, 3
+    truth = np.linalg.qr(rng.standard_normal((n, n)))[0][:, :true_rank]
+    weights = rng.standard_normal((n_subjects, true_rank)) * np.array([5.0, 3.0, 1.0])
+    matrices = np.stack(
+        [
+            sum(weights[i, k] * np.outer(truth[:, k], truth[:, k]) for k in range(true_rank))
+            for i in range(n_subjects)
+        ]
+    )
+    noise = rng.standard_normal(matrices.shape) * 0.01
+    matrices = matrices + (noise + np.transpose(noise, (0, 2, 1))) / 2
+    matrices -= matrices.mean(axis=0, keepdims=True)
+    start = np.linalg.qr(rng.standard_normal((n, n)))[0][:, :2]
+    gram = np.diag(rng.uniform(0.5, 1.5, n))
+
+    operator_path = fit_basis(matrices, gram, rank=2, start=start)
+    monkeypatch.setattr(reduction, "ARPACK_THRESHOLD", 10**9)
+    dense_path = fit_basis(matrices, gram, rank=2, start=start)
+
+    for k in range(2):
+        assert abs(abs(operator_path.basis[:, k] @ dense_path.basis[:, k]) - 1.0) < 1e-8
+    np.testing.assert_allclose(operator_path.scales, dense_path.scales, rtol=1e-8)
+    np.testing.assert_allclose(operator_path.explained, dense_path.explained, rtol=1e-8)
+
+
+def test_the_gram_operator_is_the_unfolded_product():
+    """The implicit mode-1 Gram matrix equals the reference's explicit one."""
+    from sbci.reduction import _mode1_gram
+
+    rng = np.random.default_rng(8)
+    residual = rng.standard_normal((4, 7, 7))
+    unfolded = np.moveaxis(residual, 0, -1).reshape(7, 7 * 4, order="F")
+    explicit = unfolded @ unfolded.T
+    vector = rng.standard_normal(7)
+    np.testing.assert_allclose(_mode1_gram(residual)(vector), explicit @ vector, rtol=1e-12)
+
+
+def test_project_takes_what_reduce_takes(tmp_path, sc_metadata):
+    """Connectomes, their files or their dense matrices, one or a sequence: the same scores."""
+    from sbci.connectome import ContinuousConnectome
+    from sbci.grid import to_condensed
+
+    rng = np.random.default_rng(5)
+    connectomes, paths = [], []
+    for i in range(5):
+        matrix = rng.random((12, 12))
+        matrix = matrix + matrix.T
+        np.fill_diagonal(matrix, 0.0)
+        area = np.full(12, 2.0)
+        matrix /= area @ matrix @ area
+        connectome = ContinuousConnectome(
+            data=to_condensed(matrix).astype(np.float32),
+            area=area,
+            mask=np.ones(12, dtype=bool),
+            metadata=sc_metadata,
+        )
+        connectomes.append(connectome)
+        paths.append(connectome.save(tmp_path / f"sub-{i}_sc.h5"))
+    result = reduce(paths[:4], rank=2, seed=0)
+    expected = project(result, np.stack([c.dense(np.float64) for c in connectomes]))
+    for given in (paths, connectomes, [str(p) for p in paths], (p for p in paths)):
+        np.testing.assert_allclose(project(result, given), expected, rtol=0, atol=1e-12)
+    np.testing.assert_allclose(project(result, paths[4]), expected[4:], rtol=0, atol=1e-12)
+    np.testing.assert_allclose(project(result, connectomes[4]), expected[4:], rtol=0, atol=1e-12)
+    with pytest.raises(ValueError, match="the basis is on 12 vertices"):
+        project(result, [np.zeros((5, 5))])
+
+
+def test_projecting_the_training_cohort_recovers_its_own_scores(cohort):
+    """reduce() centres and remembers the mean, so raw subjects project correctly."""
+    matrices, _ = cohort
+    offset = np.ones_like(matrices[0])
+    raw = [m + offset for m in matrices]  # an uncentred cohort
+    result = reduce(raw, rank=3, seed=0)
+    assert result.mean is not None
+    again = project(result, np.stack(raw))
+    np.testing.assert_allclose(again, result.scores, rtol=0, atol=1e-12)
+    # reconstruct() is the mean plus the components weighted by the subject's scores
+    rebuilt_by_hand = result.mean + sum(
+        result.scales[k] * result.scores[0, k] * np.outer(result.basis[:, k], result.basis[:, k])
+        for k in range(result.rank)
+    )
+    np.testing.assert_allclose(result.reconstruct(0), rebuilt_by_hand, atol=1e-10)
+    rebuilt = np.stack([result.reconstruct(i) for i in range(len(raw))])
+    assert np.abs(rebuilt - np.stack(raw)).max() < np.abs(np.stack(raw)).max()
+
+
+def _random_cohort(seed=11, n=12, n_subjects=7):
+    """Centred positive semidefinite matrices with no low-rank structure to find."""
+    rng = np.random.default_rng(seed)
+    matrices = rng.standard_normal((n_subjects, n, n))
+    matrices = matrices @ matrices.transpose(0, 2, 1)
+    return matrices - matrices.mean(axis=0, keepdims=True)
+
+
+@pytest.mark.parametrize(
+    "tol_outer", [1e-3, 0.0, -1.0], ids=["default_tolerance", "zero_tolerance", "fixed_point"]
+)
+@pytest.mark.parametrize("rank", [1, 3])
+@pytest.mark.parametrize("uniform", [True, False], ids=["uniform_gram", "diagonal_gram"])
+def test_projecting_the_training_cohort_returns_its_scores(rank, uniform, tol_outer):
+    """The default projection is the fit's own scoring, so the training cohort gets its scores back.
+
+    To rounding, however early the fit stops: it scores the vector it returns.
+    The reference scores the vector before the last update, which agrees only
+    once the updates have stopped moving -- on this cohort the two differed by
+    1.6e-3 to 1.2e-2 at the default tolerance, and by 1.9e-9 at ``tol_outer=0``,
+    which stops at the first bit-identical objective with the vector 1e-8 from
+    its fixed point; a negative tolerance never stops early. Under a non-uniform inner product the
+    components are not Euclidean-orthogonal, and only the sequential deflation
+    gets the scores back.
+    """
+    matrices = _random_cohort()
+    n = matrices.shape[1]
+    gram = np.ones(n) if uniform else np.random.default_rng(12).uniform(0.5, 2.0, n)
+    result = fit_basis(matrices, gram, rank=rank, seed=0, max_outer=80, tol_outer=tol_outer)
+    np.testing.assert_allclose(project(result, matrices), result.scores, rtol=0, atol=1e-12)
+    if rank > 1 and not uniform:
+        basis = result.basis
+        independent = np.stack([(basis * (m @ basis)).sum(axis=0) for m in matrices])
+        assert np.abs(independent / result.scales - result.scores).max() > 1e-3
+
+
+def test_the_deflation_removes_each_subjects_whole_coefficient():
+    """What a component leaves behind has nothing more along it, subject by subject.
+
+    The fit subtracts each subject's coefficient on the vector it returns,
+    ``psi' R psi``, so the residual's coefficient there is zero, and the scale
+    times the score is that coefficient. With the scores of the vector before
+    the last update -- the reference's -- a remainder of the size of that
+    update was left for the next component to absorb.
+    """
+    matrices = _random_cohort()
+    residual = matrices.copy()
+    result = fit_basis(residual, np.eye(matrices.shape[1]), rank=1, seed=0, copy=False)
+    psi = result.basis[:, 0]
+    coefficient = (matrices @ psi) @ psi
+    assert np.abs((residual @ psi) @ psi).max() < 1e-12 * np.abs(coefficient).max()
+    np.testing.assert_allclose(result.scales[0] * result.scores[:, 0], coefficient, rtol=1e-12)
+
+
+def test_projection_is_the_sequential_deflation_of_the_fit():
+    """For any matrix, each coefficient is psi_k' Y psi_k on what the earlier components left.
+
+    Written out as fit_basis deflates: subtract a component's coefficient
+    times ``psi_k psi_k'`` before scoring the next. project() does the same
+    through the overlaps ``(psi_k . psi_l)^2``, which only differs from
+    scoring each component alone when the components are not
+    Euclidean-orthogonal, so the inner product here is not uniform.
+    """
+    matrices = _random_cohort()
+    n = matrices.shape[1]
+    result = fit_basis(matrices, np.random.default_rng(12).uniform(0.5, 2.0, n), rank=3, seed=0)
+    assert np.abs(result.basis.T @ result.basis - np.eye(3)).max() > 1e-3
+    result.mean = matrices.mean(axis=0) + 0.5  # as reduce() would have recorded one
+
+    rng = np.random.default_rng(13)
+    new = rng.standard_normal((2, n, n))
+    new = new @ new.transpose(0, 2, 1)
+    expected = np.empty((2, 3))
+    for i, matrix in enumerate(new):
+        residual = matrix - result.mean
+        for k in range(3):
+            psi = result.basis[:, k]
+            expected[i, k] = (residual @ psi) @ psi
+            residual = residual - expected[i, k] * np.outer(psi, psi)
+    np.testing.assert_allclose(project(result, new), expected / result.scales, rtol=1e-12)
+    assert project(result, new[0]).shape == (1, 3)  # one matrix is allowed
+
+
+def test_the_two_vertex_toy_pins_the_diagonal_weighting_of_the_reference():
+    """[[0, t], [t, 0]]: the default returns the fitted score, the reference two thirds of it.
+
+    The lower triangle holds the off-diagonal pair once but both diagonal
+    entries, so against the fit's full-matrix contraction the diagonal
+    carries double weight; with a zero diagonal and one component the
+    reference form returns ``1 / (1 + sum_i psi_i^4)`` of the fitted score,
+    2/3 for ``psi = (1, 1) / sqrt(2)``: what ``ConConSmooth.smooth`` does, and
+    why :func:`project` does not.
+    """
+    toy = np.stack([[[0.0, t], [t, 0.0]] for t in (0.1, 0.2, 0.3, 0.4)])
+    with warnings.catch_warnings():
+        # The +-t eigenvalue tie of a 2 x 2 zero-diagonal matrix trips the
+        # inversion warning; the sign goes into the scale and cancels.
+        warnings.simplefilter("ignore", RuntimeWarning)
+        result = fit_basis(toy, np.ones(2), rank=1, alpha=0.0, seed=0)
+    np.testing.assert_allclose(np.abs(result.basis[:, 0]), np.full(2, np.sqrt(0.5)), rtol=1e-12)
+    np.testing.assert_allclose(project(result, toy), result.scores, rtol=1e-12)
+    np.testing.assert_allclose(
+        _lower_triangle_scores(result, toy), result.scores * 2 / 3, rtol=1e-12
+    )
+
+
+def test_too_large_a_penalty_warns_about_the_inversion(cohort):
+    matrices, _ = cohort
+    n = matrices.shape[1]
+    with pytest.warns(RuntimeWarning, match="roughest"):
+        fit_basis(matrices, np.eye(n), _ring_laplacian(n), rank=1, alpha=5.0, seed=0)
+
+
+def test_a_negative_mode_of_the_data_is_not_taken_for_the_penalty(cohort):
+    """On a centred cohort an alternating step can pass through a negative mode of the data.
+
+    The next scores put it right, and alpha has no part in it, so it is no
+    reason to warn about the penalty: the warning used to fire here even with
+    no penalty at all, telling the user to lower an alpha that was not used.
+    """
+    matrices, _ = cohort
+    n = matrices.shape[1]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        fit_basis(matrices, np.eye(n), rank=2, candidates=3)  # no penalty at all
+        fit_basis(matrices, np.eye(n), _ring_laplacian(n), rank=2, alpha=1e-6, candidates=3)
+
+
+def test_reduce_accepts_connectome_like_objects_off_the_ico4_grid(cohort):
+    """A connectome on another grid gets the plain inner product, not the ico4 roughness."""
+    matrices, _ = cohort
+
+    class Toy:
+        def __init__(self, dense):
+            self._dense = dense
+            self.area = np.ones(dense.shape[0])
+
+        def dense(self):
+            return self._dense
+
+    result = reduce([Toy(m) for m in matrices], rank=2, seed=0)
+    assert result.basis.shape == (matrices.shape[1], 2)
+
+
+def test_a_diagonal_inner_product_gives_the_same_fit_as_its_dense_form():
+    """The mesh inner product is diag(areas); applying it elementwise must change nothing."""
+    rng = np.random.default_rng(21)
+    n, n_subjects = 30, 6
+    matrices = rng.standard_normal((n_subjects, n, n))
+    matrices = matrices @ matrices.transpose(0, 2, 1)  # positive semidefinite, like a density
+    weights = rng.uniform(0.5, 2.0, size=n)
+    start = rng.standard_normal((n, 3))
+    dense = fit_basis(matrices, np.diag(weights), rank=3, start=start)
+    diagonal = fit_basis(matrices, weights, rank=3, start=start)
+    np.testing.assert_array_equal(dense.basis, diagonal.basis)
+    np.testing.assert_array_equal(dense.scores, diagonal.scores)
+    np.testing.assert_array_equal(dense.explained, diagonal.explained)
+    with pytest.raises(ValueError, match="gram is"):
+        fit_basis(matrices, weights[:-1], rank=2)
+
+
+def test_in_place_deflation_and_the_closed_form_explained_fraction():
+    """copy=False leaves the residual in the caller's array; explained matches the direct norm."""
+    rng = np.random.default_rng(22)
+    n, n_subjects = 25, 5
+    matrices = rng.standard_normal((n_subjects, n, n))
+    matrices = matrices @ matrices.transpose(0, 2, 1)  # positive semidefinite, like a density
+    start = rng.standard_normal((n, 4))
+    kept = matrices.copy()
+    result = fit_basis(matrices, np.eye(n), rank=4, start=start, copy=False)
+    assert not np.array_equal(matrices, kept)  # deflated in place
+    residual_norm = np.linalg.norm(matrices)
+    removed = np.linalg.norm(kept - matrices)
+    assert result.explained[-1] == pytest.approx(removed / np.linalg.norm(kept), rel=1e-10)
+    assert residual_norm < np.linalg.norm(kept)
+    again = fit_basis(kept, np.eye(n), rank=4, start=start)  # the default copies
+    np.testing.assert_array_equal(again.basis, result.basis)
+    np.testing.assert_array_equal(again.explained, result.explained)
+
+
+def test_a_support_constraint_works_with_the_default_diagonal_inner_product(cohort):
+    """reduce() keeps the mesh inner product as a diagonal; support= must accept it."""
+    matrices, _ = cohort
+    sparse = reduce(matrices, rank=2, seed=0, support=5)
+    assert sparse.basis.shape[1] == 2
+    assert (np.count_nonzero(sparse.basis, axis=0) <= 5).all()
+    dense_gram = fit_basis(matrices, np.eye(matrices.shape[1]), rank=2, seed=0, support=5)
+    np.testing.assert_allclose(np.abs(sparse.basis), np.abs(dense_gram.basis), atol=1e-8)
+
+
+def test_a_cohort_with_no_variation_is_refused_rather_than_returning_nan():
+    matrix = np.eye(6)
+    with pytest.raises(ValueError, match="no variation to reduce"):
+        reduce([matrix, matrix.copy()], rank=1, seed=0)
+
+
+def test_the_grid_roughness_penalty_is_exactly_symmetric():
+    """Every pair gets the same value in the same order on both sides.
+
+    So no symmetrization step is needed, and the fit relies on that.
+    """
+    from sbci.reduction import _grid_gram_and_roughness
+
+    _, roughness = _grid_gram_and_roughness(np.ones(5124))
+    assert np.array_equal(roughness, roughness.T)
+    assert roughness.shape == (5124, 5124)
+
+
+def test_a_component_the_cohort_leaves_nothing_for_is_named_and_alpha_is_not_blamed():
+    """Asking for more components than the cohort spans said to lower alpha, at a scale of 4e-17."""
+    rng = np.random.default_rng(21)
+    n, subjects = 40, 12
+    ring = 2 * np.eye(n) - np.roll(np.eye(n), 1, 1) - np.roll(np.eye(n), -1, 1)
+    psi = np.linalg.qr(rng.standard_normal((n, 2)))[0]
+    weights = rng.standard_normal((subjects, 2)) * [3.0, 1.0]
+    matrices = np.einsum("sk,ik,jk->sij", weights, psi, psi)
+    matrices -= matrices.mean(axis=0)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        fit_basis(matrices, np.ones(n), ring, rank=4, alpha=1e-10, seed=0)
+    messages = [str(w.message) for w in caught]
+    assert any("component 2: the cohort leaves nothing for it" in m for m in messages)
+    assert not any("lower alpha" in m for m in messages)
+
+
+def test_the_large_grid_operators_take_a_column_as_well_as_a_vector():
+    """SciPy before 1.11 multiplies an operator by a matrix one (n, 1) column at a time.
+
+    The deflated operator broadcast such a column against a diagonal inner
+    product to (n, n), so the ARPACK fallback, which forms the operator densely,
+    failed on SciPy 1.10 -- the oldest the package allows.
+    """
+    from sbci.reduction import _Deflation, _mode1_gram
+
+    rng = np.random.default_rng(6)
+    n = 450  # above ARPACK_THRESHOLD, where the operator is used
+    kept = np.linalg.qr(rng.standard_normal((n, 2)))[0]
+    matrix = rng.standard_normal((n, n))
+    operator = _Deflation(kept, rng.uniform(0.5, 2.0, n)).sandwich(matrix + matrix.T)
+    vector = rng.standard_normal(n)
+    # what SciPy 1.10 hands the operator's function for each column; the public matvec of a
+    # column is deprecated from SciPy 1.18, so the function is called as SciPy 1.10 calls it
+    np.testing.assert_allclose(operator._matvec(vector[:, None]).ravel(), operator.matvec(vector))
+    cohort = rng.standard_normal((3, n, n))
+    gram = _mode1_gram(cohort)
+    np.testing.assert_allclose(gram(vector[:, None]), gram(vector))
+
+
+def test_dense_ico4_arrays_get_the_grids_areas():
+    """Dense ico4 arrays got the plain inner product, connectomes the areas: 3e-5 apart."""
+    import sbci
+
+    subjects = [sbci.example(seed=seed, n_streamlines=2000) for seed in (1, 2, 3)]
+    from_connectomes = reduce(subjects, rank=2, seed=0)
+    from_arrays = reduce([s.dense() for s in subjects], rank=2, seed=0)
+    np.testing.assert_allclose(from_arrays.scores, from_connectomes.scores, atol=1e-12)
+    np.testing.assert_allclose(from_arrays.basis, from_connectomes.basis, atol=1e-12)
+
+
+# --- the fourth review of 12 October 2026 ------------------------------------------------
+
+
+@pytest.mark.parametrize("bad", [np.nan, np.inf])
+def test_a_subject_that_is_not_finite_is_refused_and_named(cohort, bad):
+    """One NaN gave NaN scores and explained fractions, and p-values after them, with no word."""
+    matrices, _ = cohort
+    spoiled = matrices.copy()
+    spoiled[4, 3, 7] = spoiled[4, 7, 3] = bad
+    with pytest.raises(ValueError, match="subject 4 holds values that are not finite"):
+        reduce(list(spoiled), rank=2, seed=0)
+    with pytest.raises(ValueError, match="subject 4 holds values that are not finite"):
+        fit_basis(spoiled, np.ones(matrices.shape[1]), rank=2, seed=0)
+    fitted = reduce(list(matrices), rank=2, seed=0)
+    with pytest.raises(ValueError, match="subject 1 holds values that are not finite"):
+        project(fitted, [matrices[0], spoiled[4]])
+
+
+def test_a_file_that_is_not_finite_is_named_by_reduce_and_project(tmp_path, sc_metadata):
+    """load() does not read the values, so the fit took the file; now its name comes back."""
+    from sbci.connectome import ContinuousConnectome
+    from sbci.errors import InvalidFileError
+    from sbci.grid import to_condensed
+
+    rng = np.random.default_rng(7)
+    paths = []
+    for i in range(4):
+        matrix = rng.random((12, 12))
+        matrix = matrix + matrix.T
+        np.fill_diagonal(matrix, 0.0)
+        data = to_condensed(matrix).astype(np.float32)
+        if i == 2:
+            data[5] = np.nan
+        connectome = ContinuousConnectome(data, np.full(12, 2.0), np.ones(12, bool), sc_metadata)
+        paths.append(connectome.save(tmp_path / f"sub-{i}_sc.h5"))
+    with pytest.raises(InvalidFileError, match=r"sub-2_sc\.h5 \(subject 2\) holds connectivity"):
+        reduce(paths, rank=1, seed=0)
+    fitted = reduce([paths[0], paths[1], paths[3]], rank=1, seed=0)
+    with pytest.raises(InvalidFileError, match=r"sub-2_sc\.h5 \(subject 1\)"):
+        project(fitted, [paths[3], str(paths[2])])
