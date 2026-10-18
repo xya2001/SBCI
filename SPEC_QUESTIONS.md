@@ -253,13 +253,48 @@ where `src/sbci/spec.py` currently carries a **provisional** value, marked
     cortical surface itself and explicitly critiques the spherical approach for
     the distortion the projection introduces.
 
-    **How much they differ -- a correction.** An earlier draft of this document
-    said the two agree at r = 0.58. That figure is the *best* agreement
-    reachable by tuning the Riemannian bandwidth, at kappa = 8.87. At the
-    bandwidth the reference selection formula actually picks, kappa = 1.948,
-    they agree at **r = 0.29**. Measured on the example subject against the
-    released `smoothed_sc_avg_0.005_ico4.mat`, over the strict upper triangle
-    the file stores:
+    **How much they differ -- corrected twice.** An earlier draft of this
+    document said the two agree at r = 0.58, and a later one at r = 0.29. Both
+    figures, tabulated below, compared the Riemannian estimate of the legacy
+    example subject with its released `smoothed_sc_avg_0.005_ico4.mat`. That
+    file was made by the reference pipeline's own route, so the comparison
+    mixed the kernels' difference with everything else that differs between
+    the two routes.
+
+    From the same streamline endpoints the kernels agree better, though still
+    far from fully. Those endpoints were the HCP-YA tutorial subject's 803,741
+    streamlines, as its file stores them, with the medial wall masked:
+    - the spherical kernel at sigma = 0.005 gives back the released file
+      exactly (r = 1.000000);
+    - the Riemannian kernel was run at each of its ten candidate bandwidths;
+    - r is over the 10,972,270 cortical vertex pairs, and over the Schaefer-200
+      masses.
+
+    These numbers were measured on 17 October 2026 (job 5477553, `r8_quick.py`
+    in `/work/users/x/y/xya/paper-open-items/`):
+
+    | kappa | vertex pairs | Schaefer-200 masses |
+    | --- | --- | --- |
+    | 0.625 | 0.544 | 0.905 |
+    | 0.913 | 0.561 | 0.908 |
+    | 1.334 | 0.598 | 0.913 |
+    | **1.948** (reference) | **0.676** | **0.922** |
+    | 2.846 | 0.796 | 0.932 |
+    | 4.157 | 0.900 | 0.942 |
+    | 6.071 | 0.930 | 0.950 |
+    | 8.868 | 0.877 | 0.944 |
+    | 12.953 | 0.771 | 0.906 |
+    | 18.920 | 0.642 | 0.823 |
+
+    At the reference bandwidths the two estimates share under half their
+    variance at vertex resolution (r = 0.68). The regional masses agree far
+    better (0.92). Agreement peaks at kappa = 6.07, three times the reference
+    value, and falls on either side. So the two kernels still differ
+    substantially at vertex resolution at the bandwidths anyone would use,
+    which makes recording which one produced a file more important, not less.
+
+    For the record, the earlier comparison against the released file, over
+    the strict upper triangle it stores:
 
     | kappa | r |
     | --- | --- |
@@ -271,11 +306,9 @@ where `src/sbci/spec.py` currently carries a **provisional** value, marked
     | 12.953 | 0.573 |
     | 18.920 | 0.517 |
 
-    The rise and fall is the same blur ceiling PORTING.md item 6 describes:
+    Its rise and fall is the blur ceiling PORTING.md item 6 describes:
     agreement peaks well past the working bandwidth, where both matrices have
-    been smoothed into near-uniformity. So the two kernels disagree
-    substantially at the bandwidths anyone would use, which makes recording
-    which one produced a file more important, not less.
+    been smoothed into near-uniformity.
 
     **The decision:** both ship, the kernel used is recorded in the metadata,
     and the spherical heat kernel is the default. Consequences:

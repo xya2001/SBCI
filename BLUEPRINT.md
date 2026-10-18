@@ -456,9 +456,10 @@ weight `(2l+1)^(3/2)/sqrt(4 pi)`, compact support (PORTING.md item 6); it
 produced every released cohort. The
 **Riemannian diffusion kernel** (Wang, Li and Zhang, *Imaging Neuroscience* 3, 2025, doi:10.1162/imag.a.912) uses
 Laplace–Beltrami eigenfunctions on the cortical surface itself and argues that
-the spherical projection distorts the estimate. At the reference bandwidth
-they agree at only r = 0.29 (SPEC_QUESTIONS.md item 10): the difference the
-newer paper is about.
+the spherical projection distorts the estimate. From the same streamline
+endpoints, at the reference bandwidths, they agree at only r = 0.68 over the
+cortical vertex pairs (SPEC_QUESTIONS.md item 10): the difference the newer
+paper is about.
 
 That the two really are different geometries has been confirmed rather than
 assumed. The shipped eigenpairs were checked against both candidate surfaces:
