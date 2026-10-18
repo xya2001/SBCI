@@ -4822,6 +4822,88 @@ Longleaf, so nothing of them is lost, and the commit ids these notes cite name c
 that history. Version 1.0 of the dataset on UNC Dataverse installs the package at one of
 them, 53eacc0; a later version's README would name the commit that holds the code now.
 
+## 34. The paper's panel D from the test at every vertex, 17 October 2026 -- 433 VERTICES BESIDE 15 REGIONS; NOT HEAD SIZE LEFT OVER, IN WOMEN AND MEN MATCHED ON IT
+
+The review of item 33 found that the effect map over three FPCA components, which the
+paper's Figure 1D showed, describes those components and not where women and men differ.
+Asked for a panel D drawn from the test at every vertex, with the regional test beside it
+and the literature checked, the lead drew it outside the repository (the paper's figure)
+and ran the checks the literature uses for head size. This item records the numbers.
+
+### The test at every vertex and at every region
+
+The vertex test is item 33's, as docs/RESULTS.md reports it: each cortical vertex's
+connectivity strength among the 943 (`probe_pmat24.npz`, from `tools/age_probe.py`), sex
+given fluid intelligence, age band, streamline count and intracranial volume, families as
+clusters, FDR 0.05. It finds 433 of 4,685 vertices, 214 on the left and 219 on the right,
+327 higher in women, with partial correlations from 0.089 to 0.261 in magnitude. The same
+test on the 68 Desikan-Killiany regions, each region's strength the area-weighted mean of
+its vertices', finds 15 regions, 9 higher in women and 6 in men, the strongest the right
+insula (partial r +0.231), then the right parahippocampal gyrus (+0.140) and the left
+insula (+0.133); 15 with the logarithm of the volume, 12 without the twelve implausible
+volumes (440 and 420 vertices).
+
+| What the regional test does with the vertices' differences | Regions |
+| --- | --- |
+| misses them, where 5 or more of a region's vertices differ | 16, among them the left fusiform (21 vertices) and the left superior parietal (17) |
+| averages over vertices that differ in both directions | 9: both lingual gyri, both precentral gyri, both superior temporal gyri, the left postcentral, the right fusiform and the right pars opercularis |
+| finds an effect few of the region's vertices show | the right inferior parietal (3 of 149 vertices), the left banks of the superior temporal sulcus (1 of 35), the right cuneus (6 of 25) and the right frontal pole (4 of 6) |
+
+### Head size, the way the literature checks it
+
+The studies that compared women and men of matched brain size are the literature's caution
+on such a result, so the checks they use were run (`r7_sex_size.py`):
+
+| Model | Vertices at FDR 0.05 | Higher in women | In the insula |
+| --- | --- | --- | --- |
+| intracranial volume linear, as drawn | 433 | 327 | 90 |
+| intracranial volume cubic | 411 | 318 | 93 |
+| 187 women and 187 men matched on it, 1.589 L on average in both | 186 | 152 | 66 |
+| without streamline count, 5.5% lower in women (r = -0.32 with being a woman) | 485 | 297 | |
+| without fluid intelligence | 427 | 324 | |
+| without either | 489 | 302 | |
+
+- In the matched sample every one of the 433 vertices keeps its sign, its partial r
+  correlates with the whole sample's at 0.984 over them (0.933 over the cortex), and the
+  effects grow: a median magnitude of 0.155 against 0.117. Twenty samples of the same size
+  drawn without matching give 0.101 to 0.134, so the growth is not the smaller sample's.
+  If the difference were head size left over, matching would shrink it.
+- Within each sex, strength at the women-higher vertices does not fall with head size
+  (median partial r +0.021 among women, +0.009 among men), so women's smaller heads do not
+  explain why they are higher there. At the men-higher vertices it falls (-0.042 and
+  -0.046), against the direction a size effect would give men.
+- Without streamline count the map keeps its shape (r = 0.92 with the model drawn), and the
+  women-higher share falls from 76% to 61%: the majority holds, the balance depends on that
+  covariate. Fluid intelligence changes nothing (r = 1.000).
+
+### The literature
+
+Read for this item, by an agent and then by the user's own review of it, which corrected two
+of the agent's readings:
+- Moyer et al. 2017 (Medical Image Analysis) is the closest comparison: the same per-vertex
+  measure on 731 HCP subjects with intracranial volume in the model, left prefrontal and
+  anterior cingulate clusters higher in women. It draws on the same cohort.
+- Szalkai et al. 2018 (Brain Imaging and Behavior) supports the matched result: 36 women with
+  larger brains than any of 36 men keep, in its abstract's words, "the significant, deep
+  connectivity advantages" in numerous parameters. The agent had listed it as a conflict.
+- Hänggi et al. 2014 is about the balance of within- and between-hemisphere connectivity,
+  which follows brain size; it does not test total strength. The agent had listed it as a
+  conflict too.
+- Eliot et al. 2021 find no consistent structural pattern across studies.
+- Grey matter: Ruigrok et al. 2014 and Lotze et al. 2019 disagree on the insula, and Lotze
+  et al. 2019, Liu et al. 2020 and Williams et al. 2021 find the fusiform and
+  parahippocampal gyri larger in men, where the connectivity here is higher in women.
+- Gong et al. 2009 and Duarte-Carvajalino et al. 2012 could not be read in full, and their
+  abstracts name neither the insula nor how brain size was handled, so they are not cited.
+
+### Verified
+
+The numbers are the logs of jobs 5424182 (the vertex and regional tests, region by region,
+drawn at d7fd23c) and 5426385 (the head-size and covariate checks), in
+`/work/users/x/y/xya/paper-fig1/` with their scripts (`fig1_data_vertex.py`,
+`fig1_render_vertex.py`, `fig1_compose_vertex.py`, `r7_sex_size.py`). The vertex test
+reproduces item 33's 433 vertices, 327 higher in women. Only documents change here.
+
 ## Status
 
 All seven ports are done and verified, and the reviews of 5 to 7 October
@@ -4848,7 +4930,9 @@ and USAGE runs on the public data (item 31); and head size is in the cohort's mo
 sex shows in 3 components rather than 13, in the right cuneus (item 32); and a review of
 every claim found fluid intelligence in no vertex once the covariates are in, sex at 433
 vertices, mostly higher in women, elsewhere than the components' effect map, and
-family-based results beside HCP ids, all of it fixed (item 33). What is left: the
+family-based results beside HCP ids, all of it fixed (item 33); and the paper's panel D,
+drawn from the test at every vertex, holds in women and men matched on head size (item 34).
+What is left: the
 decisions item 33 leaves the user (what panel D of the paper shows, and whether the ADNI
 subjects may stay in the MATLAB comparisons); a version of the dataset whose README names
 the commit that holds the code now, and GitHub's removal of the commits before it (item 33,

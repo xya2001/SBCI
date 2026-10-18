@@ -168,7 +168,17 @@ the volume, 420 without the twelve, 402 among the 913 with motion in the model,
 it, with 761 Desikan pairs. Of the 433, 327 have connectivity higher in women;
 they split evenly between the hemispheres (214 left, 219 right), and the
 largest share lies in the insula (57 vertices on the right, 33 on the left),
-followed by the left superior frontal and fusiform cortex (21 each).
+followed by the left superior frontal and fusiform cortex (21 each). It is not
+head size left over. In 187 women and 187 men matched on intracranial volume,
+186 vertices still differ, every one of the 433 keeps its sign, and the effects
+grow: their partial correlations reach a median magnitude of 0.155, against
+0.101 to 0.134 in unmatched samples of the same size. With head size as a
+cubic, 411 differ.
+Without streamline count in the model, 485 differ, 297 of them higher in women.
+Tested on the 68 Desikan-Killiany regions instead, each region's strength the
+area-weighted mean of its vertices', sex shows in 15 regions, the right insula
+the strongest, and misses the vertices' differences in 16 others, among them
+the left fusiform's 21 (PORTING.md item 34).
 
 The effect map below shows something narrower: the fitted difference carried
 by the three components that pass. Over the three it peaks in the right
