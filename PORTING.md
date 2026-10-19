@@ -4992,8 +4992,10 @@ What the tables show:
 - **The anterior cingulum is the exception.** The two are level there and neither gains
   much, as the ConSEAL paper reports.
 - **Dice and the vertex-wise measures.** Connection-wise Dice tells the same story. The
-  vertex-wise measures do too, with gains of 0.4 to 1.2 points: Dice from 0.623 to 0.629
-  (ENCORE) and 0.632 (ConSEAL) for MdLF, from 0.747 to 0.753 and 0.759 for SLF.
+  vertex-wise measures rise less, by 0.1 to 1.4 points: Dice from 0.623 to 0.629 (ENCORE)
+  and 0.632 (ConSEAL) for MdLF, from 0.747 to 0.753 and 0.759 for SLF. On them ENCORE leads
+  ConSEAL for the anterior cingulum: vertex-wise Dice 0.741 against 0.734, a difference of
+  -0.007 (-0.012, -0.003); on `run.m`'s 50, 0.734 against 0.728.
 
 ### Verified
 
