@@ -4968,13 +4968,25 @@ interval of each change comes from resampling subjects.
 | --- | --- | --- | --- | --- | --- | --- |
 | MdLF | 0.236 | 0.239 | 0.252 | +0.003 (-0.004, 0.010) | +0.016 (0.007, 0.025) | +0.013 (0.007, 0.019) |
 | ILF | 0.506 | 0.528 | 0.530 | +0.021 (0.015, 0.028) | +0.024 (0.014, 0.033) | +0.003 (-0.003, 0.008) |
-| SLF | 0.310 | 0.329 | 0.354 | +0.019 (0.015, 0.025) | +0.043 (0.037, 0.051) | +0.024 (0.020, 0.028) |
+| SLF | 0.310 | 0.329 | 0.354 | +0.019 (0.015, 0.025) | +0.043 (0.037, 0.050) | +0.024 (0.020, 0.028) |
 | FAT | 0.486 | 0.529 | 0.535 | +0.043 (0.029, 0.058) | +0.050 (0.032, 0.068) | +0.007 (0.000, 0.013) |
-| anterior cingulum | 0.307 | 0.316 | 0.314 | +0.008 (0.002, 0.015) | +0.007 (-0.001, 0.015) | -0.002 (-0.007, 0.003) |
+| anterior cingulum | 0.307 | 0.315 | 0.314 | +0.008 (0.002, 0.015) | +0.007 (-0.001, 0.015) | -0.002 (-0.007, 0.003) |
 
-What the table shows:
+`run.m`'s own 50 are the 49 shared and one more. That subject was registered onto the same two
+templates (ENCORE in 14 steps, ConSEAL in 383 iterations; job 5588909). On those 50 the
+coefficient moves by at most 0.004 (job 5602148):
+
+| Bundle | no alignment | ENCORE | ConSEAL | ENCORE - none | ConSEAL - none | ConSEAL - ENCORE |
+| --- | --- | --- | --- | --- | --- | --- |
+| MdLF | 0.236 | 0.239 | 0.252 | +0.003 (-0.004, 0.010) | +0.016 (0.007, 0.026) | +0.013 (0.008, 0.019) |
+| ILF | 0.504 | 0.525 | 0.529 | +0.021 (0.015, 0.028) | +0.025 (0.015, 0.034) | +0.003 (-0.002, 0.009) |
+| SLF | 0.312 | 0.332 | 0.358 | +0.020 (0.015, 0.026) | +0.045 (0.038, 0.053) | +0.025 (0.021, 0.029) |
+| FAT | 0.485 | 0.528 | 0.535 | +0.043 (0.030, 0.058) | +0.050 (0.033, 0.069) | +0.007 (0.000, 0.013) |
+| anterior cingulum | 0.304 | 0.312 | 0.311 | +0.008 (0.002, 0.015) | +0.007 (-0.001, 0.015) | -0.001 (-0.006, 0.004) |
+
+What the tables show:
 - **Both methods raise the overlap.** ConSEAL raises it in 58% (anterior cingulum) to 95%
-  (SLF) of pairs, and ENCORE in 56% to 85%.
+  (SLF) of pairs, and ENCORE in 56% to 85% (57% to 85% on `run.m`'s 50).
 - **ConSEAL is the more for three bundles.** It leads ENCORE significantly for MdLF, SLF and
   FAT. ILF is level.
 - **The anterior cingulum is the exception.** The two are level there and neither gains
@@ -4989,6 +5001,8 @@ What the table shows:
 - 5563502: the vertex-wise check;
 - 5588961: the connection-wise check and the lab's 50;
 - 5566179: the vertex-wise measures;
+- 5588909: `run.m`'s extra subject registered;
+- 5602148: `run.m`'s 50, both measures;
 - 5600812: the references regenerated, the new tests, ruff.
 
 **The suite with the change** (job 5608993, an AMD EPYC 7713 node):
