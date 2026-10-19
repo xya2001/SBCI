@@ -4904,6 +4904,103 @@ drawn at d7fd23c) and 5426385 (the head-size and covariate checks), in
 `fig1_render_vertex.py`, `fig1_compose_vertex.py`, `r7_sex_size.py`). The vertex test
 reproduces item 33's 433 vertices, 327 higher in women. Only documents change here.
 
+## 35. The overlap of bundles after alignment, 18 October 2026 -- CONNECTION-WISE, AS THE CONSEAL PAPER MEASURES IT; BOTH METHODS RAISE IT, CONSEAL THE MORE OUTSIDE THE ANTERIOR CINGULUM
+
+Asked whether the overlap of fibre bundles had been measured after alignment, the lead
+measured it with the package's own registrations. The first answer used the vertex-wise
+overlap coefficient: `overlap_coefficient`, ported from the public `get_overlap_coefficient.m`
+(item 7), whose header calls it connectivity-level though its code counts vertices. The user
+pointed out that the ConSEAL paper's coefficient is connection-wise: `get_connectivity_dice.m`
+in the author's evaluation folder, as `Encore/experiments/run.m` calls it, with threshold 0
+and `use_symmetricDice` false. Both are now in the package and checked against the MATLAB.
+
+### What was added
+
+`connection_overlap(first, second, threshold=0.0)` and `connection_dice` in `sbci.conseal`.
+- **The set.** Each streamline gives the vertex pairs of its two endpoints' triangles the
+  products of their barycentric weights. The matrix is symmetrized and divided by the
+  number of streamlines: `EndpointConnectome.adjacency`, the matrix ConSEAL smooths. The
+  pairs above the threshold form the set, each pair counted in both orders, as in the
+  MATLAB's full matrix.
+- **The two measures.** The overlap coefficient is `|X & Y| / min(|X|, |Y|)`, and Dice is
+  `2 |X & Y| / (|X| + |Y|)`.
+- **Empty sets.** Two empty sets score 1 and one empty set 0, as the MATLAB has it.
+- **Threshold.** A negative or non-finite threshold is refused.
+- **The vertex-wise functions.** `overlap_coefficient` and `dice_score` now say they are
+  vertex-wise.
+
+Tests:
+- **`tests/test_conseal.py`**, three new tests, and the identity test extended to both
+  measures:
+  - streamlines from vertex to vertex, whose pairs can be counted by hand;
+  - an independent count from the dense adjacency at three thresholds;
+  - the empty sets and the refused thresholds, in one test.
+- **`tests/test_matlab_reference.py`**, two, on two subjects' MdLF from the released files
+  (`tests/reference/overlap_inputs.py`, `overlap_reference.m`):
+  - vertex-wise to 12 decimals at three thresholds, the endpoint masses to 2.4e-6 of the
+    largest, on the same vertices;
+  - connection-wise exactly: 11,290 and 14,416 pairs, 1,670 shared, overlap coefficient
+    0.147918511957, Dice 0.129930755466.
+
+### The analysis
+
+**Setup:** the lab's ENCORE bundle evaluation
+(`/overflow/zzhanglab/encore_project/encore_dice_scores/get_dice_scores.m`):
+- **Bundles.** RecoBundles, left and right pooled: MdLF, ILF, SLF, FAT and the anterior
+  cingulum.
+- **Subjects.** 50 subjects, the 2nd to 51st of its sorted list. `run.m` takes the first
+  50, so it shares 49 of them and adds one.
+- **Streamlines.** A released SC file keeps, in order, the streamlines of
+  `snapped_fibers.npz` with both ends on the white surfaces. These are exactly the streamlines
+  the lab's intersection files list, so a bundle is the SC streamlines RecoBundles listed.
+- **Registrations.** Both methods at their defaults, onto templates of the 50, on the CPU.
+  ENCORE took 8–46 steps (cost down 14–34%). ConSEAL took 92–487 iterations (cost down
+  20–44%), refusing folding steps in six subjects.
+- **Endpoints after ENCORE.** They go through the inverse warp, since USAGE says ENCORE's warp
+  is a pull-back. Re-smoothed, they reproduce ENCORE's own registered density at r = 0.993,
+  against 0.95 unmoved and 0.87 through the warp itself.
+- **Endpoints after ConSEAL.** Taken as ConSEAL moved them.
+
+The connection-wise overlap coefficient, threshold 0, mean over the 1,225 pairs. The 95%
+interval of each change comes from resampling subjects.
+
+| Bundle | no alignment | ENCORE | ConSEAL | ENCORE - none | ConSEAL - none | ConSEAL - ENCORE |
+| --- | --- | --- | --- | --- | --- | --- |
+| MdLF | 0.236 | 0.239 | 0.252 | +0.003 (-0.004, 0.010) | +0.016 (0.007, 0.025) | +0.013 (0.007, 0.019) |
+| ILF | 0.506 | 0.528 | 0.530 | +0.021 (0.015, 0.028) | +0.024 (0.014, 0.033) | +0.003 (-0.003, 0.008) |
+| SLF | 0.310 | 0.329 | 0.354 | +0.019 (0.015, 0.025) | +0.043 (0.037, 0.051) | +0.024 (0.020, 0.028) |
+| FAT | 0.486 | 0.529 | 0.535 | +0.043 (0.029, 0.058) | +0.050 (0.032, 0.068) | +0.007 (0.000, 0.013) |
+| anterior cingulum | 0.307 | 0.316 | 0.314 | +0.008 (0.002, 0.015) | +0.007 (-0.001, 0.015) | -0.002 (-0.007, 0.003) |
+
+What the table shows:
+- **Both methods raise the overlap.** ConSEAL raises it in 58% (anterior cingulum) to 95%
+  (SLF) of pairs, and ENCORE in 56% to 85%.
+- **ConSEAL is the more for three bundles.** It leads ENCORE significantly for MdLF, SLF and
+  FAT. ILF is level.
+- **The anterior cingulum is the exception.** The two are level there and neither gains
+  much, as the ConSEAL paper reports.
+- **Dice and the vertex-wise measures.** Connection-wise Dice tells the same story. The
+  vertex-wise measures do too, with gains of 0.4 to 1.2 points: Dice from 0.623 to 0.629
+  (ENCORE) and 0.632 (ConSEAL) for MdLF, from 0.747 to 0.753 and 0.759 for SLF.
+
+### Verified
+
+**Jobs** (the scripts in `/work/users/x/y/xya/paper-open-items/dice/scripts/`):
+- 5563502: the vertex-wise check;
+- 5588961: the connection-wise check and the lab's 50;
+- 5566179: the vertex-wise measures;
+- 5600812: the references regenerated, the new tests, ruff.
+
+**The suite with the change** (job 5608993, an AMD EPYC 7713 node):
+- 1,370 tests pass with 48 skipped on the released subjects;
+- 1,367 pass with 51 skipped as a fresh clone has it;
+- the difference from item 34's counts is the five new tests, and one test that item 34's
+  runs skipped and that runs today. 7bf26e8 skips exactly the same tests in today's
+  environment (job 5619247);
+- `ruff check` and `ruff format --check` pass.
+
+Only the two functions, their tests and the documents change here.
+
 ## Status
 
 All seven ports are done and verified, and the reviews of 5 to 7 October
@@ -4931,7 +5028,9 @@ sex shows in 3 components rather than 13, in the right cuneus (item 32); and a r
 every claim found fluid intelligence in no vertex once the covariates are in, sex at 433
 vertices, mostly higher in women, elsewhere than the components' effect map, and
 family-based results beside HCP ids, all of it fixed (item 33); and the paper's panel D,
-drawn from the test at every vertex, holds in women and men matched on head size (item 34).
+drawn from the test at every vertex, holds in women and men matched on head size (item 34);
+and the overlap of bundles after alignment, connection-wise as the ConSEAL paper measures it,
+is in the package, agrees with the MATLAB exactly, and rises under both methods (item 35).
 What is left: the
 decisions item 33 leaves the user (what panel D of the paper shows, and whether the ADNI
 subjects may stay in the MATLAB comparisons); a version of the dataset whose README names

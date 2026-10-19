@@ -27,6 +27,8 @@ from sbci.conseal import (
     HeatKernelBuilder,
     StationaryWarp,
     _legendre_with_derivative,
+    connection_dice,
+    connection_overlap,
     cotangent_laplacian,
     default_grids,
     dice_score,
@@ -717,6 +719,61 @@ def test_the_overlap_metrics_are_one_for_identical_endpoints(connectome):
     assert overlap_coefficient(connectome, connectome, 1e-4) == 1.0
     assert dice_score(connectome, connectome, 1e-4) == 1.0
     assert np.isclose(endpoint_mass(connectome).sum(), 1.0)
+    assert connection_overlap(connectome, connectome) == 1.0
+    assert connection_dice(connectome, connectome) == 1.0
+
+
+def test_the_connection_metrics_count_vertex_pairs(grid):
+    """Streamlines from vertex to vertex join one pair each, counted in both orders."""
+
+    def joining(pairs, hemisphere=0):
+        flags = np.full(len(pairs), hemisphere)
+        return EndpointConnectome.from_points(
+            grid,
+            grid,
+            grid.vertices[[a for a, _ in pairs]],
+            grid.vertices[[b for _, b in pairs]],
+            flags,
+            flags,
+        )
+
+    # a threshold above the rounding a point placed on a vertex leaves on the other two weights
+    one, two = joining([(0, 5)]), joining([(0, 5), (1, 6)])
+    assert connection_overlap(one, two, 1e-9) == 1.0  # the one pair is among the two
+    assert connection_dice(one, two, 1e-9) == pytest.approx(2 * 2 / (2 + 4))
+    assert connection_overlap(one, joining([(2, 7)]), 1e-9) == 0.0
+    # the same vertices in the other hemisphere are other vertices of the whole grid
+    assert connection_overlap(one, joining([(0, 5)], hemisphere=1), 1e-9) == 0.0
+    # a pair's two orders are one connection: a streamline the other way round matches
+    assert connection_dice(one, joining([(5, 0)]), 1e-9) == 1.0
+
+
+def test_the_connection_metrics_threshold_the_adjacency(grid, connectome):
+    """Counted from the dense adjacency independently, as get_connectivity_dice.m counts them."""
+    other = EndpointConnectome.from_points(
+        grid, grid, *synthetic(np.random.default_rng(11), n=900, jitter=0.15)
+    )
+    for threshold in (0.0, 1e-5, 1e-4):
+        x, y = connectome.adjacency() > threshold, other.adjacency() > threshold
+        shared = np.count_nonzero(x & y)
+        assert connection_overlap(connectome, other, threshold) == pytest.approx(
+            shared / min(np.count_nonzero(x), np.count_nonzero(y)), abs=1e-15
+        )
+        assert connection_dice(connectome, other, threshold) == pytest.approx(
+            2 * shared / (np.count_nonzero(x) + np.count_nonzero(y)), abs=1e-15
+        )
+
+
+def test_the_connection_metrics_handle_empty_sets_and_refuse_a_negative_threshold(grid, connectome):
+    nothing = EndpointConnectome.from_points(
+        grid, grid, np.empty((0, 3)), np.empty((0, 3)), np.empty(0, int), np.empty(0, int)
+    )
+    assert connection_overlap(nothing, nothing) == 1.0 == connection_dice(nothing, nothing)
+    assert connection_overlap(connectome, nothing) == 0.0 == connection_dice(nothing, connectome)
+    with pytest.raises(ValueError, match="0 or more"):
+        connection_overlap(connectome, connectome, -1e-9)
+    with pytest.raises(ValueError, match="0 or more"):
+        connection_dice(connectome, connectome, float("nan"))
 
 
 def test_cotangent_weights_use_the_angle_opposite_the_edge():

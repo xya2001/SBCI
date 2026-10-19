@@ -307,6 +307,8 @@ matlab -batch "run('fpca_reference.m')"        # ConConBasis.Fit
 matlab -batch "run('fpca_fixed_point.m')"      # the same, run to its fixed point
 matlab -batch "run('conseal_reference.m')"     # ConSEAL on a synthetic ico4 example
 python conseal_compare.py PATH/conseal_reference.mat  # the dump just written: the ConSEAL row below
+python overlap_inputs.py                        # two subjects' bundles, from the released files
+matlab -batch "run('overlap_reference.m')"     # the overlap of the two, vertex- and connection-wise
 cd ../..
 
 export SBCI_TOOLKIT=... SBCI_MATLAB_REFERENCE=... SBCI_ENCORE_REFERENCE=... SBCI_FPCA_REFERENCE=...
@@ -316,7 +318,7 @@ python tools/import_legacy.py --subject example --out derivatives \
     --endpoints $EXAMPLE/SBCI_Individual_Subject_Outcome/mesh_intersections_ico4.mat \
     --mapping $EXAMPLE/fsaverage_label/mapping_avg_ico4.npz
 export SBCI_EXAMPLE_SC=derivatives SBCI_DERIVATIVES=derivatives
-python -m pytest tests/test_matlab_reference.py -v    # expect 21 passed
+python -m pytest tests/test_matlab_reference.py -v    # expect 23 passed
 ```
 
 The scripts name the lab's directories on Longleaf at their tops -- the
@@ -339,6 +341,8 @@ Expected agreement, and what to reject:
 | `reduce` | 1e-15 on every component at the reference's fixed point; at its default tolerance the first vector to 2e-16, with that vector's scores (item 11 below) | worse than 1e-12 |
 | `align` geometry, basis and divergence, template, warp composition | 0.5 to 44 float64-eps, the basis and divergence with the reference's two errors put back | worse than 1e-12 |
 | `align` Jacobian, `evaluate`, `evaluate_root` | 4.9e-4, 7.1e-4, 5.4e-4: inside the reference's own instability at its 1e-10 step (item 4 below) | worse than 1e-2 |
+| `dice_score`, `overlap_coefficient` (vertex-wise) | to 12 decimals on two subjects' MdLF at thresholds 0, 1e-6 and 1e-4; the endpoint masses to 2.4e-6 of the largest, on the same vertices | worse than 1e-12 |
+| `connection_overlap`, `connection_dice` (connection-wise) | exact: the same vertex pairs (11,290 and 14,416, 1,670 shared) and the same values | any count that differs |
 
 The references' errors matter. They carry eight mathematical errors (items 5
 to 12 below) that the port shared until October 2026, and the port now

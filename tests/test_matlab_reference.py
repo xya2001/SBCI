@@ -685,3 +685,74 @@ def test_reduction_matches_matlab_at_its_default_tolerance(fpca_reference):
     assert np.abs(reference["Smat"][:, 0] - own).max() > 1e-6  # what the reference recorded
     for k in range(1, reference["K"]):
         assert _differs(result.basis[:, k], reference["basis"][:, k]) < 1e-3, f"component {k + 1}"
+
+
+# --- the overlap of bundles: tests/reference/overlap_inputs.py, overlap_reference.m -------------
+
+
+@pytest.fixture(scope="module")
+def overlap_reference():
+    """Two subjects' MdLF endpoints, and what the MATLAB overlap functions made of them."""
+    import scipy.io as sio
+
+    folder = REFERENCE / "overlap"
+    files = [
+        folder / f"{name}.mat"
+        for name in ("overlap_inputs", "vertex_overlap", "connection_overlap")
+    ]
+    _require(*files)
+    return [sio.loadmat(path) for path in files]
+
+
+def _bundle_connectomes(given):
+    from sbci.conseal import EndpointConnectome, default_grids
+
+    lh_grid, rh_grid = default_grids()
+    made = []
+    for key in ("X", "Y"):
+        record = given[key][0, 0]
+        made.append(
+            EndpointConnectome.from_points(
+                lh_grid,
+                rh_grid,
+                record["st_points"],
+                record["en_points"],
+                record["st_hemi"].ravel().astype(int),
+                record["en_hemi"].ravel().astype(int),
+            )
+        )
+    return made
+
+
+def test_vertex_overlap_matches_matlab(overlap_reference):
+    """get_dice_score.m and get_overlap_coefficient.m, at three thresholds, on real bundles."""
+    from sbci.conseal import dice_score, endpoint_mass, overlap_coefficient
+
+    given, expected, _ = overlap_reference
+    first, second = _bundle_connectomes(given)
+    for k, threshold in enumerate(expected["thresholds"].ravel()):
+        assert dice_score(first, second, threshold) == pytest.approx(
+            expected["dice"].ravel()[k], abs=1e-12
+        )
+        assert overlap_coefficient(first, second, threshold) == pytest.approx(
+            expected["overlap"].ravel()[k], abs=1e-12
+        )
+    # the masses differ only by the two point locators' barycentric coordinates
+    for mine, theirs in zip((first, second), (expected["x_mass"], expected["y_mass"]), strict=True):
+        theirs = theirs.ravel()
+        assert np.abs(endpoint_mass(mine) - theirs).max() < 1e-5 * theirs.max()
+        assert np.array_equal(endpoint_mass(mine) > 0, theirs > 0)
+
+
+def test_connection_overlap_matches_matlab(overlap_reference):
+    """get_connectivity_dice.m, as the ConSEAL paper's bundle evaluation calls it (threshold 0)."""
+    from sbci.conseal import _connection_counts, connection_dice, connection_overlap
+
+    given, _, expected = overlap_reference
+    first, second = _bundle_connectomes(given)
+    counts = tuple(int(expected[name].ravel()[0]) for name in ("nx", "ny", "shared"))
+    assert _connection_counts(first, second, 0.0) == counts
+    assert connection_overlap(first, second) == pytest.approx(
+        expected["overlap"].ravel()[0], abs=1e-12
+    )
+    assert connection_dice(first, second) == pytest.approx(expected["dice"].ravel()[0], abs=1e-12)

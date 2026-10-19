@@ -2038,17 +2038,75 @@ def endpoint_mass(connectome: EndpointConnectome) -> np.ndarray:
 
 
 def overlap_coefficient(first: EndpointConnectome, second: EndpointConnectome, threshold: float):
-    """``|X & Y| / min(|X|, |Y|)`` over vertices whose endpoint density exceeds ``threshold``."""
+    """``|X & Y| / min(|X|, |Y|)`` over vertices whose endpoint density exceeds ``threshold``.
+
+    Vertex-wise: which vertices the endpoints touch, not which pairs of vertices the
+    streamlines join; :func:`connection_overlap` is the connection-wise coefficient.
+    """
     x = endpoint_mass(first) > threshold
     y = endpoint_mass(second) > threshold
     return float((x & y).sum() / max(min(x.sum(), y.sum()), 1))
 
 
 def dice_score(first: EndpointConnectome, second: EndpointConnectome, threshold: float) -> float:
-    """``2 |X & Y| / (|X| + |Y|)`` over vertices whose endpoint density exceeds ``threshold``."""
+    """``2 |X & Y| / (|X| + |Y|)`` over vertices whose endpoint density exceeds ``threshold``.
+
+    Vertex-wise, as :func:`overlap_coefficient`; :func:`connection_dice` is connection-wise.
+    """
     x = endpoint_mass(first) > threshold
     y = endpoint_mass(second) > threshold
     return float(2 * (x & y).sum() / max(x.sum() + y.sum(), 1))
+
+
+def _connection_counts(first: EndpointConnectome, second: EndpointConnectome, threshold: float):
+    """How many vertex pairs each connectome joins above ``threshold``, and how many both join.
+
+    A pair counts in both orders, and a vertex with itself once, as in the full symmetric
+    matrix. The adjacency is :meth:`EndpointConnectome.adjacency`, taken on the CPU.
+    """
+    threshold = float(threshold)
+    if not (np.isfinite(threshold) and threshold >= 0):
+        raise ValueError(f"threshold must be finite and 0 or more, got {threshold}")
+    sets = []
+    for connectome in (first, second):
+        if connectome.device != "cpu":
+            connectome = connectome._to_device("cpu")
+        sets.append(connectome._sparse_adjacency() > threshold)
+    x, y = sets
+    return int(x.count_nonzero()), int(y.count_nonzero()), int(x.multiply(y).count_nonzero())
+
+
+def connection_overlap(
+    first: EndpointConnectome, second: EndpointConnectome, threshold: float = 0.0
+) -> float:
+    """``|X & Y| / min(|X|, |Y|)`` over the vertex pairs the streamlines join above ``threshold``.
+
+    Connection-wise, where :func:`overlap_coefficient` is vertex-wise: each streamline gives
+    the vertex pairs of its two endpoints' triangles the products of their barycentric
+    weights, the matrix is symmetrized and divided by the number of streamlines
+    (:meth:`EndpointConnectome.adjacency`, what ConSEAL smooths), and a pair belongs to a
+    connectome's set where that exceeds ``threshold``. Two sets that are both empty overlap
+    fully (1), and one empty set not at all (0). With ``threshold=0``, this is the overlap of
+    bundles the ConSEAL paper reports.
+    """
+    nx, ny, shared = _connection_counts(first, second, threshold)
+    if nx == 0 and ny == 0:
+        return 1.0
+    if nx == 0 or ny == 0:
+        return 0.0
+    return shared / min(nx, ny)
+
+
+def connection_dice(
+    first: EndpointConnectome, second: EndpointConnectome, threshold: float = 0.0
+) -> float:
+    """``2 |X & Y| / (|X| + |Y|)`` over the vertex pairs of :func:`connection_overlap`."""
+    nx, ny, shared = _connection_counts(first, second, threshold)
+    if nx == 0 and ny == 0:
+        return 1.0
+    if nx == 0 or ny == 0:
+        return 0.0
+    return 2 * shared / (nx + ny)
 
 
 # --- the public entry point ---------------------------------------------------------
