@@ -18,9 +18,10 @@ python scripts/hcp_figures.py hcp-ya docs/figures --anatomy PIPELINE/SUBJECT
 which needs the plotting extra, and the render extra for PyVista.
 `--anatomy` names the tutorial subject's pipeline directory, for the FreeSurfer sulcal
 depth and registered spheres the warp-migration figure reads; without it that
-figure is skipped. The set takes about three hours on eight cores, most of
+figure is skipped. The set took about three hours on eight cores, most of
 it ConSEAL registering eleven subjects with 734,039 to 988,788 streamlines
-each; on a cluster, run it in a batch job. `--device gpu` registers the
+each, until PORTING.md item 36 about halved ConSEAL's time; on a cluster, run
+it in a batch job. `--device gpu` registers the
 cohort on a CUDA GPU instead (USAGE.md, *Running the alignments on a GPU*):
 on a V100 ENCORE takes 48 s and ConSEAL 6.6 minutes, to the same figure. `scripts/make_figures.py`
 draws the same set from the synthetic example, as a smoke test of the figure

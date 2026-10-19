@@ -379,7 +379,8 @@ until then this figure registered ConSEAL onto that mean instead, reaching
 0.785. Eleven
 subjects with 734,039 to 988,788 streamlines each take 13 minutes with ENCORE
 and two hours with ConSEAL on eight cores of an AMD EPYC 7713 node, ENCORE's
-template taking its steps until they are short (PORTING.md item 25).
+template taking its steps until they are short (PORTING.md item 25); item 36
+has since about halved ConSEAL's time on the CPU.
 
 ![Aligning the eleven subjects](figures/cohort_alignment.png)
 

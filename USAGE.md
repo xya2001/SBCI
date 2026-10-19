@@ -1101,12 +1101,17 @@ the default bandwidth has 32 nonzeros per row on ico4, about the 31 the `shk`
 smoother visits, so an iteration costs seconds per 100,000 streamlines rather
 than minutes: about 12 seconds for a whole subject of 803,741 streamlines on
 eight cores of an AMD EPYC 75F3 at the public code's bandwidth, four fifths of
-it locating the moved endpoints on the grid again (PORTING.md item 19). At the defaults a whole
-subject took 76 to 155 iterations, 15 to 42 minutes on eight cores, to undo a
-known warp in PORTING.md item 19's runs, and 171 iterations onto another
-subject; `max_iterations` caps it. At the defaults a GPU takes an iteration
-from 24 s on eight cores of an older processor, the Intel Xeon Gold 6148 of a
-V100 node, to 1.4 s (*Running the alignments on a GPU*). Six things to know:
+it locating the moved endpoints on the grid again (PORTING.md item 19). That
+search ran on one core until item 36 shared it among the cores, with the same
+bits: a whole registration now takes about half the time on eight cores, 7 to
+8 s an iteration on an AMD EPYC 7702 and about 5 on an EPYC 9654. Real subjects take more iterations than
+the known warps item 19 undid in 76 to 155: 148 whole registrations at the
+defaults, onto a template or onto one subject, took 49 to 489 iterations, 11
+minutes to 3.5 hours on eight cores before item 36; `max_iterations` caps it.
+A registration holds up to 4.6 GiB, so a cohort runs well as one registration
+a task. A V100 takes an iteration in about 1.2 s, with the CPU's iterations
+and its costs to six decimals (*Running the alignments on a GPU*). Six things
+to know:
 - **The defaults are the paper's step and threshold, with the iteration cap
   and kernel width of the authors' code.** Step 0.1 and threshold 1e-6, as
   the paper states; up to 1000 iterations, with no clamp and no smoothing of
@@ -1278,22 +1283,26 @@ gives the same bits.
 
 **How fast.** On two of the released subjects, against eight cores of the
 same node, an Intel Xeon Gold 6148 (`tests/reference/gpu_probe.py`; the last
-row, PORTING.md item 28):
+row, PORTING.md item 28; ConSEAL's rows timed again once its search of the
+grid ran in threads on the CPU, item 36):
 
 | | 8 CPU cores | a V100 |
 | --- | --- | --- |
 | ENCORE: the template of three subjects | 72.5 s | 1.1 s |
 | ENCORE: one registration, 19 steps | 84.9 s | 7.0 s |
-| ConSEAL: a subject's density and its derivatives | 2.1 s | 0.06 s |
-| ConSEAL: relocating 1.6 million endpoints | 17.2 s | 0.74 s |
-| ConSEAL: ten iterations of a registration | 242.5 s | 14.3 s |
-| ConSEAL: three iterations after the rotation search (`init_rotation`) | 268.5 s | 21.1 s |
+| ConSEAL: a subject's density and its derivatives | 1.7 s | 0.05 s |
+| ConSEAL: relocating 1.6 million endpoints | 3.4 s | 0.72 s |
+| ConSEAL: ten iterations of a registration | 65.9 s | 13.5 s |
+| ConSEAL: three iterations after the rotation search (`init_rotation`) | 214.4 s | 21.2 s |
+
+Before item 36 the CPU took 17.2 s to relocate the endpoints and 242.5 s for
+the ten iterations, so the V100's lead there fell from seventeen times to five.
 
 The GPU's first call takes a second or two more, compiling CuPy's kernels,
 which are kept on disk for the next. The eleven aligned as the cohort figure
 aligns them took 48 s for ENCORE and 6.6 minutes for ConSEAL on a V100, where
 eight cores of Longleaf's AMD EPYC nodes took six to 21 minutes and 1.2 to 2.2
-hours, by the node. Over the eleven the GPU's results lay about as far from
+hours, by the node, before item 36 about halved ConSEAL's time on the CPU. Over the eleven the GPU's results lay about as far from
 the CPU's, at most, as the CPU's own twins -- an aligned density 5.6e-6 from
 the CPU's, the twins 7.1e-6 -- though one subject's lay seven times as far as
 that subject's twins (5.6e-6 against 8.2e-7); the mean pairwise correlations
@@ -1309,21 +1318,24 @@ registration of a released subject took, on average
 | ENCORE: each of the eleven onto their template | 24.6 s | 2.9 s | 4.2 s |
 | ENCORE: each of the other ten onto the first subject | 23.1 s | 2.5 s | 3.7 s |
 | ENCORE: the template itself | 54 s | 2.3 s | 5.4 s |
-| ConSEAL: each of the eleven onto their template | 5.8 min | 35.5 s | 1.8 min |
-| ConSEAL: each of the other ten onto the first subject | 6.0 min | 35.5 s | 1.8 min |
-| ConSEAL: the template itself | 72 s | 2.5 s | 5.6 s |
+| ConSEAL: each of the eleven onto their template | 2.4 min | 35.5 s | 1.8 min |
+| ConSEAL: each of the other ten onto the first subject | 2.6 min | 35.5 s | 1.8 min |
+| ConSEAL: the template itself | 57 s | 2.5 s | 5.6 s |
 
 All but one registration ran its full count of steps (one of ENCORE's took
 seven), so onto the template or onto a subject costs the same; the template
 adds its own estimate. The CPU's were
 eight cores of an AMD EPYC 75F3 for ENCORE and of an EPYC 9654 for ConSEAL,
 among Longleaf's faster nodes: on others the eleven took up to 3.7 times as
-long with ENCORE and twice as long with ConSEAL. A ConSEAL iteration costs
-four to eight and a half times an ENCORE step: ENCORE carries a density
+long with ENCORE and twice as long with ConSEAL. ConSEAL's CPU rows were timed
+again on one EPYC 9654 node once its search of the grid ran in threads
+(PORTING.md item 36): a registration took 5.4 minutes before and 2.4 after,
+and the eleven onto their template 61 minutes and 28. A ConSEAL iteration
+costs two to eight and a half times an ENCORE step: ENCORE carries a density
 through the warp by interpolation, three weights a row, where ConSEAL carries
-a subject's 1.6 million endpoints, finds each one's triangle on the warped
-mesh -- on one core, on the CPU -- and rebuilds the density through a kernel
-of 32 entries a row, with its derivatives.
+a subject's 1.6 million endpoints, finds each one's triangle on the grid again
+-- in threads on the CPU since item 36 -- and rebuilds the density through a
+kernel of 32 entries a row, with its derivatives.
 
 **Memory.** One registration holds 2.5 GB on the GPU with ENCORE and 3.9 GB
 with ConSEAL, so a 16 GB card is plenty. A template keeps as many of the
@@ -1371,7 +1383,8 @@ subjects = [sbci.load(p) for p in paths]
 # ENCORE on the densities: six to 21 minutes on eight AMD EPYC cores for the eleven, by the node
 alignment = sbci.align(subjects, max_iterations=10)
 alignment.aligned[0]                                       # subject 1's warped density, dense
-# ConSEAL on the endpoints, as docs/RESULTS.md ran it (two hours; see the ConSEAL notes)
+# ConSEAL on the endpoints, as docs/RESULTS.md ran it (two hours before PORTING.md item 36,
+# about half that since; see the ConSEAL notes)
 registration = sbci.endpoints_align(subjects, max_iterations=30)
 for i, cc in enumerate(subjects):
     cc.endpoints = registration.aligned_endpoints(i)

@@ -20,7 +20,8 @@ another. Every surface is drawn on fsaverage.
 The single-subject figures take a few minutes. The cohort figures register
 every subject with ENCORE and ConSEAL (``--no-conseal`` leaves ConSEAL out),
 about two and a half hours for the eleven on eight cores, most of it
-ConSEAL's thirty iterations a subject; run this in a batch job. ``--device gpu``
+ConSEAL's thirty iterations a subject, before PORTING.md item 36 about halved
+ConSEAL's time; run this in a batch job. ``--device gpu``
 registers them on a CUDA GPU instead (USAGE.md, *Running the alignments on a GPU*).
 """
 

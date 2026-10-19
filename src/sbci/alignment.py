@@ -478,11 +478,17 @@ class MeshQuery:
         weights, indices, _ = self.query_faces(points)
         return weights, indices
 
-    def query_faces(self, points):
+    def query_faces(self, points, threads: int | None = None):
         """``(weights, vertex_indices, face_indices)`` for each point.
 
         CuPy points are located on the GPU (:meth:`_query_faces_device`), and the
-        results come back there.
+        results come back there. On the CPU the points go in blocks of ``block``,
+        each searched exactly as it would be alone, and the blocks are shared among
+        ``threads`` threads: by default the cores this process may use, at most
+        eight, as :func:`sparse_times_dense` takes them. Every point's search is its
+        own, so the result is the same bits for any number of threads; ConSEAL,
+        which locates a subject's 1.6 million endpoints after every step, spent
+        most of its time here on one core (PORTING.md item 36).
         """
         if _device.on_device(points):
             return self._query_faces_device(points)
@@ -491,7 +497,9 @@ class MeshQuery:
         weights = np.empty((n, 3))
         indices = np.empty((n, 3), dtype=np.int64)
         face_of = np.empty(n, dtype=np.int64)
-        for start in range(0, n, self.block):
+
+        def locate(start):
+            """One block, written to its own rows of the three outputs."""
             chunk = points[start : start + self.block]
             m = chunk.shape[0]
             reached, near = self._tree.query(chunk, k=self.candidates)
@@ -521,6 +529,15 @@ class MeshQuery:
             face_of[start : start + self.block] = face
             indices[start : start + self.block] = self.faces[face]
             weights[start : start + self.block] = barycentric_coordinates(projected, a, b, c)
+
+        starts = range(0, n, self.block)
+        threads = _thread_count() if threads is None else int(threads)
+        if threads <= 1 or len(starts) < 2:
+            for start in starts:
+                locate(start)
+        else:
+            with ThreadPoolExecutor(min(threads, len(starts))) as pool:
+                list(pool.map(locate, starts))  # list() raises what a block raised
         return weights, indices, face_of
 
     def _query_faces_device(self, points):

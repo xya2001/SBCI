@@ -167,6 +167,23 @@ def test_a_query_at_a_vertex_returns_that_vertex(grid):
     np.testing.assert_allclose(recovered, grid.vertices, atol=1e-12)
 
 
+def test_the_point_search_gives_the_same_bits_in_any_number_of_threads(grid):
+    # Ten blocks of points on the sphere, outside it and near its centre, so that the
+    # candidates' search, the search near a point and the search of every face all run
+    # in the threads; each block searched alone, one thread, is what the loop did.
+    rng = np.random.default_rng(3)
+    points = rng.standard_normal((5000, 3))
+    points /= np.linalg.norm(points, axis=1, keepdims=True)
+    points[::7] *= 1.3
+    points[::11] *= 0.2
+    query = MeshQuery(grid.vertices, grid.faces, block=512)
+    alone = [query.query_faces(points[s : s + 512], threads=1) for s in range(0, 5000, 512)]
+    expected = tuple(np.concatenate([part[k] for part in alone]) for k in range(3))
+    for threads in (1, 2, 3, 8, None):
+        found = query.query_faces(points, threads=threads)
+        assert all(np.array_equal(f, e) for f, e in zip(found, expected, strict=True))
+
+
 def test_barycentric_weights_sum_to_one(grid):
     rng = np.random.default_rng(0)
     points = grid.vertices + 0.02 * rng.standard_normal(grid.vertices.shape)

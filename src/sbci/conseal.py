@@ -2221,8 +2221,10 @@ def endpoints_align(
         code's (0.05, 100, 1e-4, 0.2, 0.05) are the ``PUBLIC_*`` constants.
         Before 7 October 2026 the public code's were the defaults; the
         paper's undo 93% to 97% of a known warp where they stopped at 52% to
-        75% (module docstring, item 8). Two whole subjects take tens of
-        minutes on eight cores; ``max_iterations`` caps it.
+        75% (module docstring, item 8). A whole subject takes 50 to 490
+        iterations onto a template or another subject, about 1.2 s each on a
+        V100 and 5 to 8 s on eight cores of Longleaf's AMD EPYC nodes
+        (PORTING.md item 36); ``max_iterations`` caps it.
     relative_threshold
         A floor under ``threshold`` as a share of the starting cost, 1e-5 by
         default; 0, the public code's, turns it off (:class:`ConSEAL`). With

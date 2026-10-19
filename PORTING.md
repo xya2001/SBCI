@@ -5017,6 +5017,125 @@ What the tables show:
 
 Only the two functions, their tests and the documents change here.
 
+## 36. ConSEAL's search of the grid in threads, 19 October 2026 -- THE SAME BITS, A REGISTRATION ABOUT TWICE AS FAST ON EIGHT CORES
+
+Asked to check the times the documents gave for ConSEAL, which another session had found too
+short on the CPU and on the GPU, and then whether the CPU could be made faster, checking
+first, the lead found the times right for what they timed but short of a registration at the
+defaults, and the CPU's eight cores nearly idle. The search of the grid now runs in threads.
+
+### The times the documents gave
+
+They held for what they timed, but read as a registration's time:
+- **Thirty iterations.** USAGE.md's *A registration, subject by subject* timed the cohort
+  figure's registrations, thirty iterations each: 5.8 minutes on eight cores, 35.5 s on a
+  V100.
+- **Known warps.** The ConSEAL notes' 76 to 155 iterations, 15 to 42 minutes on eight cores,
+  undid known warps (item 19), which takes fewer iterations than registering real subjects.
+- **The docstring.** `endpoints_align` said two whole subjects take tens of minutes on eight
+  cores.
+
+At the defaults a registration runs until its cost stops falling. 148 whole registrations on
+eight cores, with the code before this item, took:
+
+| | runs | iterations | time |
+| --- | --- | --- | --- |
+| onto a template (item 35's) | 50 | 92 to 487, median 253 | 25 min to 2.6 h, median 70 min |
+| onto one subject (item 35's) | 49 | 62 to 396, median 117 | 12 min to 2.4 h, median 28 min |
+| onto one subject (the conseal-ot project's, at 86e51f4) | 49 | 49 to 489, median 147 | 11 min to 3.5 h, median 49 min |
+
+An iteration took 9 to 37 s, by the node: 12 s at the median on an AMD EPYC 9654, 23 s on
+an EPYC 7702. A registration held 3.3 to 3.6 GiB. On a V100 the three registrations onto one
+subject with the fewest, the median and the most iterations on the CPU took the CPU's
+iterations, refused steps and costs to six decimals, at 1.15 to 1.21 s an iteration: 62
+iterations in 75 s against 837 s on eight cores, 117 in 138 s against 1,650 s, and 396 in
+457 s against 8,790 s (job 5678572).
+
+### Where an iteration went
+
+Ten iterations of the median subject onto the paper's first, each stage timed by wrapping the
+package's functions from outside, on one Intel Xeon Gold 6140 node (job 5678969):
+
+| stage | eight cores | one core |
+| --- | --- | --- |
+| locating the moved endpoints on the grid (`MeshQuery.query_faces`) | 16.5 s | 16.3 s |
+| the density and its derivatives | 2.3 s | 4.7 s |
+| the gradient | 0.5 s | 0.5 s |
+| the warp's flow and its fold check | 0.3 s | 0.3 s |
+| the endpoints carried through the warp | 0.3 s | 0.3 s |
+| an iteration | 19.9 s | 22.1 s |
+
+Eight cores bought 1.1 times one: only the density's sparse products ran in threads. The
+search was 83% of an iteration, most of it each of 1.6 million endpoints tested against its
+twelve candidate triangles, in blocks of 32,768 points that do not depend on one another.
+Item 19 had found it four fifths of an iteration.
+
+### The change
+
+`MeshQuery.query_faces` shares its blocks among threads: the cores the process may use, at
+most eight, as `sparse_times_dense` counts them, or its new `threads=`. Each block is searched
+by the code that searched it before and writes its own rows, so the faces and weights do not
+depend on the threads. The GPU's search is unchanged. A test in `tests/test_alignment.py`
+searches ten blocks of points on the sphere, outside it and near its centre, so that both
+fallbacks run, in one, two, three, eight and the default number of threads, against each
+block searched alone.
+
+### What it gives
+
+- **The search.** A subject's 1,632,466 endpoints, located once on an Intel Xeon Gold 6140:
+  16.9 s on one core, 5.1 s in eight threads (job 5679109, the blocks mapped in threads from
+  outside, the same bits).
+- **An iteration.** Ten iterations on the same kind of node: 22.9 s each before, 10.0 s
+  after, the cost trace, warps, moved endpoints and refused steps the same bits (job
+  5679940).
+- **Whole registrations.** Onto the paper's first subject, before and after on one AMD EPYC
+  7702 node, the costs, refused steps, both warps and the moved endpoints the same bits (job
+  5683082):
+  - 62 iterations: 972 s before, 445 s after, 2.2 times as fast;
+  - 117 iterations: 1,733 s before, 926 s after, 1.9 times as fast. The first pair ran
+    beside the suite's job on the node, so 1.9 is the fairer figure.
+  - With the threads a registration held up to 4.6 GiB.
+- **Thirty iterations, as the cohort figure registers** (`registration_timing_probe.py`,
+  before and after on one AMD EPYC 9654 node, job 5683544): a registration onto the template
+  took 5.4 minutes before and 2.4 after, onto the first subject 5.8 and 2.6, and the eleven
+  onto their template, the template included, 61 minutes and 28.
+- **On a V100 node's Xeon Gold 6148** (`gpu_probe.py conseal`, job 5683083): relocating a
+  subject's endpoints takes 3.4 s, against 17.2 s at item 28, and ten iterations 65.9 s
+  against 242.5 s; the V100's lead there falls from seventeen times to five.
+
+### Verified
+
+- **The suite.** 1,371 tests pass with 48 skipped on the released subjects, and 1,368 with 51
+  skipped as a fresh clone has it: item 35's counts and the new test (job 5683080, an AMD
+  EPYC 7702). `ruff check` and `ruff format --check` pass on CI's paths.
+- **The CPU computes as before.** Before and after on one AMD EPYC 7702 node (job 5683081),
+  the 95 arrays of `cpu_parity_probe.py` and the 29 of `record_outputs.py` on the released
+  subjects are identical, bit for bit.
+- **On a GPU.** On a V100 (job 5683083):
+  - `tests/test_gpu.py` and `tests/test_alignment.py` pass, 162 of 162;
+  - `gpu_review_probe.py` finds what item 28 found: no table left on the GPU, the refusals,
+    1,607,482 endpoints relocated in 0.73 s with none sent to the search of every face, the
+    same bits twice, the CPU's rotations bit for bit, and every registration the tests
+    compare within 0.062 of its allowance;
+  - `gpu_probe.py conseal` finds the GPU as near the CPU as before: the costs 2.0e-9 apart
+    after ten iterations, the twin's 4.0e-9.
+
+The probes and their batch files are in `/work/users/x/y/xya/paper-open-items/dice/scripts/`
+and `/work/users/x/y/xya/edits/i36/`.
+
+### The documents
+
+- `endpoints_align`'s docstring gives the iterations a registration takes and an
+  iteration's time.
+- USAGE.md's ConSEAL notes give real registrations' times beside the known warps', the
+  threads and the memory. *How fast* and *A registration, subject by subject* hold ConSEAL's
+  new CPU times; the second no longer says the endpoints are found on the warped mesh, since
+  they are found on the grid.
+- docs/RESULTS.md, docs/figures/README.md, `scripts/hcp_figures.py` and USAGE.md's cohort
+  example say their ConSEAL hours came before this item.
+
+Only `MeshQuery.query_faces`, its test and the documents change here.
+
 ## Status
 
 All seven ports are done and verified, and the reviews of 5 to 7 October
@@ -5046,8 +5165,9 @@ vertices, mostly higher in women, elsewhere than the components' effect map, and
 family-based results beside HCP ids, all of it fixed (item 33); and the paper's panel D,
 drawn from the test at every vertex, holds in women and men matched on head size (item 34);
 and the overlap of bundles after alignment, connection-wise as the ConSEAL paper measures it,
-is in the package, agrees with the MATLAB exactly, and rises under both methods (item 35).
-What is left: the
+is in the package, agrees with the MATLAB exactly, and rises under both methods (item 35);
+and ConSEAL's search of the grid runs in threads, with the same bits and a registration about
+twice as fast on eight cores (item 36). What is left: the
 decisions item 33 leaves the user (what panel D of the paper shows, and whether the ADNI
 subjects may stay in the MATLAB comparisons); a version of the dataset whose README names
 the commit that holds the code now, and GitHub's removal of the commits before it (item 33,
