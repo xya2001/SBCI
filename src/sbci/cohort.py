@@ -275,6 +275,23 @@ def _visit(label: str | None) -> str:
     return str(int(label)) if label.isdigit() else label
 
 
+def _asked_session(label) -> str:
+    """The session ``session=`` asked for, as a reason names it: ``of session '5'``."""
+    return "without a session label" if label is None else f"of session {str(label).strip()!r}"
+
+
+def _other_sessions(labels) -> str:
+    """The sessions files were of, as :func:`_visit` gives them, in words."""
+    named = sorted((v for v in labels if v != "none"), key=lambda v: (not v.isdigit(), v.zfill(9)))
+    parts = []
+    if named:
+        listed = named[0] if len(named) == 1 else ", ".join(named[:-1]) + " and " + named[-1]
+        parts.append(("of session " if len(named) == 1 else "of sessions ") + listed)
+    if "none" in labels:
+        parts.append("without a session label")
+    return " and ".join(parts)
+
+
 def _is_frame(table) -> bool:
     """A pandas DataFrame, or anything holding named columns the way one does."""
     return hasattr(table, "columns") and hasattr(table, "iloc")
@@ -677,7 +694,9 @@ def load_cohort(
         which has none, beside its FC from the first day is ``{"sc": None,
         "fc": "REST1"}``. Without ``session=`` a subject's files have to come
         from one session, whichever it is: several for one modality, or SC
-        from one and FC from another, are refused.
+        from one and FC from another, are refused. A subject whose files are of
+        other sessions only stays in the report, its reason naming them, and a
+        label no file carries is refused as that.
     require
         Table columns every subject needs a value in; a subject with a missing
         cell is left out.
@@ -759,11 +778,15 @@ def load_cohort(
     # The files, by subject and modality, for the sessions asked for.
     paths_found, unread = _find_files(files)
     found: dict[str, dict[str, list[tuple[Path, str | None]]]] = {}
+    # the sessions of the files session= leaves out, so that the subjects they belong to are
+    # reported, and a label no file carries is not taken for a folder without files
+    elsewhere: dict[str, dict[str, set[str]]] = {}
     for path in paths_found:
         subject, ses, modality = parse_name(path.name)
         if modality not in modalities:
             continue
         if chosen and not _same_label(ses, wanted[modality]):
+            elsewhere.setdefault(subject, {}).setdefault(modality, set()).add(_visit(ses))
             continue
         found.setdefault(subject, {}).setdefault(modality, []).append((path, ses))
 
@@ -826,7 +849,7 @@ def load_cohort(
                 )
 
     # Every subject seen, and why each is out.
-    everyone = sorted(set(found) | in_table)
+    everyone = sorted(set(found) | in_table | set(elsewhere))
     unknown = sorted(set(excluded_by_caller) - set(everyone))
     if unknown:
         warnings.warn(
@@ -857,7 +880,14 @@ def load_cohort(
             for key in _NUMBERS[modality]:
                 row[key] = None
             if not entries:
-                reasons[subject].append(f"no {modality} file")
+                other = elsewhere.get(subject, {}).get(modality)
+                if other:
+                    reasons[subject].append(
+                        f"no {modality} file {_asked_session(wanted[modality])}, "
+                        f"only {_other_sessions(other)}"
+                    )
+                else:
+                    reasons[subject].append(f"no {modality} file")
                 continue
             if len(entries) > 1:
                 names = ", ".join(sorted(p.name for p, _ in entries))
@@ -988,11 +1018,24 @@ def load_cohort(
     if not included:
         tally = Counter(part for s in everyone for part in reasons[s])
         common = "; ".join(f"{count} {reason}" for reason, count in tally.most_common(3))
-        hint = (
-            " Do the table's ids match the files' (100307 and sub-100307 match; 0100307 does not)?"
-            if table is not None
-            else ""
-        )
+        if chosen and not found and elsewhere:
+            asked = (
+                "of the sessions asked for"
+                if isinstance(session, Mapping)
+                else _asked_session(session)
+            )
+            seen = {v for by in elsewhere.values() for labels in by.values() for v in labels}
+            hint = (
+                f" No {' or '.join(modalities)} file is {asked}: the files are "
+                f"{_other_sessions(seen)}."
+            )
+        elif table is not None:
+            hint = (
+                " Do the table's ids match the files' (100307 and sub-100307 match; 0100307 "
+                "does not)?"
+            )
+        else:
+            hint = ""
         raise CohortError(
             f"no subject passed: {common}.{hint}"
             if tally

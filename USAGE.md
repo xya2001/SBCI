@@ -198,7 +198,10 @@ and FC from another, are refused until `session=` chooses (`1` matches
 `ses-01`), one label for every modality or `{"sc": "1", "fc": "2"}` to pair two
 visits on purpose. A mapping names every modality, `None` for the files without
 a session label: the HCP's SC has none, and `{"sc": None, "fc": "REST1"}` pairs
-it with the first day's FC. `exclude={"sub-01": "motion"}` leaves out subjects on
+it with the first day's FC. A subject whose files are of other sessions only
+stays in the report, its reason naming them (`no fc file of session '2', only of
+session 1`), and a label no file carries is refused as that, with the report,
+which `sbci cohort --report` still writes. `exclude={"sub-01": "motion"}` leaves out subjects on
 grounds decided upstream, and the reason stands in the report; a subject left
 out so is not held to the one-visit rule either. A file named like another
 subject's with a suffix -- `sub-01_old_sc.h5` beside `sub-01_sc.h5`, or

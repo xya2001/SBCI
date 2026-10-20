@@ -234,6 +234,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     print(f"report written to {_write_report(error.report, args.report)}")
                 except (ValueError, OSError) as failure:
                     print(f"error: the report could not be written: {failure}", file=sys.stderr)
+            elif args.report:
+                print(f"no report written to {args.report}: no subject was seen", file=sys.stderr)
             return 1
         except (ValueError, OSError, SbciError) as error:
             print(f"error: {error}", file=sys.stderr)

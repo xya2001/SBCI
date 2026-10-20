@@ -5136,6 +5136,36 @@ and `/work/users/x/y/xya/edits/i36/`.
 
 Only `MeshQuery.query_faces`, its test and the documents change here.
 
+## 37. A session label no file carries, 20 October 2026 -- NAMED AS THAT, AND THE REPORT KEPT
+
+Reported by the user (medium): `load_cohort`'s file loop dropped every file of another session
+before the subjects were counted. A `session=` label that matched no file therefore left no
+subject at all, the refusal said "no files of the asked modalities were found" over a folder
+full of them, and `sbci cohort FOLDER --session 5 --report r.csv` wrote nothing, since the
+refusal carried no rows. A subject whose files were of other sessions only, beside others of
+the asked one, vanished from the report the same way.
+
+- **The files left out are counted.** The loop records, for each subject and modality, the
+  sessions of the files `session=` leaves out.
+- **Their subjects are reported.** Such a subject stays in the report, its reason naming the
+  session asked for and the ones it has: `no fc file of session '2', only of sessions 1 and
+  3`, or, under `{"sc": None, ...}`, `no sc file without a session label, only of session 1`.
+- **A label no file carries says so.** When no file is of the session asked for, the refusal
+  adds `No sc file is of session '5': the files are of session 1.` and drops the hint about
+  the table's ids, which are not what failed. The report goes with the refusal, so
+  `--report` writes it.
+- **No report, said.** When a refusal carries no rows at all (no file of the asked
+  modalities, and no table), `sbci cohort --report` now says it wrote none.
+- **Tests.** Three new ones in `tests/test_cohort.py`: the refusal and its report, a subject
+  reported rather than dropped, and the command line writing the report and saying when
+  there is none. Three assertions take the new reasons.
+- **Verified.** 1,374 tests pass with 48 skipped on the released subjects, and 1,371 with 51
+  skipped as a fresh clone has it: item 36's counts and the three new tests (job 5903044, an
+  AMD EPYC 7713). `ruff check` and `ruff format --check` pass on CI's paths.
+- **The documents.** `load_cohort`'s docstring and USAGE.md's paragraph on sessions say it.
+
+Only `load_cohort`, the command line's report, the tests and the documents change here.
+
 ## Status
 
 All seven ports are done and verified, and the reviews of 5 to 7 October
@@ -5167,7 +5197,8 @@ drawn from the test at every vertex, holds in women and men matched on head size
 and the overlap of bundles after alignment, connection-wise as the ConSEAL paper measures it,
 is in the package, agrees with the MATLAB exactly, and rises under both methods (item 35);
 and ConSEAL's search of the grid runs in threads, with the same bits and a registration about
-twice as fast on eight cores (item 36). What is left: the
+twice as fast on eight cores (item 36); and a session label no file carries is refused as
+that, with its report (item 37). What is left: the
 decisions item 33 leaves the user (what panel D of the paper shows, and whether the ADNI
 subjects may stay in the MATLAB comparisons); a version of the dataset whose README names
 the commit that holds the code now, and GitHub's removal of the commits before it (item 33,

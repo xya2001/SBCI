@@ -338,7 +338,8 @@ def test_sc_and_fc_from_different_visits_are_not_paired_silently(folder):
     with pytest.raises(CohortError, match="sub-B's files come from more than one session"):
         load_cohort(root, modalities=("sc", "fc"))
     same = load_cohort(root, modalities=("sc", "fc"), session=1)
-    assert same.subjects == ["sub-A"] and same.excluded == {"sub-B": "no fc file"}
+    assert same.subjects == ["sub-A"]
+    assert same.excluded == {"sub-B": "no fc file of session '1', only of session 2"}
     crossed = load_cohort(root, modalities=("sc", "fc"), session={"sc": "1", "fc": "2"})
     assert crossed.subjects == ["sub-B"]
     assert crossed.report[1]["sc_session"] == "1" and crossed.report[1]["fc_session"] == "2"
@@ -357,7 +358,8 @@ def test_a_session_mapping_names_every_modality(folder):
     with pytest.raises(ValueError, match="session= names sc but not fc: a modality left out"):
         load_cohort(root, modalities=("sc", "fc"), session={"sc": "1"})
     both = load_cohort(root, modalities=("sc", "fc"), session={"sc": "1", "fc": "1"})
-    assert both.subjects == ["sub-A"] and both.excluded == {"sub-B": "no fc file"}
+    assert both.subjects == ["sub-A"]
+    assert both.excluded == {"sub-B": "no fc file of session '1', only of session 2"}
 
 
 def test_none_in_a_session_mapping_takes_the_files_without_a_label(folder):
@@ -372,7 +374,8 @@ def test_none_in_a_session_mapping_takes_the_files_without_a_label(folder):
     ):
         add(name)
     cohort = load_cohort(root, modalities=("sc", "fc"), session={"sc": None, "fc": "REST1"})
-    assert cohort.subjects == ["sub-A"] and cohort.excluded == {"sub-B": "no sc file"}
+    assert cohort.subjects == ["sub-A"]
+    assert cohort.excluded == {"sub-B": "no sc file without a session label, only of session 1"}
     assert cohort.report[0]["sc_session"] is None and cohort.report[0]["fc_session"] == "REST1"
     with pytest.raises(ValueError, match="session= names fc but not sc"):
         load_cohort(root, modalities=("sc", "fc"), session={"fc": "REST1"})
@@ -383,6 +386,57 @@ def test_a_session_label_matches_with_or_without_leading_zeros(folder):
     add("sub-01_ses-01_sc.h5")
     assert load_cohort(root, session=1).subjects == ["sub-01"]
     assert load_cohort(root, session="01").subjects == ["sub-01"]
+
+
+def test_a_session_label_no_file_carries_is_named_and_reported(folder):
+    """session=5 over ses-1 files said no files of the asked modalities were found."""
+    from sbci.cohort import CohortError
+
+    root, add = folder
+    add("sub-01_ses-1_sc.h5")
+    add("sub-02_ses-1_sc.h5")
+    with pytest.raises(
+        CohortError, match=r"No sc file is of session '5': the files are of session 1\."
+    ) as refused:
+        load_cohort(root, session=5)
+    assert {row["subject"]: row["reason"] for row in refused.value.report} == {
+        "sub-01": "no sc file of session '5', only of session 1",
+        "sub-02": "no sc file of session '5', only of session 1",
+    }
+
+
+def test_a_subject_without_the_asked_session_is_reported_not_dropped(folder):
+    root, add = folder
+    add("sub-01_ses-1_fc.h5")
+    add("sub-01_ses-2_fc.h5")
+    add("sub-02_ses-1_fc.h5")
+    add("sub-02_ses-3_fc.h5")
+    add("sub-03_fc.h5")
+    cohort = load_cohort(root, modalities="fc", session=2)
+    assert cohort.subjects == ["sub-01"]
+    reasons = {row["subject"]: row["reason"] for row in cohort.report}
+    assert reasons["sub-02"] == "no fc file of session '2', only of sessions 1 and 3"
+    assert reasons["sub-03"] == "no fc file of session '2', only without a session label"
+
+
+def test_a_session_label_no_file_carries_still_writes_the_report(folder, tmp_path, capsys):
+    from sbci.cli import main
+
+    root, add = folder
+    add("sub-01_ses-1_sc.h5")
+    report = tmp_path / "r.csv"
+    assert main(["cohort", str(root), "--session", "5", "--report", str(report)]) == 1
+    assert "No sc file is of session '5'" in capsys.readouterr().err
+    assert "no sc file of session '5', only of session 1" in report.read_text()
+    other = tmp_path / "other"
+    other.mkdir()
+    add("sub-01_fc.h5", where="other")
+    assert (
+        main(["cohort", str(other), "--modalities", "sc", "--report", str(tmp_path / "e.csv")]) == 1
+    )
+    said = capsys.readouterr().err
+    assert "no files of the asked modalities were found" in said and "no report written" in said
+    assert not (tmp_path / "e.csv").exists()
 
 
 def test_names_sbci_load_reads_are_found(folder, tmp_path):
