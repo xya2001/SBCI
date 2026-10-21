@@ -26,7 +26,7 @@ from sbci.surface import load_surface
 def check(path: str) -> tuple[float, float, int]:
     """Median and 99th-percentile angle between rebuilt position and stored vertex."""
     sphere = load_surface("sphere")
-    vertices = np.asarray(sphere.vertices, dtype=np.float64)
+    vertices = np.array(sphere.vertices, dtype=np.float64)  # a copy: the bundled one is read-only
     vertices /= np.linalg.norm(vertices, axis=1, keepdims=True)
     endpoints = Endpoints.from_matlab(path)
     if not endpoints.has_positions:

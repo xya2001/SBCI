@@ -60,6 +60,23 @@ def test_plot_surface_draws_on_fsaverage5():
     matplotlib.pyplot.close(figure)
 
 
+def test_a_bg_map_is_brought_onto_the_finer_mesh_as_the_map_is(monkeypatch):
+    """A grid bg_map is interpolated per hemisphere, not handed to fsaverage5 as it is."""
+    from nilearn import plotting as nilearn_plotting
+
+    recorded = []
+    monkeypatch.setattr(nilearn_plotting, "plot_surf", lambda *a, **k: recorded.append(k))
+    background = np.random.default_rng(2).uniform(-2.0, 2.0, 2 * HALF)
+    figure = plot_surface(
+        np.ones(2 * HALF), mesh="fsaverage5", views=("lateral",), bg_map=background
+    )
+    matplotlib.pyplot.close(figure)
+    expected = display_mesh("fsaverage5").interpolate(background)
+    for drawn, side in zip(recorded, expected, strict=True):
+        np.testing.assert_array_equal(drawn["bg_map"], side)
+        assert side.shape == (10242,)
+
+
 def test_unknown_meshes_are_refused():
     assert DISPLAY_MESHES[0] == "ico4"
     with pytest.raises(ValueError, match="mesh"):

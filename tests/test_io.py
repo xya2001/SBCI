@@ -589,3 +589,52 @@ def test_an_empty_endpoint_group_is_refused_and_never_written(tmp_path, paired, 
     with pytest.raises(ValueError, match="the endpoints hold no streamlines"):
         _write(tmp_path, paired, endpoints=endpoints.take([]))
     assert path.read_bytes() == before and not list(tmp_path.glob("*.partial"))
+
+
+# --- PORTING.md item 38 -------------------------------------------------------------------
+
+
+def test_two_saves_of_one_file_at_once_each_write_a_file_of_their_own(
+    tmp_path, paired, endpoints, monkeypatch
+):
+    """Both wrote <name>.partial: the second truncated the first's file, then removed it.
+
+    The first save is held inside its write while a second runs through; both
+    complete, and the file is the one written last, whole.
+    """
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from sbci.io import hdf5
+
+    inside, second_done = threading.Event(), threading.Event()
+    write_endpoints = hdf5._write_endpoints
+
+    def held(*args):
+        inside.set()
+        assert second_done.wait(30)
+        write_endpoints(*args)
+
+    monkeypatch.setattr(hdf5, "_write_endpoints", held)
+    with ThreadPoolExecutor(1) as pool:
+        first = pool.submit(_write, tmp_path, paired, endpoints=endpoints)
+        try:
+            assert inside.wait(30)
+            _write(tmp_path, paired)  # without endpoints, so not held
+        finally:
+            second_done.set()
+        first.result(30)
+    back = read_hdf5(tmp_path / "sub-toy_sc.h5")
+    assert back["endpoints"].n_streamlines == endpoints.n_streamlines
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["sub-toy_sc.h5"]
+
+
+def test_a_saved_file_has_the_mode_of_a_file_written_in_place(tmp_path, connectome):
+    """A temporary file made by tempfile.mkstemp is its owner's alone, and moved, so is the file."""
+    import os
+    import stat
+
+    plain = tmp_path / "plain.txt"
+    plain.write_text("")
+    path = connectome.save(tmp_path / "sub-x_sc.h5")
+    assert stat.S_IMODE(os.stat(path).st_mode) == stat.S_IMODE(os.stat(plain).st_mode)

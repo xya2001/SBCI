@@ -204,9 +204,12 @@ from .alignment import (
     MeshQuery,
     SphericalGrid,
     _density_problem,
+    _displacement,
     _dot,
+    _number,
     _single_precision,
     _whole,
+    grid_digest,
     normalize_rows,
     sparse_times_dense,
     sphere_exp_map,
@@ -275,8 +278,52 @@ SQUARINGS = 6
 KERNEL_EPSILON = 1e-3
 """Where the heat kernel is cut off, on the product ``K(x) K(1)``."""
 
+BARYCENTRIC_SUM = 1e-4
+"""How far an endpoint's three barycentric weights may sum from 1: a file stores them in
+float32. One weight may be slightly negative, since the point search keeps the unclamped
+weights of a point just outside its triangle, but the three sum to 1."""
+
 
 # --- the endpoint connectome (SConcon) --------------------------------------
+
+
+def _weights_problem(weights) -> str | None:
+    """Why rows of barycentric ``weights`` are no endpoints' weights, or ``None``.
+
+    A row must be finite and sum to 1 within :data:`BARYCENTRIC_SUM`. CuPy weights are
+    checked on the GPU.
+    """
+    xp = _device.module_of(weights)
+    finite = xp.isfinite(weights).all(axis=1)
+    if not bool(finite.all()):
+        return (
+            f"{int((~finite).sum())} endpoint(s) have barycentric weights that are not finite, "
+            "which would make the density NaN"
+        )
+    sums = weights.sum(axis=1)
+    wrong = xp.abs(sums - 1.0) > BARYCENTRIC_SUM
+    if bool(wrong.any()):
+        farthest = float(sums[int(xp.argmax(xp.abs(sums - 1.0)))])
+        return (
+            f"{int(wrong.sum())} endpoint(s) have barycentric weights that do not sum to 1 "
+            f"(one sums to {farthest:.6g}; within {BARYCENTRIC_SUM:g} of 1 is taken, for weights "
+            "kept in float32), so they place no endpoint in its triangle"
+        )
+    return None
+
+
+def _check_weights(connectome, what: str) -> None:
+    """Refuse an :class:`EndpointConnectome` whose barycentric weights are no endpoints'.
+
+    One built from arrays, or with its weights set by hand, was taken: as the fixed subject,
+    where the same density given as an array is refused, and as the moving one, whose first
+    relocation replaced its weights without a word (:func:`_weights_problem`).
+    """
+    if isinstance(connectome, EndpointConnectome):
+        for weights in (connectome.weights_in, connectome.weights_out):
+            problem = _weights_problem(weights)
+            if problem:
+                raise ValueError(f"{what}: {problem}")
 
 
 class EndpointConnectome:
@@ -393,7 +440,8 @@ class EndpointConnectome:
         No point location is needed: the file already says which triangle each
         endpoint crossed and where inside it. The grids' faces must be in the
         same order as the file's triangle indices, which holds for the bundled
-        ico4 surfaces (the face digest test guarantees it).
+        ico4 surfaces (the face digest test guarantees it). Each endpoint's
+        weights must be finite and sum to 1 within :data:`BARYCENTRIC_SUM`.
         """
         if not endpoints.has_positions:
             raise MissingDataError(
@@ -433,12 +481,9 @@ class EndpointConnectome:
                 raise ValueError(
                     "triangle indices and barycentric weights do not match the endpoints"
                 )
-            if not np.isfinite(bary).all():
-                bad = int((~np.isfinite(bary)).any(axis=1).sum())
-                raise ValueError(
-                    f"{bad} endpoint(s) have barycentric weights that are not finite, which "
-                    "would make the density NaN"
-                )
+            problem = _weights_problem(bary)
+            if problem:
+                raise ValueError(problem)
             for side in (0, 1):
                 mask = flags == side
                 if not mask.any():
@@ -1115,7 +1160,8 @@ class StationaryWarp:
         An update that would fold a triangle is refused. The reference keeps
         the refused displacement in the velocity field regardless (module
         docstring, item 3) and smooths the frame components as scalars (item
-        16).
+        16). ``displacement`` is ``(n_vertices, 2)``, in the ``(e1, e2)`` frame;
+        a single row was added to every vertex.
         """
         if self._rigid_last and self._rigid_query is not None:
             raise ValueError(
@@ -1123,7 +1169,7 @@ class StationaryWarp:
                 "displacement added to the flow would act in the frame before it; compose "
                 "before inverting"
             )
-        displacement = np.asarray(displacement, dtype=np.float64)
+        displacement = _displacement(displacement, self.n_vertices)
         velocity = self.velocity + displacement
         if self.viscosity:
             velocity = self._smooth(velocity)
@@ -1369,6 +1415,7 @@ def mesh_symmetries(vertices, faces, tolerance: float = 1e-3):
 SPARSE_PRODUCT_FRACTION = 0.3
 
 _SHELLS: list | None = None
+_SPINS: list | None = None
 
 
 def rotation_shells():
@@ -1416,8 +1463,14 @@ def spin_shells():
     shell, these are the turns about ``z`` within the cap's radius, spaced as
     the cap's directions are (the mean edge of its icosphere), plus the
     identity; :meth:`ConSEAL._rigid` tries them after each shell's directions.
-    Returns ``[rotations (n, 3, 3), ...]``.
+    Returns ``[rotations (n, 3, 3), ...]``. They are made once and kept, as
+    :func:`rotation_shells` keeps its own: made again for every subject, they took
+    3 s of each registration that began with ``init_rotation=True`` (2.95 s on an
+    Intel Xeon Gold 6140).
     """
+    global _SPINS
+    if _SPINS is not None:
+        return [r.copy() for r in _SPINS]
     shells = []
     for radius, subdivision, _keep in [
         (20.0, 4, 5),
@@ -1437,7 +1490,8 @@ def spin_shells():
             cos, sin = np.cos(angle), np.sin(angle)
             rotations.append(np.array([[cos, -sin, 0.0], [sin, cos, 0.0], [0.0, 0.0, 1.0]]))
         shells.append(np.stack(rotations))
-    return shells
+    _SPINS = shells
+    return [r.copy() for r in shells]
 
 
 # --- registration ---------------------------------------------------------------
@@ -1454,6 +1508,9 @@ class EndpointWarp:
     rotation is the identity unless the registration began with
     ``init_rotation=True`` (module docstring, item 17); a file written before
     the rigid part, or its order, was kept loads with identities, rotation first.
+    ``grid_digest`` names the grids the warp was estimated on
+    (:func:`sbci.alignment.grid_digest`), which :func:`sbci.migrate_warp` checks
+    are the bundled sphere's; a file written before it was kept loads with ``None``.
     """
 
     lh_vertices: np.ndarray
@@ -1466,22 +1523,24 @@ class EndpointWarp:
     rh_rigid: np.ndarray = field(default_factory=lambda: np.eye(3))
     lh_rigid_after: bool = False
     rh_rigid_after: bool = False
+    grid_digest: str | None = None
 
     def save(self, path) -> Path:
         """Write the warp to ``.npz``; returns the path written, suffix included."""
         path = Path(path)
         if not path.name.endswith(".npz"):
             path = path.with_name(path.name + ".npz")  # what np.savez_compressed appends anyway
-        np.savez_compressed(path, **dict(self.__dict__))
+        np.savez_compressed(path, **{k: v for k, v in self.__dict__.items() if v is not None})
         return path
 
     @classmethod
     def load(cls, path) -> EndpointWarp:
         """Read a warp written by :meth:`save`."""
         with np.load(Path(path)) as data:
-            return cls(
-                **{k: bool(data[k]) if k.endswith("_after") else data[k] for k in data.files}
-            )
+            fields = {k: bool(data[k]) if k.endswith("_after") else data[k] for k in data.files}
+            if "grid_digest" in fields:
+                fields["grid_digest"] = str(fields["grid_digest"])
+            return cls(**fields)
 
 
 @dataclass
@@ -1539,8 +1598,8 @@ class ConSEAL:
         moves by one unit in the last place (PORTING.md item 26).
 
     A setting that cannot register -- a step or clamp of 0, a negative
-    threshold, NaN -- is refused rather than run as a registration that
-    never moves.
+    threshold, NaN, a step or threshold given as a bool or a string -- is
+    refused rather than run as a registration that never moves.
     """
 
     def __init__(
@@ -1564,9 +1623,10 @@ class ConSEAL:
         def chosen(value, paper):
             return paper if value is None else value
 
-        self.delta = float(chosen(delta, DEFAULT_DELTA))
+        # a bool or a string was taken as its float(): True as a step of 1.0
+        self.delta = _number("delta", chosen(delta, DEFAULT_DELTA))
         iterations = float(chosen(max_iterations, DEFAULT_MAX_ITERATIONS))
-        self.threshold = float(chosen(threshold, DEFAULT_THRESHOLD))
+        self.threshold = _number("threshold", chosen(threshold, DEFAULT_THRESHOLD))
         self.step_clamp = float(chosen(step_clamp, STEP_CLAMP))
         self.viscosity = float(chosen(viscosity, VISCOSITY))
         self.relative_threshold = float(chosen(relative_threshold, DEFAULT_RELATIVE_THRESHOLD))
@@ -1652,10 +1712,15 @@ class ConSEAL:
         normalized to unit norm first, and a subject within 1e-6 radians of
         the estimate is coincident with it: no direction, no weight. The
         reference's arithmetic lets the rounding of the starting subject's
-        norm pin the median to that subject (module docstring, item 15). A
-        subject with no streamlines has no density to normalize and is
-        refused, and so is one built on other grids than this engine's. The
-        connectomes are read one at a time, so a generator never holds them all.
+        norm pin the median to that subject (module docstring, item 15). With
+        two subjects every point of the geodesic between them is a median, and
+        the steps ended a fifth of the way from whichever subject rounding put
+        nearer their mean; the template is their midpoint instead, the two
+        normalized densities' normalized sum, which takes no step and does not
+        depend on their order. A subject with no streamlines has no density to
+        normalize and is refused, and so is one built on other grids than this
+        engine's or with weights that are no endpoints'. The connectomes are
+        read one at a time, so a generator never holds them all.
         """
         if not _whole(iterations):
             raise ValueError(f"iterations must be a whole number, 0 or more; got {iterations}")
@@ -1664,6 +1729,7 @@ class ConSEAL:
         qs = _device.Held(self.device)
         for index, connectome in enumerate(connectomes):
             self._check_grids(connectome, f"subject {index}")
+            _check_weights(connectome, f"subject {index}")
             q = self._here(connectome).q_transform(kernel)
             if not q.any():
                 raise ValueError(
@@ -1677,6 +1743,11 @@ class ConSEAL:
         if not qs:
             raise ValueError("a template needs at least one connectome")
         count = len(qs)
+        if count == 2:  # the geodesic midpoint, a median whichever subject comes first
+            middle = qs[0] + qs[1]
+            if verbose:
+                print("template: the midpoint of the two subjects")
+            return _device.to_host(middle / xp.sqrt((middle**2).sum()))
         coincident = 1e-6  # radians; subjects sit 0.2 to 0.5 apart (item 15)
         # their mean, added in the order sum() adds them
         q_bar = qs[0].copy()
@@ -1886,9 +1957,10 @@ class ConSEAL:
         step. A moving connectome with no streamlines is refused, and so is a
         fixed density that is zero everywhere, not finite or not on the moving
         connectome's grids, and a connectome built on other grids than this
-        engine's. A fixed array must be a square-root density: one
-        that is negative, held in one triangle, or whose squares do not sum
-        to 1 -- a density passed in place of its square root, say -- is
+        engine's or with barycentric weights that are not finite or do not sum
+        to 1 (:data:`BARYCENTRIC_SUM`). A fixed array must be a square-root
+        density: one that is negative, held in one triangle, or whose squares do
+        not sum to 1 -- a density passed in place of its square root, say -- is
         refused.
         """
         if not moving.n_streamlines:
@@ -1898,6 +1970,8 @@ class ConSEAL:
             )
         self._check_grids(moving, "the moving connectome")
         self._check_grids(fixed, "the fixed connectome")
+        _check_weights(moving, "the moving connectome")
+        _check_weights(fixed, "the fixed connectome")
         xp = self._xp
         kernel, derivative = _sent(kernel, derivative, self.device)
         if isinstance(fixed, EndpointConnectome):
@@ -2037,25 +2111,56 @@ def endpoint_mass(connectome: EndpointConnectome) -> np.ndarray:
     return density / (2.0 * max(connectome.n_streamlines, 1))
 
 
+def _threshold(threshold) -> float:
+    """``threshold`` as a float, once it is finite and 0 or more.
+
+    A negative one put every vertex in both sets, and NaN none in either.
+    """
+    threshold = float(threshold)
+    if not (np.isfinite(threshold) and threshold >= 0):
+        raise ValueError(f"threshold must be finite and 0 or more, got {threshold}")
+    return threshold
+
+
+def _vertex_counts(first: EndpointConnectome, second: EndpointConnectome, threshold: float):
+    """How many vertices each connectome's endpoint density exceeds ``threshold`` at, and both."""
+    threshold = _threshold(threshold)
+    x = endpoint_mass(first) > threshold
+    y = endpoint_mass(second) > threshold
+    return int(x.sum()), int(y.sum()), int((x & y).sum())
+
+
 def overlap_coefficient(first: EndpointConnectome, second: EndpointConnectome, threshold: float):
     """``|X & Y| / min(|X|, |Y|)`` over vertices whose endpoint density exceeds ``threshold``.
 
     Vertex-wise: which vertices the endpoints touch, not which pairs of vertices the
-    streamlines join; :func:`connection_overlap` is the connection-wise coefficient.
+    streamlines join; :func:`connection_overlap` is the connection-wise coefficient. Two
+    sets that are both empty overlap fully (1), and one empty set not at all (0), as
+    :func:`connection_overlap` has it; ``get_overlap_coefficient.m`` divides 0 by 0 there,
+    which MATLAB gives as NaN, where the port gave 0 until October 2026. ``threshold`` is
+    finite and 0 or more.
     """
-    x = endpoint_mass(first) > threshold
-    y = endpoint_mass(second) > threshold
-    return float((x & y).sum() / max(min(x.sum(), y.sum()), 1))
+    nx, ny, shared = _vertex_counts(first, second, threshold)
+    if nx == 0 and ny == 0:
+        return 1.0
+    if nx == 0 or ny == 0:
+        return 0.0
+    return shared / min(nx, ny)
 
 
 def dice_score(first: EndpointConnectome, second: EndpointConnectome, threshold: float) -> float:
     """``2 |X & Y| / (|X| + |Y|)`` over vertices whose endpoint density exceeds ``threshold``.
 
-    Vertex-wise, as :func:`overlap_coefficient`; :func:`connection_dice` is connection-wise.
+    Vertex-wise, as :func:`overlap_coefficient`, with its rule for empty sets: both empty
+    give 1, one empty 0. ``get_dice_score.m`` gives NaN for two empty sets, 0 divided by
+    0; :func:`connection_dice` is connection-wise.
     """
-    x = endpoint_mass(first) > threshold
-    y = endpoint_mass(second) > threshold
-    return float(2 * (x & y).sum() / max(x.sum() + y.sum(), 1))
+    nx, ny, shared = _vertex_counts(first, second, threshold)
+    if nx == 0 and ny == 0:
+        return 1.0
+    if nx == 0 or ny == 0:
+        return 0.0
+    return 2 * shared / (nx + ny)
 
 
 def _connection_counts(first: EndpointConnectome, second: EndpointConnectome, threshold: float):
@@ -2064,9 +2169,7 @@ def _connection_counts(first: EndpointConnectome, second: EndpointConnectome, th
     A pair counts in both orders, and a vertex with itself once, as in the full symmetric
     matrix. The adjacency is :meth:`EndpointConnectome.adjacency`, taken on the CPU.
     """
-    threshold = float(threshold)
-    if not (np.isfinite(threshold) and threshold >= 0):
-        raise ValueError(f"threshold must be finite and 0 or more, got {threshold}")
+    threshold = _threshold(threshold)
     sets = []
     for connectome in (first, second):
         if connectome.device != "cpu":
@@ -2160,6 +2263,7 @@ def _as_subject(
     if isinstance(item, EndpointConnectome):
         if not _on_grids(item, lh_grid, rh_grid):
             raise ValueError(f"{name} {_OTHER_GRIDS}")
+        _check_weights(item, name)
         return item
     if isinstance(item, Endpoints):
         return EndpointConnectome.from_endpoints(item, lh_grid, rh_grid)
@@ -2201,14 +2305,17 @@ def endpoints_align(
         What every subject is registered onto. ``None``, the default,
         estimates it first: the Karcher median of the subjects' square-root
         densities (up to ``template_iterations`` Weiszfeld steps), so that no
-        subject is the reference. A connectome with endpoints (anything the
-        list takes) registers the listed subjects onto that one, which stays
-        where it is and need not be in the list: this is how one subject is
-        registered onto another. An integer registers everyone onto that
-        subject's own density. A square-root density array registers onto
+        subject is the reference; of two subjects it is their midpoint, in
+        either order (:meth:`ConSEAL.template`). A connectome with endpoints
+        (anything the list takes) registers the listed subjects onto that one,
+        which stays where it is and need not be in the list: this is how one
+        subject is registered onto another. An integer registers everyone onto
+        that subject's own density. A square-root density array registers onto
         that: an earlier run's :attr:`EndpointAlignment.template`, say, or the
         normalized mean of the subjects' ``q_transform(kernel)`` arrays. Its
-        squares must sum to 1, so a density passed in its place is refused.
+        squares must sum to 1, so a density passed in its place is refused,
+        and so is a string: ``"median"`` is ``None``. Its type, an index's
+        range and an array's shape are checked before the kernel is built.
     sigma, kernel_degree
         Heat-kernel bandwidth and truncation degree: 0.0027, at which this
         kernel is as narrow as the paper's (the fork's 0.005 with its own
@@ -2301,6 +2408,34 @@ def endpoints_align(
             "the template connectome has no streamlines on this grid, so there is nothing "
             "to register onto"
         )
+    # the rest of what template= can be checked for before the kernel is built, which on
+    # ico4 takes a while: a bool, an index out of range, a string or a misshapen array
+    expected = lh_grid.n_vertices + rh_grid.n_vertices
+    given = None  # an array template, in float64 on the CPU
+    if isinstance(template, (str, bytes)):  # numpy's string-to-float error said nothing of it
+        raise ValueError(
+            f"template={template!r} names no template: template=None, the default, estimates "
+            "the Karcher median; give a subject's index, a connectome or a square-root density"
+        )
+    if isinstance(template, (bool, np.bool_)):
+        raise ValueError(
+            f"template={template} names no subject: give a subject's index, a connectome or "
+            "a square-root density"
+        )
+    if isinstance(template, (int, np.integer)):
+        if not 0 <= int(template) < len(subjects):
+            raise ValueError(f"template={template} names no subject; the list has {len(subjects)}")
+    elif template is not None and fixed is None:
+        single = _single_precision(template)
+        given = np.asarray(_device.to_host(template), dtype=np.float64)
+        if given.shape != (expected, expected):
+            raise ValueError(
+                f"template is {given.shape}, expected a {expected} x {expected} square-root density"
+            )
+        if single:  # its unit mass held only to its precision: scaled to it in float64
+            mass = float(np.vdot(given, given))
+            if abs(mass - 1.0) <= SINGLE_PRECISION_MASS:
+                given = given / np.sqrt(mass)
 
     builder = HeatKernelBuilder(lh_grid, rh_grid, kernel_degree)
     kernel, derivative = builder.compute(sigma, derivative=True)
@@ -2325,32 +2460,16 @@ def endpoints_align(
 
     if template is None:
         target = engine.template(subjects, kernel, template_iterations, verbose)
-    elif isinstance(template, (bool, np.bool_)):
-        raise ValueError(
-            f"template={template} names no subject: give a subject's index, a connectome or "
-            "a square-root density"
-        )
-    elif isinstance(template, (int, np.integer)):
-        if not 0 <= int(template) < len(subjects):
-            raise ValueError(f"template={template} names no subject; the list has {len(subjects)}")
-        target = root_density(subjects[int(template)])
     elif fixed is not None:
         target = root_density(fixed)
-    else:
-        single = _single_precision(template)
-        target = np.asarray(_device.to_host(template), dtype=np.float64)
-        if single:  # its unit mass held only to its precision: scaled to it in float64
-            mass = float(np.vdot(target, target))
-            if abs(mass - 1.0) <= SINGLE_PRECISION_MASS:
-                target = target / np.sqrt(mass)
-    expected = lh_grid.n_vertices + rh_grid.n_vertices
-    if target.shape != (expected, expected):
-        raise ValueError(
-            f"template is {target.shape}, expected a {expected} x {expected} square-root density"
-        )
+    elif given is not None:
+        target = given
+    else:  # a subject's index, checked above
+        target = root_density(subjects[int(template)])
 
     result = EndpointAlignment(template=target)
     target = _device.to_device(target, device)  # sent once; on the CPU, the template itself
+    digest = grid_digest(lh_grid, rh_grid)  # the grids, which ConSEAL leaves in their frame
     for i, subject in enumerate(subjects):
         if verbose:
             print(f"registering subject {i + 1} of {len(subjects)}")
@@ -2369,6 +2488,7 @@ def endpoints_align(
                 rh_rigid=rh_warp.rigid.copy(),
                 lh_rigid_after=lh_warp.rigid_after,
                 rh_rigid_after=rh_warp.rigid_after,
+                grid_digest=digest,
             )
         )
         result.connectomes.append(warped)

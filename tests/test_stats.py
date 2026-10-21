@@ -108,6 +108,15 @@ def test_benjamini_hochberg_matches_its_definition():
     assert adjusted.max() <= 1.0
 
 
+def test_benjamini_hochberg_refuses_what_is_no_pvalue_and_keeps_nan_untested():
+    """An infinity was dropped as if untested, and 1.5 or -0.1 adjusted as if p-values."""
+    for wrong in (np.inf, -np.inf, 1.5, -0.1):
+        with pytest.raises(ValueError, match=f"lie in .0, 1.*entry 1 is {wrong}"):
+            benjamini_hochberg([0.01, wrong, 0.2])
+    np.testing.assert_allclose(benjamini_hochberg([0.01, np.nan, 0.2]), [0.02, np.nan, 0.2])
+    np.testing.assert_allclose(benjamini_hochberg([0.0, 1.0]), [0.0, 1.0])
+
+
 def test_benjamini_hochberg_controls_the_false_discovery_rate():
     """With everything null, discoveries should be rare at the stated rate."""
     rng = np.random.default_rng(4)
@@ -702,6 +711,18 @@ def test_a_missing_family_inside_a_plain_list_is_refused():
         local_test(scores, covariate, groups=one)
     labels[5], labels[9] = "family-alone-1", "family-alone-2"
     assert local_test(scores, covariate, groups=labels).groups == 22
+
+
+def test_family_labels_that_are_one_only_as_text_are_refused():
+    """NumPy wrote [1, "1", ...] all as text, one family, where [1.0, "1", ...] stayed two."""
+    rng = np.random.default_rng(43)
+    scores = rng.standard_normal((12, 2))
+    covariate = rng.standard_normal(12)
+    labels = [1, "1", 2, 2, 3, 3, 4, 4, 5, 5, 6, 6]
+    with pytest.raises(ValueError, match="one once NumPy reads them together, as 1 and '1'"):
+        local_test(scores, covariate, groups=labels)
+    assert local_test(scores, covariate, groups=[str(v) for v in labels]).groups == 6
+    assert local_test(scores, covariate, groups=[1, 1.0, *labels[2:]]).groups == 6  # one number
 
 
 def test_a_column_of_zeros_is_set_aside_by_the_clustered_test():

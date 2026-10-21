@@ -35,6 +35,9 @@ def n_from_condensed(size: int) -> int:
 def to_dense(condensed: np.ndarray, n: int | None = None) -> np.ndarray:
     """Expand a condensed vector to a symmetric matrix with a zero diagonal.
 
+    ``n``, when given, has to be the order the vector fills: one value with
+    ``n=3`` was broadcast into every entry.
+
     Examples
     --------
     >>> to_dense(np.array([1.0, 2.0, 3.0]))
@@ -45,6 +48,11 @@ def to_dense(condensed: np.ndarray, n: int | None = None) -> np.ndarray:
     condensed = np.asarray(condensed)
     if n is None:
         n = n_from_condensed(condensed.size)
+    elif condensed.size != condensed_size(n):
+        raise ValueError(
+            f"{condensed.size} values do not fill the strict upper triangle of a {n} x {n} "
+            f"matrix, which holds {condensed_size(n)}"
+        )
     out = np.zeros((n, n), dtype=condensed.dtype)
     rows, cols = np.triu_indices(n, k=1)
     # Fill both triangles rather than adding the transpose, which would

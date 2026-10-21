@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import numbers
 import os
 import re
 import tarfile
@@ -127,10 +128,19 @@ def _terms_digest(manifest: dict) -> str:
 
 
 def _read_record() -> dict:
+    """The acceptances on record, ``{cohort: {...}}``; one of another shape is none.
+
+    A record that is JSON but not an object of objects -- ``[]``, ``"accepted"``,
+    ``{"hcp-ya": "yes"}`` -- escaped as an AttributeError or a TypeError; it reads
+    as terms not accepted, and accepting them writes the record anew.
+    """
     try:
-        return json.loads((config_dir() / TERMS_RECORD).read_text(encoding="utf-8"))
+        record = json.loads((config_dir() / TERMS_RECORD).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
+    if not isinstance(record, dict):
+        return {}
+    return {cohort: entry for cohort, entry in record.items() if isinstance(entry, dict)}
 
 
 def terms_accepted(cohort: str = "hcp-ya") -> bool:
@@ -189,11 +199,22 @@ def _check_request(manifest: dict, subjects, modalities) -> tuple[list, tuple]:
     elif isinstance(subjects, str) and subjects.strip() == "all":
         chosen = list(entries)
     else:
-        if isinstance(subjects, (str, int)):
+        from .cohort import subject_id
+
+        # One id alone, as a string or any number: np.int64(100307) and 100307.0 were
+        # taken for lists of ids, and failed as a TypeError.
+        if isinstance(subjects, (str, numbers.Number)):
             subjects = [subjects]
-        # HCP ids are often written bare (100307), and as numbers; the files are sub-100307.
-        names = [str(s).strip() for s in subjects]
-        wanted = {s if s.startswith("sub-") else f"sub-{s}" for s in names}
+        wanted = set()
+        for s in subjects:
+            # HCP ids are often written bare (100307), and as numbers -- as floats, read
+            # from a table -- where the files are sub-100307; a fraction is no id.
+            if isinstance(s, numbers.Real) and not isinstance(s, numbers.Integral):
+                if not float(s).is_integer():
+                    raise ValueError(
+                        f"a subject id is a name or a whole number, as 100307 is; got {s!r}"
+                    )
+            wanted.add(subject_id(s))
         known = {entry["subject"] for entry in entries}
         if not wanted <= known:
             raise ValueError(
@@ -215,16 +236,25 @@ def _check_request(manifest: dict, subjects, modalities) -> tuple[list, tuple]:
     return chosen, modalities
 
 
-def _write_manifest_copy(manifest: dict, out: Path, report) -> None:
+def _write_manifest_copy(manifest: dict, out: Path, report, verified: dict) -> None:
     """``manifest.csv`` beside the files: every subject with a file here, and its demographics.
 
-    Rewritten as subjects arrive; a table of another making under that name is left alone.
+    A file counts if it is the index's: ``verified[path]``, where this download checked
+    its SHA-256, and otherwise of the size the index gives it. A subject was listed for
+    a file of its name alone, an empty or a stale one. Rewritten as subjects arrive; a
+    table of another making under that name is left alone.
     """
+
+    def here(entry, modality) -> bool:
+        path = out / f"{entry['subject']}_{modality}.h5"
+        if path in verified:
+            return verified[path]
+        size = entry["files"][modality].get("bytes")
+        return path.is_file() and size is not None and path.stat().st_size == int(size)
+
     entries = manifest["subjects"]
     columns = ["subject"] + [c for c in ("sex", "age_bin") if any(c in e for e in entries)]
-    present = [
-        e for e in entries if any((out / f"{e['subject']}_{m}.h5").exists() for m in e["files"])
-    ]
+    present = [e for e in entries if any(here(e, m) for m in e["files"])]
     header = ",".join(columns) + "\n"
     text = header + "".join(",".join(str(e.get(c, "")) for c in columns) + "\n" for e in present)
     path = out / "manifest.csv"
@@ -520,13 +550,14 @@ def fetch_cohort(
     Parameters
     ----------
     out
-        Destination directory; created if needed.
+        Destination directory; created if needed. A file there is refused before
+        the terms are asked for.
     cohort
         ``"hcp-ya"``, the 946 HCP Young Adult subjects on UNC Dataverse.
     subjects
         ``None`` for the eleven subjects of the tutorial; subject ids to fetch
-        (``sub-100307``, or the bare HCP id ``100307``), any of the 946; or ``"all"``
-        for every subject, 85 GB.
+        (``sub-100307``, or the bare HCP id ``100307``, as a string or a whole
+        number), one or a list, any of the 946; or ``"all"`` for every subject, 85 GB.
     modalities
         ``"sc"``, ``"fc"``, or both. Asking only for a modality the cohort does
         not hold raises ``ValueError``.
@@ -548,7 +579,7 @@ def fetch_cohort(
     The paths written or found, in the index's order, SC before FC. A file whose
     digest does not match the index is removed and reported as an error. Beside
     them go ``manifest.csv`` (the subjects with a file here, with sex and age band)
-    and ``DATA_USE.txt``, the terms.
+    and ``DATA_USE.txt``, the terms, written before the first file is fetched.
     """
     manifest = load_manifest(cohort)
     if not manifest["subjects"]:
@@ -561,21 +592,49 @@ def fetch_cohort(
                     f"the index has no place for {entry['subject']}'s files yet; the cohort "
                     "has not been released"
                 )
+    out = _check_out(out)  # before the terms are recorded, not after
     _require_terms(manifest, cohort, accept_terms)
-    out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
+    # The terms go beside the files before the first of them comes: written last, they
+    # were missing beside the files of a download that failed, or was killed, part way.
+    _write_data_use(manifest, out, report)
     release = manifest.get("release", {})
     transfer = None if fetcher else _Dataverse(release, manifest.get("archives", {}), report)
+    verified: dict = {}  # each file whose SHA-256 this download checked: whether it matched
     try:
-        written = _fetch_files(manifest, chosen, out, modalities, force, fetcher, transfer, report)
+        written = _fetch_files(
+            manifest, chosen, out, modalities, force, fetcher, transfer, report, verified
+        )
     finally:
-        _write_manifest_copy(manifest, out, report)
-    _write_data_use(manifest, out, report)
+        _write_manifest_copy(manifest, out, report, verified)
     return written
 
 
-def _fetch_files(manifest, chosen, out, modalities, force, fetcher, transfer, report):
-    """Every file asked for, by archive: read whole when all of it is wanted and none is here."""
+def _check_out(out) -> Path:
+    """``out`` as the folder to download into, refused where a file stands in its way.
+
+    Checked before the terms are asked for or recorded: a file there was found only
+    once they were, as a bare ``[Errno 17]``.
+    """
+    out = Path(out)
+    for place in (out, *out.parents):
+        if place.exists():
+            if not place.is_dir():
+                raise NotADirectoryError(
+                    f"{place} is a file, so {out} cannot be a folder to download into"
+                    if place != out
+                    else f"{out} is a file, not a folder to download into"
+                )
+            break
+    return out
+
+
+def _fetch_files(manifest, chosen, out, modalities, force, fetcher, transfer, report, verified):
+    """Every file asked for, by archive: read whole when all of it is wanted and none is here.
+
+    Each file whose SHA-256 is checked goes into ``verified``: ``True`` once it is the
+    index's, present already or fetched, and ``False`` for one present that is not.
+    """
     wanted = []  # (entry, modality, record, destination), in the index's order
     for entry in chosen:
         for modality in modalities:
@@ -584,14 +643,15 @@ def _fetch_files(manifest, chosen, out, modalities, force, fetcher, transfer, re
                 wanted.append((entry, modality, record, out / f"{entry['subject']}_{modality}.h5"))
 
     def present(record, destination):
-        return destination.exists() and not force and sha256_of(destination) == record["sha256"]
+        if force or not destination.exists():
+            return False
+        verified[destination] = sha256_of(destination) == record["sha256"]
+        return verified[destination]
 
-    done = {}
     by_archive = {}
     for entry, modality, record, destination in wanted:
         if present(record, destination):
             report(f"  {destination.name}: present and verified")
-            done[destination] = True
         else:
             by_archive.setdefault(record["archive"], []).append(
                 (entry, modality, record, destination)
@@ -611,12 +671,12 @@ def _fetch_files(manifest, chosen, out, modalities, force, fetcher, transfer, re
                 for entry, modality, record, destination in items
             }
             for destination in transfer.stream(archive, members, report):
-                done[destination] = True
+                verified[destination] = True
             # what the stream did not give, if it broke or ended early, comes by range below
     fetch = fetcher or transfer.fetch
     for items in by_archive.values():
         for entry, modality, record, destination in items:
-            if destination in done:
+            if verified.get(destination):
                 continue
             report(
                 f"  fetching {destination.name} ({int(record['bytes']) / 1e6:.1f} MB, in "
@@ -632,8 +692,8 @@ def _fetch_files(manifest, chosen, out, modalities, force, fetcher, transfer, re
             fetch(source, partial, report)
             _verify(partial, record["sha256"], destination.name)  # removed if it is wrong
             partial.replace(destination)
-            done[destination] = True
-    missing = [d.name for _e, _m, _r, d in wanted if d not in done]
+            verified[destination] = True
+    missing = [d.name for _e, _m, _r, d in wanted if not verified.get(d)]
     if missing:
         raise OSError(f"{len(missing)} file(s) did not come: {missing[:3]}; run the download again")
     return [destination for _e, _m, _r, destination in wanted]

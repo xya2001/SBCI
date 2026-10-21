@@ -1349,7 +1349,11 @@ def test_an_endpoint_warp_keeps_its_rigid_part_through_save_and_load(grid, tmp_p
     np.testing.assert_array_equal(loaded.lh_rigid, lh.rigid)
     np.testing.assert_array_equal(loaded.rh_rigid, np.eye(3))
     # a file written before the rigid part was kept loads with identities
-    older = {k: v for k, v in exported.__dict__.items() if not k.endswith("_rigid")}
+    older = {
+        k: v
+        for k, v in exported.__dict__.items()
+        if not k.endswith("_rigid") and k != "grid_digest"
+    }
     np.savez_compressed(tmp_path / "older.npz", **older)
     np.testing.assert_array_equal(EndpointWarp.load(tmp_path / "older.npz").lh_rigid, np.eye(3))
 
@@ -2137,10 +2141,17 @@ def test_a_fixed_array_must_be_a_unit_square_root_density(grid, connectome, kern
         {"viscosity": -0.05},
         {"viscosity": np.nan},
         {"relative_threshold": np.nan},
+        {"delta": "0.1"},
+        {"delta": True},
+        {"threshold": np.True_},
+        {"threshold": "1e-6"},
     ],
 )
 def test_settings_that_cannot_register_are_refused(grid, setting):
-    """Each returned identity warps, or stopped after one step, as though it had converged."""
+    """Each returned identity warps, or stopped after one step, as though it had converged.
+
+    A string or a bool was taken as its float(): True as a step of 1.0.
+    """
     (name,) = setting
     with pytest.raises(ValueError, match=name):
         ConSEAL(grid, grid, **setting)
@@ -2316,12 +2327,16 @@ def four_densities():
     return qs
 
 
-def test_a_weiszfeld_step_is_a_fifth_of_the_mean_direction():
-    """One step against Weiszfeld's formula; a step of a third passed every test."""
+@pytest.mark.parametrize("count", [4, 3])
+def test_a_weiszfeld_step_is_a_fifth_of_the_mean_direction(count):
+    """One step against Weiszfeld's formula; a step of a third passed every test.
+
+    Three subjects take the steps as four do; two take none (the test below).
+    """
     vertices, faces = icosphere(1)
     sphere = SphericalGrid(vertices, faces, order=1)
     engine = ConSEAL(sphere, sphere)
-    qs = four_densities()
+    qs = four_densities()[:count]
     start = engine.template([_Density(q) for q in qs], None, iterations=0)
     one = engine.template([_Density(q) for q in qs], None, iterations=1)
     directions, weights = np.zeros_like(start), 0.0
@@ -2334,6 +2349,34 @@ def test_a_weiszfeld_step_is_a_fifth_of_the_mean_direction():
     norm = np.sqrt((mean**2).sum())
     expected = np.cos(0.2 * norm) * start + np.sin(0.2 * norm) * mean / norm
     np.testing.assert_allclose(one, expected / np.sqrt((expected**2).sum()), atol=1e-14)
+
+
+def test_the_template_of_two_subjects_is_their_midpoint_in_either_order(grid):
+    """Every point between two subjects is a median; the steps ended a fifth of the way.
+
+    That from whichever subject rounding put nearer their mean, the first listed when the
+    two were as near, so two machines could differ. It is their normalized sum now.
+    """
+    vertices, faces = icosphere(1)
+    sphere = SphericalGrid(vertices, faces, order=1)
+    engine = ConSEAL(sphere, sphere)
+    qs = four_densities()[:2]
+    template = engine.template([_Density(q) for q in qs], None)
+    np.testing.assert_array_equal(
+        engine.template([_Density(q) for q in qs[::-1]], None, iterations=0), template
+    )
+    apart = np.degrees(np.arccos(np.clip((qs[0] * qs[1]).sum(), -1, 1)))
+    np.testing.assert_allclose(degrees_between(template, qs), apart / 2, rtol=1e-9)
+    assert (template**2).sum() == pytest.approx(1.0, abs=1e-12)
+    subjects = [made(grid, 1), made(grid, 2)]
+    settings = {**SMALL, "max_iterations": 0, "grids": (grid, grid)}
+    forward = endpoints_align(subjects, **settings)
+    np.testing.assert_array_equal(
+        endpoints_align(subjects[::-1], **settings).template, forward.template
+    )
+    kernel = HeatKernelBuilder(grid, grid, 12).compute(0.05, derivative=False)
+    to_each = degrees_between(forward.template, [s.q_transform(kernel) for s in subjects])
+    assert to_each[0] == pytest.approx(to_each[1], rel=1e-9)
 
 
 def test_the_rigid_search_undoes_a_turn_about_z_the_other_way(grid, connectome, kernel):
@@ -2451,3 +2494,118 @@ def test_a_template_in_single_precision_is_taken_at_its_precision(grid, connecto
     engine.register(single, subjects[1], k, dk)
     with pytest.raises(ValueError, match="not 1"):
         engine.register(template * np.sqrt(1 + 3e-6), subjects[1], k, dk)
+
+
+# --- the review of 20 October 2026 (PORTING.md item 38) ---------------------------------
+
+
+def test_barycentric_weights_that_do_not_sum_to_one_are_refused(grid, connectome, kernel):
+    """Built from arrays, or set by hand, such weights were taken without a word.
+
+    As the fixed subject, where the same density given as an array is refused, and as the
+    moving one, whose first relocation replaced them. Float32's rounding is taken, and so
+    is a weight slightly below zero, which the point search keeps for an endpoint just
+    outside its triangle.
+    """
+    k, dk = kernel
+    ends = connectome.to_endpoints()
+    ends.bary_in = 0.5 * ends.bary_in
+    with pytest.raises(ValueError, match="3000 endpoint.*do not sum to 1.*sums to 0.5"):
+        EndpointConnectome.from_endpoints(ends, grid, grid)
+    halved = connectome.copy()
+    halved.weights_out = 0.5 * halved.weights_out
+    engine = ConSEAL(grid, grid, max_iterations=1)
+    for fixed, moving, what in ((halved, connectome, "fixed"), (connectome, halved, "moving")):
+        with pytest.raises(ValueError, match=f"the {what} connectome: .*do not sum to 1"):
+            engine.register(fixed, moving, k, dk)
+    with pytest.raises(ValueError, match="subject 1: .*do not sum to 1"):
+        engine.template([connectome, halved], k)
+    with pytest.raises(ValueError, match="connectome 1: .*do not sum to 1"):
+        endpoints_align([connectome, halved], grids=(grid, grid), **SMALL)
+    single = connectome.to_endpoints()
+    single.bary_in = single.bary_in.astype(np.float32)
+    EndpointConnectome.from_endpoints(single, grid, grid)
+    assert (connectome.weights_in < 0).any() or (connectome.weights_out < 0).any()
+
+
+def test_the_vertex_metrics_check_the_threshold_and_count_empty_sets_as_the_connections_do(
+    grid, connectome
+):
+    """A negative threshold gave 1.0 and NaN 0.0; two empty sets overlapped by 0, not 1.
+
+    The connection-wise pair counts two empty sets as overlapping fully and one as not at
+    all; the MATLAB functions divide 0 by 0 there and give NaN.
+    """
+    nothing = EndpointConnectome.from_points(
+        grid, grid, np.empty((0, 3)), np.empty((0, 3)), np.empty(0, int), np.empty(0, int)
+    )
+    for metric in (overlap_coefficient, dice_score):
+        assert metric(nothing, nothing, 0.0) == 1.0
+        assert metric(connectome, nothing, 0.0) == 0.0 == metric(nothing, connectome, 1e-4)
+        for bad in (-1e-9, np.nan, np.inf):
+            with pytest.raises(ValueError, match="threshold must be finite and 0 or more"):
+                metric(connectome, connectome, bad)
+
+
+@pytest.mark.parametrize(
+    ("template", "match"),
+    [
+        (True, "names no subject"),
+        (2, "names no subject"),
+        ("median", "template=None, the default, estimates"),
+        (np.ones((3, 3)), "expected a 324 x 324"),
+    ],
+)
+def test_endpoints_align_checks_the_template_before_it_builds_the_kernel(
+    grid, monkeypatch, template, match
+):
+    """Each was refused only after the kernel was built, and a string by numpy's float()."""
+
+    def built(*args, **kwargs):
+        raise AssertionError("the kernel was built first")
+
+    monkeypatch.setattr(HeatKernelBuilder, "compute", built)
+    with pytest.raises(ValueError, match=match):
+        endpoints_align([made(grid, 1), made(grid, 2)], template=template, grids=(grid, grid))
+
+
+def test_the_turns_about_z_are_made_once(monkeypatch):
+    """Made again for every subject, they took 3 s of each registration from a turn."""
+    import sbci.conseal as conseal
+
+    first = conseal.spin_shells()
+    made_again = []
+    monkeypatch.setattr(conseal, "icosphere", lambda s: made_again.append(s) or icosphere(s))
+    again = conseal.spin_shells()
+    assert made_again == []  # kept, not made again
+    again[0][0, 0, 0] = 5.0
+    assert conseal.spin_shells()[0][0, 0, 0] == 1.0  # handed out as copies
+    monkeypatch.setattr(conseal, "_SPINS", None)
+    for kept, fresh in zip(first, conseal.spin_shells(), strict=True):
+        np.testing.assert_array_equal(kept, fresh)  # what is kept is what would be made
+    assert made_again == [4, 4, 5, 6, 7]
+
+
+def test_a_displacement_of_the_velocity_field_is_one_pair_a_vertex(grid):
+    """One row was added to every vertex's velocity."""
+    warp = StationaryWarp(grid)
+    n = grid.n_vertices
+    for shape in ((1, 2), (n, 3)):
+        with pytest.raises(ValueError, match=rf"\({n}, 2\) here"):
+            warp.compose(np.zeros(shape))
+    assert warp.compose(np.zeros((n, 2))) and not warp.velocity.any()
+
+
+def test_an_endpoint_warp_names_its_grid_through_save_and_load(grid, tmp_path):
+    """migrate_warp tells a warp of the bundled sphere by it; an older file loads with None."""
+    from sbci.alignment import bundled_grid_digest, grid_digest
+
+    result = endpoints_align(
+        [made(grid, 1), made(grid, 2)], template=0, grids=(grid, grid), **SMALL
+    )
+    warp = result.warps[1]
+    assert warp.grid_digest == grid_digest(grid, grid) != bundled_grid_digest()
+    assert EndpointWarp.load(warp.save(tmp_path / "warp")).grid_digest == warp.grid_digest
+    older = {k: v for k, v in warp.__dict__.items() if k != "grid_digest"}
+    np.savez_compressed(tmp_path / "older.npz", **older)
+    assert EndpointWarp.load(tmp_path / "older.npz").grid_digest is None

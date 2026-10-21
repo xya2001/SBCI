@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from collections.abc import Sequence
 
@@ -154,6 +155,22 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Entry point. Returns the process exit status."""
+    try:
+        status = _command(argv)
+        sys.stdout.flush()  # here, where a reader gone is caught, and not at exit
+    except BrokenPipeError:
+        # The output's reader stopped reading, as `sbci download hcp-ya --list | head -3`
+        # does, and a traceback followed. Python flushes stdout again at exit, so it is
+        # pointed at devnull first, as the signal module's documentation does it (Note on
+        # SIGPIPE); the exit is quiet, with status 1.
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
+        return 1
+    return status
+
+
+def _command(argv: Sequence[str] | None = None) -> int:
+    """Run the command ``argv`` names; :func:`main` is the entry point around it."""
     args = build_parser().parse_args(argv)
 
     if args.command == "validate":
@@ -277,8 +294,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"error: {error}", file=sys.stderr)
                 return 1
         try:
-            # what is asked for is checked first, so a wrong id is not met with the terms
+            # what is asked for is checked first, so a wrong id is not met with the terms,
+            # and so is where it goes: a file there was found once the terms were recorded
             download._check_request(download.load_manifest(args.cohort), subjects, modalities)
+            download._check_out(args.out)
             if not args.accept_terms and not download.terms_accepted(args.cohort):
                 if not _ask_terms(args.cohort):
                     return 1

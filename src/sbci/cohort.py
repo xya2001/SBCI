@@ -4,12 +4,14 @@
 
 * the computational files, named ``sub-<id>[_<key>-<value>...]_<sc|fc>.h5``:
   the names :func:`sbci.download.fetch_cohort` and the lab's builders write,
-  in any case, with ``key-value`` parts such as ``ses-1`` or
-  ``acq-multi-shell`` allowed and an id that may hold underscores
-  (``sub-NDAR_INV1``). A folder is searched with its subfolders, symbolic
-  links followed, so a BIDS-style tree works as well as a flat folder; a list
-  of folders and files works too. A ``.h5`` file whose name says neither a
-  subject nor a modality is listed in the summary as not read.
+  the prefix, the modality and the extension in any case, with ``key-value``
+  parts such as ``ses-1`` or ``acq-multi-shell`` allowed, their keys in
+  lowercase as BIDS writes them, and an id that may hold underscores and
+  hyphens (``sub-NDAR_INV1``, ``sub-NDAR_INV-1``). A folder is searched with
+  its subfolders, symbolic links followed, so a BIDS-style tree works as well
+  as a flat folder; a list of folders and files works too. A ``.h5`` file
+  whose name says neither a subject nor a modality is listed in the summary
+  as not read.
 * optionally one or more tables of subjects, ``.csv`` or ``.tsv`` (or dicts of
   columns), with a ``subject`` or BIDS ``participant_id`` column. Ids match
   with or without the ``sub-`` prefix, so the HCP's ``Subject`` column of bare
@@ -81,6 +83,7 @@ SETTINGS: dict[str, tuple[str, ...]] = {
         "normalization",
         "kernel",
         "bandwidth",
+        "nu",
         "streamline_weighting",
         "registration_reference",
         "pipeline_version",
@@ -148,25 +151,33 @@ class CohortError(SbciError, ValueError):
 
 
 def subject_id(value) -> str:
-    """The id as files carry it: ``sub-`` and the label.
+    """The id as files carry it: ``sub-`` and the label, the prefix read in any case.
 
     Examples
     --------
     >>> subject_id(100307), subject_id("sub-100307"), subject_id(" 100307 ")
     ('sub-100307', 'sub-100307', 'sub-100307')
+    >>> subject_id("SUB-01")
+    'sub-01'
     """
     text = str(value).strip()
     if text.endswith(".0") and text[:-2].isdigit():  # a number read as a float
         text = text[:-2]
-    return text if text.startswith("sub-") else f"sub-{text}"
+    return "sub-" + (text[4:] if text[:4].lower() == "sub-" else text)
+
+
+_ENTITY = re.compile(r"[a-z]+-")
+"""How a ``key-value`` part of a name begins: a lowercase key, as BIDS writes its keys."""
 
 
 def parse_name(name: str) -> tuple[str, str | None, str] | None:
     """``(subject, session, modality)`` from a computational file's name, or ``None``.
 
     The id runs from ``sub-`` to the first ``key-value`` part or the modality,
-    so it may hold underscores; a value may hold hyphens; case does not matter
-    in the modality or the extension.
+    so it may hold underscores and hyphens: a ``key-value`` part begins with a
+    lowercase key, as BIDS writes its keys (``ses-1``, ``acq-multi-shell``), and
+    a part such as ``INV-1`` belongs to the id. A value may hold hyphens; case
+    does not matter in the ``sub-`` prefix, the modality or the extension.
 
     Examples
     --------
@@ -176,6 +187,8 @@ def parse_name(name: str) -> tuple[str, str | None, str] | None:
     ('sub-01', '2', 'fc')
     >>> parse_name("sub-NDAR_INV1_acq-multi-shell_SC.H5")
     ('sub-NDAR_INV1', None, 'sc')
+    >>> parse_name("SUB-NDAR_INV-1_sc.h5")
+    ('sub-NDAR_INV-1', None, 'sc')
     >>> parse_name("sub-01_vertexarea.dscalar.nii") is None
     True
     """
@@ -183,24 +196,24 @@ def parse_name(name: str) -> tuple[str, str | None, str] | None:
     if match is None:
         return None
     parts = name[: match.start()].split("_")
-    if len(parts) < 2 or not parts[0].startswith("sub-") or len(parts[0]) == 4:
+    if len(parts) < 2 or parts[0][:4].lower() != "sub-" or len(parts[0]) == 4:
         return None
     modality = parts[-1].lower()
     if modality not in spec.MODALITIES:
         return None
     label = [parts[0][4:]]
     index = 1
-    while index < len(parts) - 1 and "-" not in parts[index]:
+    while index < len(parts) - 1 and not _ENTITY.match(parts[index]):
         label.append(parts[index])
         index += 1
     entities = {}
     for part in parts[index:-1]:
-        if "-" not in part:
+        if not _ENTITY.match(part):
             return None
         key, value = part.split("-", 1)
-        if not key or not value:
+        if not value:
             return None
-        entities[key.lower()] = value
+        entities[key] = value
     return "sub-" + "_".join(label), entities.get("ses"), modality
 
 
@@ -302,6 +315,8 @@ def _next_row(reader, path: Path) -> list | None:
 
     ``csv.Error`` is no ``ValueError``: a cell past the module's size limit
     escaped ``sbci cohort`` as a traceback. The line given is where the row starts.
+    A table that is not UTF-8 (a BOM is read) raised a ``UnicodeDecodeError``
+    that named no file.
     """
     start = reader.line_num + 1
     try:
@@ -311,6 +326,18 @@ def _next_row(reader, path: Path) -> list | None:
             f"{path.name}, line {start}: {error}, as Python's csv module reads it. A cell that "
             "opens with a quote runs on to the next quote, across lines, so a quote left open, "
             "or not doubled inside a quoted value, takes in the rows after it"
+        ) from None
+    except UnicodeDecodeError:
+        # The text is decoded ahead of the rows, a block at a time: the line is found anew.
+        for number, line in enumerate(path.read_bytes().splitlines(), 1):
+            try:
+                line.decode("utf-8")
+            except UnicodeDecodeError:
+                start = number
+                break
+        raise ValueError(
+            f"{path.name}, line {start}: not UTF-8 text, which a table is read as. Save it as "
+            "UTF-8 (in Excel, as CSV UTF-8) and load it again"
         ) from None
 
 
@@ -336,13 +363,13 @@ def _read_table(table, subject_column, missing=MISSING):
             if header is None:
                 raise ValueError(f"{path.name} is empty")
             header = [name.strip() for name in header]
-            repeated = sorted({name for name in header if header.count(name) > 1})
+            repeated = sorted({name for name in header if name and header.count(name) > 1})
             if repeated:
                 raise ValueError(
                     f"{path.name} has two columns named {repeated[0]!r}; which to use is not "
                     "for the loader to guess"
                 )
-            columns = {name: [] for name in header}
+            rows = []
             while (row := _next_row(reader, path)) is not None:
                 if not any(cell.strip() for cell in row):
                     continue  # a blank line
@@ -353,8 +380,20 @@ def _read_table(table, subject_column, missing=MISSING):
                         f"{'tab' if delimiter == chr(9) else 'comma'} inside a value has to be "
                         "quoted; read unquoted, it shifts every later cell of the row"
                     )
-                for name, cell in zip(header, row + [""] * (len(header) - len(row)), strict=False):
-                    columns[name].append(cell)
+                rows.append(row[: len(header)] + [""] * (len(header) - len(row)))
+            # Columns without a name are what a spreadsheet's trailing commas leave
+            # (subject,age,,): dropped when they hold no value, where two were refused as
+            # two columns named '' and one was read as a covariate named ''. One that
+            # holds values has no name to go by.
+            for index, name in enumerate(header):
+                if not name and any(row[index].strip() for row in rows):
+                    raise ValueError(
+                        f"{path.name}: column {index + 1} holds values but has no name; name "
+                        "it in the first row"
+                    )
+            columns = {
+                name: [row[index] for row in rows] for index, name in enumerate(header) if name
+            }
     if subject_column is None:
         found = [name for name in SUBJECT_COLUMNS if name in columns]
         if not found:
@@ -437,16 +476,18 @@ def _as_column(values, missing=MISSING) -> np.ndarray:
     return np.array([None if v is None else str(v).strip() for v in cells], dtype=object)
 
 
-def _find_files(files) -> tuple[list[Path], list[Path]]:
+def _find_files(files) -> tuple[dict[Path, str], list[Path]]:
     """The computational files ``files`` names, and the ``.h5`` files whose names say nothing.
 
     Folders are searched with their subfolders, symbolic links followed, and
     every real folder is searched once and every file taken once under its name,
-    however many ways lead to it; two names for one file stay two subjects.
+    however many ways lead to it; two names for one file stay two subjects. Each
+    file comes with where it is shown: its path from the folder it was found in,
+    or as it was given, since a subject's two files may share a name.
     """
     # Any path-like, as load, reduce and project take one: another was read as a list.
     items = [files] if isinstance(files, (str, os.PathLike)) else list(files)
-    paths: dict[tuple, Path] = {}
+    paths: dict[tuple, tuple[Path, str]] = {}
     unnamed: dict[tuple, Path] = {}
     seen: set = set()
     for item in items:
@@ -463,7 +504,8 @@ def _find_files(files) -> tuple[list[Path], list[Path]]:
                     found = Path(root) / name
                     key = (os.path.realpath(found), name)
                     if parse_name(name) is not None:
-                        paths.setdefault(key, found)  # a link to nothing fails its check, by name
+                        # a link to nothing fails its check, by name
+                        paths.setdefault(key, (found, os.path.relpath(found, path)))
                     elif _EXTENSION.search(name):
                         unnamed.setdefault(key, found)
         elif not path.exists():
@@ -474,8 +516,8 @@ def _find_files(files) -> tuple[list[Path], list[Path]]:
                 "subject and modality are unknown"
             )
         else:
-            paths.setdefault((os.path.realpath(path), path.name), path)
-    return list(paths.values()), list(unnamed.values())
+            paths.setdefault((os.path.realpath(path), path.name), (path, str(path)))
+    return dict(paths.values()), list(unnamed.values())
 
 
 def _inspect(path: Path, modality: str, validate: bool) -> tuple[dict, dict]:
@@ -589,6 +631,9 @@ class LoadedCohort:
     required: tuple = field(default_factory=tuple)
     unread: list = field(default_factory=list)
     """``.h5`` files found whose names say neither a subject nor a modality."""
+    reasons: dict = field(default_factory=dict)
+    """``{subject: [reason, ...]}`` for every subject left out, each reason whole: the report
+    joins them with ``"; "``, which a reason may hold too."""
 
     @property
     def n_subjects(self) -> int:
@@ -622,8 +667,13 @@ class LoadedCohort:
         lines = [
             f"{seen} subjects seen; {self.n_subjects} in the cohort ({', '.join(self.modalities)})."
         ]
+        # each subject's reasons as they were given: split on "; ", a reason that holds one
+        # counted twice, and three subjects left out were counted four times
         reasons = Counter(
-            part for row in self.report if not row["included"] for part in row["reason"].split("; ")
+            reason
+            for row in self.report
+            if not row["included"]
+            for reason in self.reasons.get(row["subject"], [row["reason"]])
         )
         for reason, count in reasons.most_common():
             lines.append(f"  left out, {count}: {reason}")
@@ -682,8 +732,10 @@ def load_cohort(
         A ``.csv`` or ``.tsv`` file, or a dict of columns, with one row per
         subject; or a list of them, joined on the subject (a subject missing
         from one has no value in its columns). Optional: without one the
-        cohort is the files alone. A file with two columns of one name is
-        refused.
+        cohort is the files alone. A file is read as UTF-8, with or without a
+        BOM. A column with neither a name nor a value, as a spreadsheet's
+        trailing commas leave, is dropped; a file with two columns of one
+        name, or a column with values and no name, is refused.
     modalities
         ``"sc"``, ``"fc"``, or both: what every subject needs a file of.
     session
@@ -890,7 +942,8 @@ def load_cohort(
                     reasons[subject].append(f"no {modality} file")
                 continue
             if len(entries) > 1:
-                names = ", ".join(sorted(p.name for p, _ in entries))
+                # where each is, from the folder searched: by name alone, two read as one
+                names = ", ".join(sorted(paths_found[p] for p, _ in entries))
                 reasons[subject].append(f"{len(entries)} {modality} files: {names}")
                 continue
             try:
@@ -900,6 +953,8 @@ def load_cohort(
                 continue
             row.update(numbers_found)
             made[modality] = {key: fields.get(key) for key in SETTINGS[modality]}
+            if modality == "sc" and made["sc"]["kernel"] == "matern" and made["sc"]["nu"] is None:
+                made["sc"]["nu"] = 3.0  # made before nu was recorded, when 3 was the only one
         if len(made) == len(modalities):
             settings_of[subject] = made
         for name in required:
@@ -1068,4 +1123,5 @@ def load_cohort(
         session=session if isinstance(session, Mapping) or session is None else str(session),
         required=required,
         unread=unread,
+        reasons={s: list(reasons[s]) for s in everyone if reasons[s]},
     )

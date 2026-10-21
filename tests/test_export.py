@@ -474,17 +474,24 @@ def test_a_write_through_a_link_checks_the_folder_it_lands_in(tmp_path):
 # --- the review of 11 October 2026 -------------------------------------------------
 
 
-def test_a_partial_file_left_by_a_killed_write_is_replaced(tmp_path):
-    """The temporary name carried the process id, so a killed write's 17 GB stayed for good."""
+def test_a_write_has_a_temporary_file_of_its_own_with_the_targets_ending(tmp_path):
+    """The ending tells nibabel the form; a file a killed write left is neither used nor removed.
+
+    Until PORTING.md item 38 the name was the target's alone, so that the next
+    write replaced what a killed one left; two writes at once then shared it.
+    """
     from sbci.export import _atomic
 
-    target = tmp_path / "regions.csv"
-    stale = tmp_path / ".partial-regions.csv"
+    target = tmp_path / "map.dscalar.nii"
+    stale = tmp_path / ".partial-map.dscalar.nii"
     stale.write_text("left by a write that was killed")
     with _atomic(target) as temporary:
-        assert temporary == stale
-        temporary.write_text("subject,value\n")
-    assert target.read_text() == "subject,value\n" and not stale.exists()
+        name = temporary.name
+        assert temporary.parent == tmp_path and temporary != stale
+        assert name.startswith(".partial-") and name.endswith("-map.dscalar.nii")
+        temporary.write_text("written")
+    assert target.read_text() == "written" and not temporary.exists()
+    assert stale.read_text() == "left by a write that was killed"
 
 
 def test_region_means_counts_the_vertices_its_mask_names():
@@ -504,3 +511,40 @@ def test_region_means_counts_the_vertices_its_mask_names():
     keep = np.zeros(cortex.size, dtype=bool)
     keep[wall] = True
     assert region_means(values, atlas, area=area, mask=keep)[0] == pytest.approx(100.0)
+
+
+# --- PORTING.md item 38 -------------------------------------------------------------------
+
+
+def test_two_writes_of_one_table_at_once_do_not_splice_their_rows(tmp_path):
+    """Both wrote .partial-<name>: the table took the rows of both, and the first write failed.
+
+    The first write is held half way through its rows while a second runs
+    through; both complete, and the table is the one written last, whole.
+    """
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from sbci.export import _write_table
+
+    path = tmp_path / "regions.csv"
+    halfway, second_done = threading.Event(), threading.Event()
+
+    def rows(writer, held=False):
+        for k in range(1000):
+            if held and k == 500:
+                halfway.set()
+                assert second_done.wait(30)
+            yield [writer, k]
+
+    with ThreadPoolExecutor(1) as pool:
+        first = pool.submit(_write_table, path, ["writer", "row"], rows("first", held=True))
+        try:
+            assert halfway.wait(30)
+            _write_table(path, ["writer", "row"], rows("second"))
+        finally:
+            second_done.set()
+        first.result(30)
+    header, written = _read_table(path)
+    assert header == ["writer", "row"] and written == [["first", str(k)] for k in range(1000)]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["regions.csv"]

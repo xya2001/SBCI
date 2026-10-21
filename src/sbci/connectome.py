@@ -224,8 +224,8 @@ class ContinuousConnectome:
         Give either a ``vertex`` index, returning that vertex's density slice,
         or a ``region``, returning the area-weighted mean of its vertices'
         profiles, ``sum_i a_i D[i, :] / sum_i a_i`` over the region's cortical
-        vertices ``i``. A region is a boolean mask over vertices, or an
-        ``(atlas, region)`` pair naming one --
+        vertices ``i``. A region is a boolean mask over vertices, of shape
+        ``(n_vertices,)``, or an ``(atlas, region)`` pair naming one --
         ``cc.seed(region=("Desikan", "LH_bankssts"))``. Medial-wall vertices
         in the region are left out, as :meth:`to_atlas` leaves them out: their
         rows are zero, so their area would only scale the profile down. A
@@ -260,6 +260,11 @@ class ContinuousConnectome:
                 "region= must be a boolean mask over vertices, or an "
                 '(atlas, region) pair such as ("Desikan", "LH_bankssts"); '
                 f"got an array of dtype {member.dtype}"
+            )
+        if member.ndim != 1:
+            # a column or row of n entries would broadcast against the grid's arrays
+            raise ValueError(
+                f"region mask has shape {member.shape}, expected ({n},): one entry per vertex"
             )
         if member.size != n:
             raise ValueError(f"region mask has {member.size} entries, expected {n}")
@@ -347,6 +352,7 @@ class ContinuousConnectome:
         kernel: str = "shk",
         bandwidth: float | None = None,
         eigenpairs: Any = None,
+        nu: float | None = None,
         **kwargs: Any,
     ):
         """Re-smooth from the stored endpoints, in congruence form ``K A K^T``.
@@ -355,8 +361,9 @@ class ContinuousConnectome:
         through to :func:`sbci.smoothing.smooth`.
 
         Returns a new :class:`ContinuousConnectome` carrying the same endpoints
-        and metadata, with ``kernel`` and ``bandwidth`` updated to what was
-        used, so a re-smoothed file still says how it was made.
+        and metadata, with ``kernel`` and ``bandwidth`` (and ``nu`` for
+        ``matern``) updated to what was used, so a re-smoothed file still says
+        how it was made.
 
         Parameters
         ----------
@@ -378,6 +385,9 @@ class ContinuousConnectome:
             :func:`sbci.smoothing.find_basis` looks, and fetched there once
             from SBCI_Toolkit if it is in none of them (``sbci basis`` fetches
             it ahead).
+        nu
+            The Matern kernel's smoothness, 3 by default as in the reference
+            script; only ``matern`` takes it.
 
         Examples
         --------
@@ -385,7 +395,9 @@ class ContinuousConnectome:
         """
         from .smoothing import smooth as _smooth
 
-        return _smooth(self, kernel=kernel, bandwidth=bandwidth, eigenpairs=eigenpairs, **kwargs)
+        return _smooth(
+            self, kernel=kernel, bandwidth=bandwidth, eigenpairs=eigenpairs, nu=nu, **kwargs
+        )
 
     def reduce(self, rank: int, **kwargs):
         """Rank-``rank`` separable approximation of this one connectome.

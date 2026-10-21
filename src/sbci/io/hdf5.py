@@ -366,7 +366,7 @@ def write_hdf5(
 
     A read-only file is refused, as every writer of the package refuses one.
     """
-    from ..export import _target
+    from ..export import _target, _temporary
 
     metadata.validate()
     if endpoints is not None and metadata.modality != "sc":
@@ -389,8 +389,12 @@ def write_hdf5(
 
     # Written beside the destination and moved into place once complete, so a
     # failure part-way (an endpoint array of the wrong kind, a full disk) leaves
-    # neither a truncated file nor a destroyed previous one.
-    partial = target.with_name(target.name + ".partial")
+    # neither a truncated file nor a destroyed previous one. Each save writes a
+    # temporary file of its own: under the one name <name>.partial, a second save
+    # at once truncated the first's file and removed it, and with HDF5's file
+    # locking off a good file was replaced by an unreadable one. A save killed
+    # part way may leave one stray .<name>.*.partial file beside the target.
+    partial = _temporary(target, f".{target.name}.", ".partial")
     try:
         with h5py.File(partial, "w") as handle:
             handle.create_dataset(CONNECTIVITY, data=np.asarray(data, dtype=np.float32), **opts)

@@ -161,15 +161,18 @@ sbci cohort hcp-ya --table hcp-ya/manifest.csv --modalities sc,fc --validate --r
 
 `load_cohort` is the handoff into the package. It takes the computational
 files, named `sub-<id>[_<key>-<value>...]_<sc|fc>.h5` as `sbci download` and
-the lab's builders write them -- in any case, with an id that may hold
-underscores (`sub-NDAR_INV1`) and values that may hold hyphens
-(`acq-multi-shell`) -- searching folders with their subfolders and following
+the lab's builders write them -- the prefix, the modality and the extension in
+any case, the keys in lowercase as BIDS writes them, with an id that may hold
+underscores and hyphens (`sub-NDAR_INV1`, `sub-NDAR_INV-1`) and values that
+may hold hyphens (`acq-multi-shell`) -- searching folders with their subfolders and following
 symbolic links, so a BIDS-style tree works; a `.h5` file whose name says no
 subject and modality is listed in the summary as not read. It takes tables
 with a `subject` or BIDS `participant_id` column too, whose ids match with or
 without the `sub-` prefix. Several folders and several tables can be given,
-the tables joined on the subject; a table with two columns of one name is
-refused. It returns the subjects that have a usable file of every modality
+the tables joined on the subject; a table is read as UTF-8, with or without a
+BOM, a column with neither a name nor a value (a spreadsheet's trailing
+commas) is dropped, and a table with two columns of one name, or with values
+under no name, is refused. It returns the subjects that have a usable file of every modality
 asked for and a value in every column `require=` names, with their files and
 covariates in one order, and a report with a row for every subject seen in
 the files or the tables, saying who was left out and why. Cells read as
@@ -276,9 +279,15 @@ FreeSurfer and no MATLAB; `tools/convert_atlases.py` regenerates them from the
 toolkit's files, and the output is committed so no release step needs MATLAB. Short names resolve to the stored names ignoring
 case, spaces, hyphens and underscores. `list_atlases()` gives the full set,
 which also includes Gordon, Yeo, the PALS-B12 family and CoCoNest at 22 scales.
-The grid sets the resolution: Schaefer-900 and Schaefer-1000 come out with 899
-and 999 regions, because one parcel of each has no ico4 vertex, and 68 of the
-11,822 bundled regions have a single cortical vertex (PORTING.md item 3).
+The grid sets the resolution: Schaefer-900, Schaefer-1000 and CoCoNest-500
+come out with 899, 999 and 499 regions, because one parcel of each has no ico4
+vertex (Schaefer-900's parcel 494, `7Networks_RH_Vis_44`; Schaefer-1000's
+parcel 55, `7Networks_LH_Vis_55`; CoCoNest-500's cluster 5930), and 68 of the
+11,822 bundled regions have a single cortical vertex (PORTING.md item 3). The
+labels after a lost parcel are renumbered to close the gap, so Schaefer-900's
+label 494 is `RH_7Networks_RH_Vis_45`, and CoCoNest's labels never equal its
+published cluster ids, which its names carry as `Parcel_<id>`: match regions
+by `atlas.names`, not by number.
 
 Label `0` means "no region" — the medial wall, plus anything outside a
 partial-coverage atlas. Regions are numbered `1..K` with no gaps, and
@@ -504,6 +513,7 @@ sbci validate sub-copy_sc.h5
 [PASS] area: sum 327684, expected about 327684
 [PASS] unit mass: total mass 1
 [PASS] mask: medial wall carries 0 of the total
+[PASS] endpoints: every endpoint rebuilds within one edge (4.74 degrees) of its stored vertex, at most 2.70
 ```
 
 Exit status 0 means every check passed. `save()` validates before writing, so a
@@ -599,6 +609,11 @@ the basis. The result is a new `ContinuousConnectome` normalized to unit mass,
 carrying the same endpoints, so it can be re-smoothed again at a different
 bandwidth.
 
+`kernel="matern"` takes its smoothness as well, `nu=` (3 when not given, the
+reference script's value; it names 1, 2 and 3). The result records it as
+`nu`, and `sbci.load_cohort` tells Matern files at different `nu` apart,
+reading one written before `nu` was recorded as 3.
+
 **The Laplace-Beltrami basis** is `EV_LBO_ds_ico4_L.mat` and
 `EV_LBO_ds_ico4_R.mat`, 50 MB per hemisphere, from the SBCI group's
 [SBCI_Toolkit](https://github.com/sbci-brain/SBCI_Toolkit). The first `rdk` or
@@ -648,7 +663,7 @@ minute. See PORTING.md item 6.
 A re-smoothed density can carry mass on the medial wall, exactly as both
 references do, so `sbci validate` may flag a file saved straight from it --
 SPEC_QUESTIONS.md item 14. Pass `mask_medial_wall=True` to zero it first --
-a file saved that way passes all twelve `sbci validate` checks, verified end to
+a file saved that way passes all thirteen `sbci validate` checks, verified end to
 end on a real subject -- and `progress=lambda done, total: ...` to watch a run.
 
 The kernel is evaluated the way `c3_main` evaluates it: through two
@@ -985,7 +1000,10 @@ template and hands back the warps and the warped connectomes. With no
 Karcher median of the subjects' square-root densities (Weiszfeld steps from
 the subject nearest the mean until a step is short, at most 100;
 `template_iterations`), so that no subject is the reference and every subject
-moves. That is the cohort study's setting. To register one
+moves. That is the cohort study's setting. Of two subjects, every point between
+them is a median, and the template is the one halfway, their normalized sum,
+whichever is listed first (until October 2026 it was a fifth of the way from
+the one rounding put nearer their mean). To register one
 subject onto another, pass `template=` the fixed subject's connectome: it
 stays where it is, and the connectomes in the list move onto it. Pass a
 square-root density of unit mass, an earlier run's `result.template`, to
@@ -1005,7 +1023,10 @@ cohort, and start with a small `max_iterations` to see the cost falling. A GPU
 takes one registration from 85 s to 7 s (*Running the alignments on a GPU*).
 
 `result.traces` holds each subject's cost before registration and after every
-accepted step.
+accepted step. `result.aligned` comes back a little short of its mass, as the
+reference's does: the mass a warp interpolates onto the diagonal, which a
+connectome does not carry, is dropped rather than given back, 0.34% and 0.49%
+for two released subjects after ten steps (PORTING.md item 38).
 
 Four things to know before trusting the numbers:
 
@@ -1030,9 +1051,11 @@ Four things to know before trusting the numbers:
   clear of them -- a change of coordinates and nothing else -- and so it does
   a grid you supply with a vertex on the axis or within 0.001 of it (in
   `sin(theta)`), where the Jacobian is unreliable too. Every warp records the
-  rotation, which `migrate_warp` needs to place it; a grid you rotated
-  yourself needs `grid_rotations=` saying so, or its warps land that far off
-  (up to 17 degrees, the bundled sphere's own rotation).
+  rotation, which `migrate_warp` needs to place it, and a digest of its grid,
+  by which `migrate_warp` refuses a warp of any grid but the bundled sphere; a
+  grid you rotated yourself needs `grid_rotations=` saying so, or its warps are
+  refused there, where until October 2026 they landed that far off (up to 17
+  degrees, the bundled sphere's own rotation).
 - **`delta` defaults to 1e-5, not the reference's 1e-10.** A central difference
   at 1e-10 loses six of sixteen digits; the reference's own derivative moves by
   2% of its range between adjacent step sizes. Pass `delta=1e-10` to reproduce
@@ -1107,7 +1130,9 @@ eight cores of an AMD EPYC 75F3 at the public code's bandwidth, four fifths of
 it locating the moved endpoints on the grid again (PORTING.md item 19). That
 search ran on one core until item 36 shared it among the cores, with the same
 bits: a whole registration now takes about half the time on eight cores, 7 to
-8 s an iteration on an AMD EPYC 7702 and about 5 on an EPYC 9654. Real subjects take more iterations than
+8 s an iteration on an AMD EPYC 7702 and about 5 on an EPYC 9654. It takes the
+cores the job may use, at most eight, and no more than `SBCI_THREADS` says, or
+`OMP_NUM_THREADS` when that is unset. Real subjects take more iterations than
 the known warps item 19 undid in 76 to 155: 148 whole registrations at the
 defaults, onto a template or onto one subject, took 49 to 489 iterations, 11
 minutes to 3.5 hours on eight cores before item 36; `max_iterations` caps it.
@@ -1205,11 +1230,12 @@ to know:
   their mean and 17 to 20 degrees from every subject at the public code's
   bandwidth (PORTING.md item 9), 21 to 25 at the default's (the cohort
   figure's run, item 21). With two subjects the
-  median is any point between them: it starts from whichever subject rounding
-  puts nearer their mean and ends a fifth of the way to the other, so two
-  machines can still differ. Pass `template=` the subject to hold fixed, or a
-  square-root density computed beforehand -- the normalized mean built above,
-  for one -- to choose.
+  median is any point between them, and the template is the one halfway, their
+  normalized sum, in either order; until October 2026 it started from whichever
+  subject rounding put nearer their mean and ended a fifth of the way to the
+  other, so two machines could differ. Pass `template=` the subject to hold
+  fixed, or a square-root density computed beforehand -- the normalized mean
+  built above, for one -- to choose another.
 - **The default settings onto one subject can align away a real
   difference.** With the paper's settings and the template collapsed onto a
   subject, the planted bundle of the synthetic cohort in PORTING.md item 7

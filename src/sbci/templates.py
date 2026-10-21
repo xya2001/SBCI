@@ -43,7 +43,7 @@ from pathlib import Path
 import numpy as np
 
 from . import spec
-from .alignment import MeshQuery, _npz_path, normalize_rows, voronoi_areas
+from .alignment import MeshQuery, _npz_path, bundled_grid_digest, normalize_rows, voronoi_areas
 from .surface import load_surface
 
 #: Templates a warp can be carried to.
@@ -80,7 +80,15 @@ def _surface_arrays(image, path) -> tuple[np.ndarray, np.ndarray]:
 
 
 def _interpolate(points, base, images, faces, query: MeshQuery | None = None):
-    """Barycentric transport: where ``points`` on the ``base`` mesh land under ``images``."""
+    """Barycentric transport: where ``points`` on the ``base`` mesh land under ``images``.
+
+    ``images`` holds one point for each vertex of ``base``; fewer gave a bare IndexError.
+    """
+    if np.shape(images) != np.shape(base):
+        raise ValueError(
+            f"the images are {np.shape(images)}, where the mesh they move has "
+            f"{np.shape(base)}: one image a vertex"
+        )
     query = MeshQuery(base, faces) if query is None else query
     weights, indices = query.query(normalize_rows(np.asarray(points, dtype=np.float64)))
     return normalize_rows(np.einsum("nk,nkj->nj", weights, images[indices]))
@@ -285,20 +293,28 @@ class TemplateWarp:
 
         A deformed sphere is how Connectome Workbench takes a registration: it is
         the template's mesh with every vertex moved to where the warp sends it,
-        at radius 100 like HCP's own spheres.
+        at radius 100 like HCP's own spheres. As theirs do, the coordinates name
+        their hemisphere (``AnatomicalStructurePrimary``, ``CortexLeft`` or
+        ``CortexRight``) and their shape (``GeometricType``, ``Spherical``), and lie
+        in the Talairach space of NIfTI's transform codes, by the identity.
         """
         import nibabel as nib
         from nibabel import gifti
 
+        talairach = nib.nifti1.xform_codes.code["talairach"]
         written = []
-        for letter, vertices, faces in (
-            ("L", self.lh_vertices, self.faces[0]),
-            ("R", self.rh_vertices, self.faces[1]),
+        for letter, structure, vertices, faces in (
+            ("L", "CortexLeft", self.lh_vertices, self.faces[0]),
+            ("R", "CortexRight", self.rh_vertices, self.faces[1]),
         ):
             coordinates = gifti.GiftiDataArray(
                 np.asarray(vertices * SPHERE_RADIUS, dtype=np.float32),
                 intent="NIFTI_INTENT_POINTSET",
                 datatype="NIFTI_TYPE_FLOAT32",
+                coordsys=gifti.GiftiCoordSystem(talairach, talairach, np.eye(4)),
+                meta=gifti.GiftiMetaData(
+                    {"AnatomicalStructurePrimary": structure, "GeometricType": "Spherical"}
+                ),
             )
             triangles = gifti.GiftiDataArray(
                 np.asarray(faces, dtype=np.int32),
@@ -321,7 +337,12 @@ def migrate_warp(warp, to: str = "fs_LR_32k", grid_rotations=None) -> TemplateWa
         :class:`~sbci.alignment.Warp` from :func:`sbci.align` or
         :class:`~sbci.conseal.EndpointWarp` from :func:`sbci.endpoints_align`:
         anything with ``lh_vertices`` and ``rh_vertices``, the images of the
-        grid's vertices.
+        grid's vertices. The grid must be the bundled ico4 sphere's: a warp
+        whose hemispheres are not 2562 images each is refused, and so is one
+        whose ``grid_digest`` names another grid
+        (:func:`sbci.alignment.grid_digest`), such as an icosphere of as many
+        vertices elsewhere, which migrated without a word. A warp without a
+        digest, as a file written before it was kept, is taken on its size.
     to
         ``"fs_LR_32k"`` (HCP's sphere, where MSMAll-aligned data live) or
         ``"fsaverage"`` (FreeSurfer's standard sphere at full resolution,
@@ -340,6 +361,22 @@ def migrate_warp(warp, to: str = "fs_LR_32k", grid_rotations=None) -> TemplateWa
     -------
     :class:`TemplateWarp` on the template's vertices, with Jacobians.
     """
+    half = spec.N_VERTICES_PER_HEMI
+    for name in ("lh_vertices", "rh_vertices"):
+        shape = np.shape(getattr(warp, name))
+        if shape != (half, 3):
+            raise ValueError(
+                f"the warp's {name} are {shape}, where a warp of the bundled ico4 sphere has "
+                f"({half}, 3): migrate_warp carries warps of that grid only"
+            )
+    digest = getattr(warp, "grid_digest", None)
+    if digest is not None and digest != bundled_grid_digest():
+        raise ValueError(
+            "the warp was estimated on another grid than the bundled ico4 sphere, or on that "
+            "sphere turned by a rotation the warp does not record (its grid_digest is "
+            f"{str(digest)[:12]}..., the sphere's {bundled_grid_digest()[:12]}...): "
+            "migrate_warp carries warps of the bundled sphere only"
+        )
     sphere = load_surface("sphere")
     chains = chain_to(to)
     meshes = template_mesh(to)

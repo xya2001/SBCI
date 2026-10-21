@@ -43,6 +43,16 @@ def test_a_feature_with_a_gap_or_without_variance_reads_nan():
         icc([first, second], kind="absolute")
 
 
+def test_a_bare_2d_array_is_refused_rather_than_read_as_sessions():
+    """One session's (subjects, features) went through as that many sessions of one feature."""
+    rng = np.random.default_rng(8)
+    first, second = rng.standard_normal((2, 20, 5))
+    with pytest.raises(ValueError, match=r"got shape \(20, 5\): one session alone"):
+        icc(first)
+    one_feature = icc(np.stack([first[:, :1], second[:, :1]]))  # (k, n_subjects, 1)
+    np.testing.assert_allclose(one_feature, icc([first, second])[:1], rtol=1e-12)
+
+
 def test_identification_finds_each_subject_and_says_how_sure():
     rng = np.random.default_rng(2)
     trait = rng.standard_normal((30, 500))
@@ -58,6 +68,21 @@ def test_identification_finds_each_subject_and_says_how_sure():
     np.testing.assert_allclose(single.similarity, result.similarity, atol=1e-5)
     first[0, :10] = np.nan
     assert identification(first, second).features == 490
+
+
+def test_an_exact_tie_for_the_best_match_counts_the_same_in_any_order():
+    """``argmax`` gave a tie to the first subject in it: 2/3 in one order, 1/3 in the other.
+
+    Whole numbers summing to zero, so every correlation is computed exactly
+    alike for the two identical sessions and the tie is exact.
+    """
+    own, other = [1.0, -1.0, 2.0, -2.0, 3.0, -3.0], [2.0, 1.0, -1.0, -2.0, 0.0, 0.0]
+    first = np.array([own, [2.0, 1.0, -1.0, -2.0, 1.0, -1.0], other])  # subject 1 looks like 2
+    second = np.array([own, own, other])  # subject 1's second session is subject 0's
+    for order in ([0, 1, 2], [1, 0, 2]):
+        result = identification(first[order], second[order])
+        assert result.similarity[order.index(0), 0] == result.similarity[order.index(0), 1]
+        assert result.accuracy == pytest.approx((0.5, 2 / 3))  # subject 0 counts a half
 
 
 def test_identification_keeps_float64_precision_where_float32_sums_drift():

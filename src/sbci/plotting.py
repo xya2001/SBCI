@@ -226,11 +226,15 @@ def _colour_range(values, vmin=None, vmax=None, symmetric=None):
     scale is centred on zero: one bound given is mirrored -- ``vmin=-0.5``
     alone means ``(-0.5, 0.5)``, not ``-0.5`` up to the map's largest value --
     and none given spans the largest magnitude both ways; both given are kept
-    as they are. A constant map collapses the range, and the renderer divides
-    by ``vmax - vmin`` (its colorbar takes its own bounds from the data and so
-    cannot be fixed by widening them alone), so a small window is opened.
+    as they are. A bound given that leaves ``vmin`` at or above ``vmax`` is
+    refused: the surface was drawn with its colours inverted against a
+    colorbar that read the other way. A constant map collapses the range, and
+    the renderer divides by ``vmax - vmin`` (its colorbar takes its own bounds
+    from the data and so cannot be fixed by widening them alone), so a small
+    window is opened.
     """
     values = np.asarray(values, dtype=np.float64)
+    explicit = [name for name, bound in (("vmin", vmin), ("vmax", vmax)) if bound is not None]
     if symmetric is None:
         symmetric = bool(values.min() < 0 < values.max())
     if vmin is None or vmax is None:
@@ -242,10 +246,36 @@ def _colour_range(values, vmin=None, vmax=None, symmetric=None):
             auto_min, auto_max = values.min(), values.max()
         vmin = auto_min if vmin is None else vmin
         vmax = auto_max if vmax is None else vmax
+    if explicit and vmin >= vmax:
+        if len(explicit) == 2:
+            other = ""
+        elif symmetric:
+            other = ", the other mirrored about zero"
+        else:
+            end = "largest" if explicit == ["vmin"] else "smallest"
+            other = f", the other the map's {end} value"
+        raise ValueError(
+            f"the colour scale would run from vmin={vmin:g} to vmax={vmax:g} "
+            f"({' and '.join(explicit)} given{other}); vmin has to lie below vmax"
+        )
     if vmax <= vmin:
         pad = abs(vmin) * 1e-6 or 1e-6
         vmin, vmax = vmin - pad, vmax + pad
     return float(vmin), float(vmax), bool(symmetric)
+
+
+def _tick_format(vmin: float, vmax: float) -> str:
+    """The fewest significant digits, two at least, that print ``vmin`` and ``vmax`` apart.
+
+    nilearn spaces its colorbar between the bounds as its tick format prints
+    them, ``%.2g`` unless told otherwise, so 0.501 to 0.502 printed as one
+    value and matplotlib divided by the colorbar's zero width.
+    """
+    for digits in range(2, 17):
+        form = f"%.{digits}g"
+        if float(form % vmin) != float(form % vmax):
+            return form
+    return "%.17g"
 
 
 def plot_surface(
@@ -262,6 +292,7 @@ def plot_surface(
     shading: bool = True,
     mesh: str = "ico4",
     engine: str = "matplotlib",
+    bg_map=None,
     **kwargs,
 ):
     """Render a per-vertex map on a cortical surface.
@@ -285,7 +316,10 @@ def plot_surface(
         four-panel figure.
     cmap, threshold, vmin, vmax
         Passed to nilearn. ``vmin``/``vmax`` default to the map's own range;
-        on a symmetric scale one of them alone is mirrored about zero.
+        on a symmetric scale one of them alone is mirrored about zero. A
+        bound that leaves ``vmin`` at or above ``vmax`` is refused. The
+        colorbar is left out for a constant map, and for a range too narrow
+        for six significant digits to print its two ends apart.
     symmetric
         Centre the colour scale on zero. Defaults to true when the map has
         both signs, which is what a coupling map usually wants.
@@ -295,8 +329,7 @@ def plot_surface(
         nilearn's terms). Outside cortex -- the medial wall, from the
         connectome's mask or the bundled atlas -- the shading is flat, so the
         wall reads as the cut surface it is. ``False`` draws the bare mesh
-        under the map. Pass your own ``bg_map`` through ``kwargs`` to shade by
-        something else.
+        under the map.
     mesh
         The resolution to draw at. ``"ico4"`` draws the grid itself (5124
         vertices, faceted). ``"fsaverage5"`` (10,242 vertices per hemisphere,
@@ -313,6 +346,14 @@ def plot_surface(
         software on a cluster node without a display (VTK 9.4 or later; an
         older VTK there needs its OSMesa build, ``pip install --extra-index-url
         https://wheels.vtk.org vtk-osmesa``).
+    bg_map
+        Your own map to shade the surface by in place of sulcal depth, darker
+        where it is larger: one finite value per grid vertex, length 5124,
+        split by hemisphere and brought onto a finer ``mesh`` as the map is,
+        and drawn as given, the medial wall included. It needs ``shading``.
+    **kwargs
+        Passed to nilearn's ``plot_surf`` by the matplotlib engine. The
+        pyvista engine takes none, and refuses them.
 
     Returns
     -------
@@ -342,6 +383,13 @@ def plot_surface(
         raise ValueError(f"mesh must be one of {DISPLAY_MESHES}, got {mesh!r}")
     if engine not in ("matplotlib", "pyvista"):
         raise ValueError(f"engine must be 'matplotlib' or 'pyvista', got {engine!r}")
+    if engine == "pyvista" and kwargs:
+        # nilearn refuses what it does not know; the pyvista path dropped it unread
+        raise TypeError(
+            "plot_surface() got keyword arguments the pyvista engine does not take: "
+            f"{', '.join(sorted(kwargs))}; those beyond its own parameters go to nilearn's "
+            "plot_surf, under engine='matplotlib'"
+        )
     values = np.asarray(surface_map, dtype=np.float64).ravel()
     grid_mesh = load_surface(surface)
     if values.size != grid_mesh.n_vertices:
@@ -349,6 +397,18 @@ def plot_surface(
             f"map has {values.size} values but the {surface} surface has "
             f"{grid_mesh.n_vertices} vertices"
         )
+    background = None
+    if bg_map is not None:
+        if not shading:
+            raise ValueError("bg_map= shades the surface, and shading=False asks for none")
+        background = np.asarray(bg_map, dtype=np.float64).ravel()
+        if background.size != grid_mesh.n_vertices:
+            raise ValueError(
+                f"bg_map has {background.size} values but the grid has {grid_mesh.n_vertices} "
+                "vertices: one value per grid vertex, split by hemisphere as the map is"
+            )
+        if not np.isfinite(background).all():
+            raise ValueError("bg_map has values that are not finite; it shades every vertex")
 
     if connectome is not None:
         values = np.where(np.asarray(connectome.mask, dtype=bool), values, np.nan)
@@ -358,15 +418,17 @@ def plot_surface(
         raise ValueError("the map has no finite values to plot")
 
     vmin, vmax, symmetric = _colour_range(values[finite], vmin, vmax, symmetric)
-    # A constant map collapses the colour range: drop the colorbar, which
-    # conveys nothing for a single value (see _colour_range for the window).
+    # A constant map collapses the colour range (see _colour_range for the
+    # window), and a range whose ends print alike to six significant digits,
+    # as the colorbar labels them, has no scale to read: neither gets a colorbar.
     constant = float(values[finite].min()) == float(values[finite].max())
+    colorbar = not constant and f"{vmin:g}" != f"{vmax:g}"
 
     half = grid_mesh.n_vertices // 2
     # Flat outside cortex: FreeSurfer fills the medial wall with a surface
     # that has curvature of its own, which would otherwise be shaded as if
     # it were folded cortex. The connectome's mask says where cortex is;
-    # without one, the bundled medial wall does.
+    # without one, the bundled medial wall does. A bg_map is drawn as given.
     cortex = np.asarray(connectome.mask, dtype=bool) if connectome is not None else cortex_mask()
     if mesh == "ico4":
         per_hemisphere = {"L": values[:half], "R": values[half:]}
@@ -375,7 +437,7 @@ def plot_surface(
             side: (display_coordinates(part, surface), np.array(part.faces))
             for side, part in hemispheres.items()
         }
-        depth = np.where(cortex, sulcal_depth(), 0.0)
+        depth = np.where(cortex, sulcal_depth(), 0.0) if background is None else background
         depths = {"L": depth[:half], "R": depth[half:]}
     else:
         display = display_mesh(mesh)
@@ -384,10 +446,13 @@ def plot_surface(
         meshes = {
             side: (display.geometries[surface][k], display.faces[k]) for k, side in enumerate("LR")
         }
-        depths = {
-            side: np.where(np.nan_to_num(cortex_fraction[k]) > 0.5, display.sulc[k], 0.0)
-            for k, side in enumerate("LR")
-        }
+        if background is None:
+            depths = {
+                side: np.where(np.nan_to_num(cortex_fraction[k]) > 0.5, display.sulc[k], 0.0)
+                for k, side in enumerate("LR")
+            }
+        else:
+            depths = dict(zip(("L", "R"), display.interpolate(background), strict=True))
     if engine == "pyvista":
         from . import render
 
@@ -398,8 +463,9 @@ def plot_surface(
         )
         images = {}
         for side, hemisphere_values in per_hemisphere.items():
+            shaded = on_cortex[side] if background is None else np.ones(depths[side].shape, bool)
             grey = (
-                render.shade(depths[side], on_cortex[side])
+                render.shade(depths[side], shaded)
                 if shading
                 else np.full(hemisphere_values.shape, render.WALL_GREY + 0.2)
             )
@@ -409,12 +475,15 @@ def plot_surface(
             coordinates, faces = meshes[side]
             for view in views:
                 images[(side, view)] = render.render_view(coordinates, faces, rgb, view, side)
-        figure = render.compose(images, tuple(views), cmap, vmin, vmax, colorbar=not constant)
+        figure = render.compose(images, tuple(views), cmap, vmin, vmax, colorbar=colorbar)
         if title:
             figure.suptitle(title, fontsize=15)
         return figure
 
-    if shading and "bg_map" not in kwargs:
+    ticks = _tick_format(vmin, vmax)
+    if colorbar and ticks != "%.2g":  # nilearn's own, which printed 0.501 and 0.502 as one
+        kwargs.setdefault("cbar_tick_format", ticks)
+    if shading:
         backgrounds = depths
         kwargs.setdefault("bg_on_data", True)
         kwargs.setdefault("alpha", 1.0)
@@ -443,7 +512,7 @@ def plot_surface(
                 threshold=threshold,
                 vmin=vmin,
                 vmax=vmax,
-                colorbar=(column == len(views) - 1) and not constant,
+                colorbar=(column == len(views) - 1) and colorbar,
                 axes=axes[row, column],
                 figure=figure,
                 **({"bg_map": backgrounds[side]} if side in backgrounds else {}),

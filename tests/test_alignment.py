@@ -576,6 +576,37 @@ def test_a_warp_saved_before_the_rotations_were_kept_still_loads(tmp_path, grid)
     np.testing.assert_array_equal(old.lh_vertices, grid.vertices)
     np.testing.assert_array_equal(old.lh_rotation, np.eye(3))
     np.testing.assert_array_equal(old.rh_rotation, np.eye(3))
+    assert old.grid_digest is None
+
+
+def test_every_turn_of_the_bundled_sphere_has_the_bundled_digest():
+    """The digest names the grid in its file's frame, whatever turn took it off the poles."""
+    from types import SimpleNamespace
+
+    from sbci.alignment import _hemisphere_grids, bundled_grid_digest, grid_digest
+
+    (lh, rh), rotations = _hemisphere_grids(1, return_rotations=True)
+    assert not np.allclose(rotations[0], np.eye(3))
+    assert grid_digest(lh, rh, rotations) == bundled_grid_digest()
+    assert grid_digest(*_hemisphere_grids(1, rotate=False)) == bundled_grid_digest()  # ConSEAL's
+    assert grid_digest(lh, rh) != bundled_grid_digest()  # turned, and the turn not recorded
+    nudged = normalize_rows(lh.vertices + 1e-4 * np.random.default_rng(0).normal(size=(2562, 3)))
+    for other in (
+        SimpleNamespace(vertices=nudged, faces=lh.faces),
+        SimpleNamespace(vertices=lh.vertices, faces=lh.faces[:, ::-1]),
+    ):
+        assert grid_digest(other, rh, rotations) != bundled_grid_digest()
+
+
+def test_align_records_its_grid_in_every_warp_and_the_file(pair, tmp_path):
+    """So migrate_warp can tell a warp of the bundled sphere from one of another grid."""
+    from sbci.alignment import grid_digest
+
+    grid, densities = pair
+    result = align(densities[:2], grids=(grid, grid), max_iterations=1)
+    assert all(warp.grid_digest == grid_digest(grid, grid) for warp in result.warps)
+    back = Warp.load(result.warps[0].save(tmp_path / "sub-toy_warp"))
+    assert back.grid_digest == result.warps[0].grid_digest
 
 
 def test_save_returns_the_file_numpy_wrote(tmp_path, grid):
@@ -1442,11 +1473,12 @@ def geodesic(encore, first, second):
 
 
 def test_the_template_takes_a_fifth_of_weiszfelds_step(grid):
-    """From one of two subjects, a fifth of the way to the other, where the two pulls cancel.
+    """From two alike of three subjects, a fifth of the way to the third.
 
     Weiszfeld's step weighs each subject by the inverse of its distance; the reference
     damps it to a fifth. Counting the subjects instead, a damping of 0.6, or the mean's
-    step in place of the median's lands elsewhere.
+    step in place of the median's lands elsewhere. (Two subjects take no step since
+    October 2026: their template is their midpoint.)
     """
     encore = Encore(grid, grid)
     first = bundles(grid, [([1, 0.2, 0.3], [0.1, 1, -0.5])])
@@ -1454,9 +1486,51 @@ def test_the_template_takes_a_fifth_of_weiszfelds_step(grid):
     roots = [encore.root(first), encore.root(second)]
     apart = geodesic(encore, *roots)
     assert 0.2 < apart < 1.0
-    template = encore.template([first, second], iterations=10)
-    to_each = sorted(geodesic(encore, template, root) for root in roots)
-    np.testing.assert_allclose(to_each, [0.2 * apart, 0.8 * apart], rtol=1e-6)
+    template = encore.template([first, first, second], iterations=1)
+    to_each = sorted(geodesic(encore, template, root) for root in (roots[0], *roots))
+    np.testing.assert_allclose(to_each, [0.2 * apart, 0.2 * apart, 0.8 * apart], rtol=1e-6)
+
+
+def test_the_template_of_two_subjects_is_their_midpoint_in_either_order(grid):
+    """Every point between two subjects is a median; the steps ended a fifth of the way.
+
+    That from whichever subject rounding put nearer their mean, so the order the two
+    were listed in, or the machine, chose the template. It is their normalized sum now,
+    the same bits in either order and as far from each.
+    """
+    encore = Encore(grid, grid)
+    first = bundles(grid, [([1, 0.2, 0.3], [0.1, 1, -0.5])])
+    second = bundles(grid, [([1, 0.6, 0.1], [0.3, 1, -0.2])])
+    roots = [encore.root(first), encore.root(second)]
+    template = encore.template([first, second])
+    np.testing.assert_array_equal(encore.template([second, first], iterations=0), template)
+    to_each = [geodesic(encore, template, root) for root in roots]
+    np.testing.assert_allclose(to_each, 0.5 * geodesic(encore, *roots), rtol=1e-9)
+    assert (template**2 * encore.area_product).sum() == pytest.approx(1.0, abs=1e-12)
+    result = align([second, first], grids=(grid, grid), max_iterations=0)
+    np.testing.assert_array_equal(result.template, template)
+
+
+def test_three_subjects_take_weiszfelds_steps_as_before():
+    """The start nearest the mean and one damped step, as the template has always taken them."""
+    grid, densities = six_subjects(5)
+    encore = Encore(grid, grid)
+    roots = [encore.root(d) for d in densities[:3]]
+    start = encore.template(densities[:3], iterations=0)
+    gaps = [((r - sum(roots) / 3) ** 2 * encore.area_product).sum() for r in roots]
+    np.testing.assert_array_equal(start, roots[int(np.argmin(gaps))])
+    directions, weights = np.zeros_like(start), 0.0
+    for root in roots:
+        inner = (root * start * encore.area_product).sum()
+        if 1 - abs(inner) >= 1e-14:  # the start itself is no direction
+            distance = np.arccos(inner)
+            directions += (root - np.cos(distance) * start) / np.sin(distance)
+            weights += 1 / distance
+    mean = directions / weights
+    size = np.sqrt((mean**2 * encore.area_product).sum())
+    expected = np.cos(0.2 * size) * start + np.sin(0.2 * size) * mean / size
+    expected /= np.sqrt((expected**2 * encore.area_product).sum())
+    np.testing.assert_allclose(encore.template(densities[:3], iterations=1), expected, atol=1e-14)
 
 
 def test_the_template_is_a_median_and_stays_with_the_many(grid):
@@ -1552,20 +1626,45 @@ def test_a_grid_no_turn_clears_of_the_axis_is_refused():
         {"delta": 0.0},
         {"delta": np.nan},
         {"template_iterations": -1},
+        {"step": "0.1"},
+        {"step": True},
+        {"threshold": True},
+        {"threshold": "1e-8"},
+        {"delta": "1e-5"},
+        {"delta": np.True_},
     ],
 )
 def test_settings_that_cannot_register_are_refused(pair, setting):
-    """Each returned unmoved warps, or took every step whatever it did, without a word."""
+    """Each returned unmoved warps, or took every step whatever it did, without a word.
+
+    A string passed float() and failed later in a ufunc, or as delta was repeated by
+    ``2 * delta``; True was a step of 1.0, and a threshold of 1.0 accepted no step.
+    """
     grid, densities = pair
     (name,) = setting
     with pytest.raises(ValueError, match=name):
         align(densities, grids=(grid, grid), **setting)
 
 
+def test_the_settings_are_held_as_floats(grid):
+    encore = Encore(grid, grid, step=1, threshold=np.float32(0.5), delta=np.float64(1e-5))
+    assert [type(value) for value in (encore.step, encore.threshold, encore.delta)] == [float] * 3
+    assert encore.concon.step == 2e-5
+
+
 def test_a_basis_of_order_zero_is_refused(sphere):
     """It holds no tangent field at all, so nothing registered on it could move."""
     with pytest.raises(ValueError, match="order"):
         SphericalGrid(*sphere, order=0)
+
+
+def test_a_basis_above_order_85_is_refused(sphere):
+    """At 86 factorial(171) and SciPy's lpmv overflow, the basis was NaN, and no step was taken."""
+    for order in (86, 120):
+        with pytest.raises(ValueError, match="at most 85"):
+            SphericalGrid(*sphere, order=order)
+    grid = SphericalGrid(*sphere, order=85)
+    assert np.isfinite(grid.basis).all() and np.isfinite(grid.laplacian).all()
 
 
 def test_the_default_template_runs_until_its_steps_are_short():
@@ -1905,3 +2004,94 @@ def test_a_best_candidate_is_kept_only_where_no_other_face_can_beat_it(monkeypat
     _, _, face = query.query_faces(points)
     assert sum(sent) < len(points)  # the candidates settled some
     np.testing.assert_array_equal(face, query._exact_faces(points))
+
+
+# --- the review of 20 October 2026 (PORTING.md item 38) ---------------------------------
+
+
+def test_the_threads_are_capped_by_sbci_threads_or_else_omp_num_threads(monkeypatch, grid):
+    """Only the CPU affinity counted: a two-core job with OMP_NUM_THREADS=1 started two threads."""
+    import os
+
+    import sbci.alignment as alignment
+
+    monkeypatch.setattr(os, "sched_getaffinity", lambda pid: set(range(16)), raising=False)
+    monkeypatch.delenv("SBCI_THREADS", raising=False)
+    monkeypatch.delenv("OMP_NUM_THREADS", raising=False)
+    assert alignment._thread_count() == 8
+    for value, expected in (("1", 1), ("3", 3), ("4,2", 4), ("32", 8), ("many", 8), ("0", 8)):
+        monkeypatch.setenv("OMP_NUM_THREADS", value)  # one that names no count is ignored
+        assert alignment._thread_count() == expected, value
+    monkeypatch.setenv("SBCI_THREADS", "6")
+    assert alignment._thread_count() == 6  # over OMP_NUM_THREADS=0, and over 1 as well
+    monkeypatch.setenv("OMP_NUM_THREADS", "1")
+    assert alignment._thread_count() == 6
+    monkeypatch.setattr(os, "sched_getaffinity", lambda pid: {0, 1}, raising=False)
+    assert alignment._thread_count() == 2  # a cap on the cores, not more than them
+    for bad in ("0", "two", "2.5", "-1"):
+        monkeypatch.setenv("SBCI_THREADS", bad)
+        with pytest.raises(ValueError, match="SBCI_THREADS must be a whole number"):
+            alignment._thread_count()
+
+    monkeypatch.delenv("SBCI_THREADS")
+    started, pool = [], alignment.ThreadPoolExecutor
+    monkeypatch.setattr(alignment, "ThreadPoolExecutor", lambda n: started.append(n) or pool(n))
+    points = normalize_rows(np.random.default_rng(2).normal(size=(1000, 3)))
+    query = MeshQuery(grid.vertices, grid.faces, block=64)
+    found = query.query_faces(points)  # OMP_NUM_THREADS=1: the blocks one after another
+    monkeypatch.setenv("OMP_NUM_THREADS", "2")
+    again = query.query_faces(points)
+    assert started == [2]
+    assert all(np.array_equal(a, b) for a, b in zip(found, again, strict=True))
+
+
+def test_a_displacement_is_one_pair_of_components_a_vertex(grid):
+    """An (n, 3) displacement lost its third column, and one row moved every vertex alike."""
+    warp = SphericalWarp(grid, delta=1e-5)
+    n = grid.n_vertices
+    for shape in ((n, 3), (1, 2), (n - 1, 2), (2 * n,)):
+        with pytest.raises(ValueError, match=rf"\({n}, 2\) here; got \({shape[0]}"):
+            warp.compose(np.zeros(shape))
+    np.testing.assert_allclose(warp.compose(np.zeros((n, 2))).vertices, grid.vertices, atol=1e-12)
+
+
+def test_a_template_named_by_a_string_is_refused(pair):
+    """NumPy's float() of the string failed, and said nothing of what template= takes."""
+    grid, densities = pair
+    for name in ("median", "mean", b"median"):
+        with pytest.raises(ValueError, match="template=None, the default, estimates"):
+            align(densities, template=name, grids=(grid, grid), max_iterations=0)
+
+
+def test_evaluate_gives_none_of_the_mass_moved_onto_the_diagonal_back():
+    """As ``Concon.m``'s evaluate: the diagonal is zeroed after the transport and not restored.
+
+    A density concentrated near the diagonal, as a structural connectome is, has mass
+    interpolated onto the diagonal by any warp that moves a vertex off a vertex: here 1.7%
+    of it, of the 2.0% the aligned density loses (the transport itself the other 0.3%, on
+    so coarse a mesh). The test pins the reference's arithmetic; a restored mass fails it.
+    """
+    from sbci.alignment import interpolate_product
+
+    vertices, faces = icosphere(2)
+    grid = SphericalGrid(rotate_off_poles(vertices), faces, order=2)
+    points = np.vstack([grid.vertices, grid.vertices])
+    distance = np.arccos(np.clip(points @ points.T, -1.0, 1.0))
+    local = np.exp(-(distance**2) / (2 * 0.25**2))
+    np.fill_diagonal(local, 0.0)
+    displacement = 0.05 * np.stack([np.sin(3 * grid.theta), np.cos(2 * grid.phi)], axis=1)
+    warp = SphericalWarp(grid, delta=1e-5).compose(displacement)
+    concon = Concon(grid, grid, delta=1e-5)
+    evaluated = concon.evaluate(local, warp, warp)
+
+    coordinates = concon._coordinates(warp.vertices, warp.vertices)
+    jacobian = np.concatenate([warp.jacobian, warp.jacobian])
+    kept = interpolate_product(coordinates, coordinates, local) * np.outer(jacobian, jacobian)
+    kept = np.maximum((kept + kept.T) / 2, 0)  # the transport, its diagonal kept
+    off = ~np.eye(local.shape[0], dtype=bool)
+    np.testing.assert_array_equal(evaluated[off], kept[off])  # no rescaling of the rest
+    assert not np.diagonal(evaluated).any()
+    mass = (local * concon.area_product).sum()
+    on_diagonal = (np.diagonal(kept) * concon.areas**2).sum() / mass
+    lost = 1 - (evaluated * concon.area_product).sum() / mass
+    assert 0.01 < on_diagonal < 0.03 and on_diagonal > 0.8 * lost

@@ -726,11 +726,16 @@ def test_endpoint_positions_rebuilds_points_on_the_sphere():
     bary = rng.random((count, 3))
     bary /= bary.sum(axis=1, keepdims=True)
 
+    def heaviest(tri, surf):  # the vertex a file stores: the corner of largest weight
+        face = sphere.faces[tri + Endpoints.global_hemisphere_offset(surf, faces_per_hemi)]
+        corner = face[np.arange(count), bary.argmax(axis=1)]
+        return corner - Endpoints.global_hemisphere_offset(surf, sphere.n_vertices // 2)
+
     endpoints = Endpoints(
         surf_in=surf_in,
         surf_out=surf_out,
-        vtx_in=np.zeros(count, int),
-        vtx_out=np.zeros(count, int),
+        vtx_in=heaviest(tri_in, surf_in),
+        vtx_out=heaviest(tri_out, surf_out),
         tri_in=tri_in,
         tri_out=tri_out,
         bary_in=bary,
@@ -1224,3 +1229,169 @@ def test_from_matlab_hands_the_constructor_the_values_as_stored(tmp_path, field,
     scipy.io.savemat(path, values)
     with pytest.raises(ValueError, match=message):
         Endpoints.from_matlab(path, n_per_hemi=10)
+
+
+# --- the review of 20 October 2026 -------------------------------------------------
+
+
+def test_nu_shapes_the_matern_kernel_and_is_recorded(smoothable, toy_basis, tmp_path):
+    """smooth() always used nu = 3 and recorded none, so files at two nu looked alike."""
+    from sbci import ContinuousConnectome
+
+    def matern(**kwargs):
+        return smoothable.smooth(kernel="matern", bandwidth=1.0, eigenpairs=toy_basis, **kwargs)
+
+    one, three = matern(nu=1), matern()
+    assert not np.allclose(one.data, three.data)
+    np.testing.assert_array_equal(three.data, matern(nu=3).data)
+    assert one.metadata["nu"] == 1.0 and three.metadata["nu"] == 3.0
+    back = ContinuousConnectome.load(one.save(tmp_path / "sub-toy_sc.h5"))
+    assert back.metadata["nu"] == 1.0
+    # the Matern kernel's alone: another kernel drops it and refuses one
+    assert (
+        "nu" not in back.smooth(kernel="rdk", bandwidth=1.0, eigenpairs=toy_basis).metadata.fields
+    )
+    with pytest.raises(ValueError, match="nu is the Matern kernel's smoothness"):
+        smoothable.smooth(kernel="rdk", bandwidth=1.0, eigenpairs=toy_basis, nu=2)
+    for bad, error in (
+        (0, ValueError),
+        (np.nan, ValueError),
+        (np.inf, ValueError),
+        (True, TypeError),
+    ):
+        with pytest.raises(error, match="nu "):
+            matern(nu=bad)
+
+
+@pytest.mark.parametrize("bad", [True, np.True_, "0.005", b"0.005"])
+def test_smooth_refuses_a_bandwidth_that_is_not_a_number(smoothable, bad):
+    """float() read True as sigma 1 and "0.005" as 0.005, and the file recorded them so."""
+    with pytest.raises(TypeError, match="bandwidth takes a number"):
+        smoothable.smooth(kernel="shk", bandwidth=bad)
+
+
+def test_a_float32_bandwidth_is_the_decimal_it_prints_as(smoothable, toy_basis):
+    """np.float32(0.005) was recorded as 0.004999999888 and refused beside files at 0.005."""
+    single = smoothable.smooth(kernel="rdk", bandwidth=np.float32(0.005), eigenpairs=toy_basis)
+    double = smoothable.smooth(kernel="rdk", bandwidth=0.005, eigenpairs=toy_basis)
+    assert single.metadata["bandwidth"] == 0.005
+    np.testing.assert_array_equal(single.data, double.data)
+
+
+def test_the_sparse_block_shrinks_for_a_wide_kernel_and_not_at_the_default(monkeypatch):
+    """At sigma 0.5 a block of 65,536 endpoints made 3.0 GB of pair arrays a side, unbounded."""
+    from sbci import smoothing
+    from sbci.smoothing import PAIR_BYTES, SPARSE_BLOCK, _sparse_block, concon_kernel_table
+
+    assert _sparse_block(concon_kernel_table(0.005).cutoff, 2562) == SPARSE_BLOCK
+    cutoff = concon_kernel_table(0.5).cutoff
+    pairs = PAIR_BYTES * 2562 * (1 - np.cos(cutoff)) / 2  # bytes an endpoint's pairs take
+    block = _sparse_block(cutoff, 2562)
+    assert block * pairs <= smoothing.SPARSE_PAIR_BUDGET < (block + 1) * pairs
+    assert block < SPARSE_BLOCK / 2
+    # and endpoint_density takes it: a budget of ten and a half endpoints makes blocks of ten
+    monkeypatch.setattr(smoothing, "SPARSE_PAIR_BUDGET", 10.5 * pairs)
+    from sbci.grid import hemisphere_labels
+    from sbci.surface import load_surface
+
+    vertices = load_surface("sphere").vertices
+    vertices = vertices / np.linalg.norm(vertices, axis=1, keepdims=True)
+    seen = []
+    smoothing.endpoint_density(
+        vertices,
+        vertices[:25],
+        vertices[25:50],
+        np.zeros(25, int),
+        np.zeros(25, int),
+        hemisphere_labels(),
+        0.5,
+        progress=lambda done, total: seen.append(done),
+    )
+    assert seen == [10, 20, 25]
+
+
+def test_a_nan_cosine_gives_a_nan_kernel():
+    """The index cast mapped NaN onto the table: spherical_heat_kernel(nan, 0.005) was 0.2423."""
+    from sbci.smoothing import concon_kernel_table, spherical_heat_kernel
+
+    values = spherical_heat_kernel(np.array([np.nan, 1.0]), 0.005)
+    assert np.isnan(values[0]) and values[1] == spherical_heat_kernel(1.0, 0.005)
+    assert np.isnan(spherical_heat_kernel(np.nan, 0.005))
+    assert np.isnan(concon_kernel_table(0.005)(np.nan, truncate=False))
+
+
+@pytest.mark.parametrize("bad", [0.0, -0.005, np.nan, np.inf])
+def test_the_spherical_kernel_needs_a_positive_finite_sigma(bad):
+    """A NaN sigma gave a 180-degree cutoff and NaNs; a negative one weighed high degrees up."""
+    from sbci.smoothing import (
+        concon_kernel_table,
+        endpoint_density,
+        kernel_cutoff,
+        spherical_heat_kernel,
+    )
+
+    point = np.array([[1.0, 0.0, 0.0]])
+    for call in (
+        lambda: spherical_heat_kernel(1.0, bad),
+        lambda: kernel_cutoff(bad),
+        lambda: concon_kernel_table(bad),
+        lambda: endpoint_density(np.eye(3), point, point, [0], [0], [0, 0, 0], sigma=bad),
+    ):
+        with pytest.raises(ValueError, match="sigma must be positive and finite"):
+            call()
+
+
+@pytest.mark.parametrize("block", [0, -1, 2.5, True, "64"])
+@pytest.mark.parametrize("method", ["sparse", "dense"])
+def test_a_block_must_be_a_positive_whole_number(block, method):
+    """block=-1 made an empty range of blocks, and the density came back all zeros."""
+    from sbci.smoothing import endpoint_density
+
+    point = np.array([[1.0, 0.0, 0.0]])
+    with pytest.raises(ValueError, match="block must be a positive whole number"):
+        endpoint_density(
+            np.eye(3), point, point, [0], [0], [0, 0, 0], 0.005, block=block, method=method
+        )
+
+
+def test_barycentric_rows_must_sum_to_one_and_may_dip_below_zero():
+    """A row of zeros put its endpoint at NaN; a row summing to 2 counted twice in ConSEAL."""
+
+    def ends(weights):
+        corner = [[1.0, 0.0, 0.0]]
+        return Endpoints(
+            [0], [0], [0], [1], tri_in=[0], tri_out=[0], bary_in=weights, bary_out=corner
+        )
+
+    for bad in ([[0.0, 0.0, 0.0]], [[1.0, 1.0, 0.0]], [[0.5, 0.5, 0.0005]]):
+        with pytest.raises(ValueError, match="bary_in holds 1 row\\(s\\) that do not sum to 1"):
+            ends(bad)
+    assert ends([[1.0075, -0.0075, 0.0]]).bary_in[0, 1] == -0.0075  # just outside its triangle
+    ends(np.array([[0.1, 0.2, 0.7]], dtype=np.float32))  # as a file stores them
+    with pytest.raises(ValueError, match="barycentric_out holds 1 row"):
+        Endpoints.from_global(
+            [0],
+            [1],
+            triangle_in=[0],
+            triangle_out=[0],
+            barycentric_in=[[1.0, 0.0, 0.0]],
+            barycentric_out=[[0.0, 0.0, 0.0]],
+        )
+
+
+def test_endpoint_positions_refuse_a_vertex_beyond_one_edge_of_its_triangle():
+    """Triangles stored against another face order rebuilt 85 degrees from their vertex, unseen."""
+    import sbci
+    from sbci.smoothing import _vertex_offsets, endpoint_positions
+
+    sc = sbci.example()
+    ends = sc.endpoints
+    _, _, offsets, edge = _vertex_offsets(ends)
+    assert 4.5 < edge < 5.0 and offsets.max() < 0.6 * edge
+    endpoint_positions(ends)
+    ends.tri_in = 5119 - ends.tri_in  # the same triangles, in another order
+    with pytest.raises(ValueError, match="farther than one edge of the grid"):
+        endpoint_positions(ends)
+    holder = sbci.ContinuousConnectome(sc.data, sc.area, sc.mask, sc.metadata, endpoints=ends)
+    with pytest.raises(ValueError, match="farther than one edge of the grid"):
+        holder.smooth(kernel="shk")

@@ -1,10 +1,23 @@
 #!/bin/bash
 # Walk the whole build, printing what each stage actually produces.
+#
+#   SBCI_VENV=path/to/venv SBCI_CHECKOUT=path/to/SBCI bash scripts/show_build.sh
+#
+# The two default to the lab's environment and checkout on Longleaf; Lmod's
+# python module is loaded only where Lmod is installed.
 set -uo pipefail
-if ! command -v module >/dev/null 2>&1; then source /usr/share/lmod/lmod/init/bash; fi
-module load python/3.12.4 >/dev/null 2>&1
-source /work/users/x/y/xya/sbci-venv/bin/activate
-cd "$HOME/sbci"
+VENV="${SBCI_VENV:-/work/users/x/y/xya/sbci-venv}"
+CHECKOUT="${SBCI_CHECKOUT:-$HOME/sbci}"
+if ! command -v module >/dev/null 2>&1 && [ -f /usr/share/lmod/lmod/init/bash ]; then
+    source /usr/share/lmod/lmod/init/bash
+fi
+if command -v module >/dev/null 2>&1; then module load python/3.12.4 >/dev/null 2>&1; fi
+if [ ! -f "$VENV/bin/activate" ]; then
+    echo "no virtual environment at $VENV: set SBCI_VENV" >&2
+    exit 1
+fi
+source "$VENV/bin/activate"
+cd "$CHECKOUT" || exit 1
 
 line() { printf '\n=== %s ===\n' "$1"; }
 
@@ -12,7 +25,8 @@ line "1. SOURCE: what the repository holds"
 printf '  source modules : %s .py files under src/sbci\n' "$(find src -name '*.py' | wc -l | tr -d ' ')"
 printf '  bundled data   : %s .npz files (atlases + surfaces)\n' "$(find src -name '*.npz' | wc -l | tr -d ' ')"
 printf '  tests          : %s test files\n' "$(find tests -name 'test_*.py' | wc -l | tr -d ' ')"
-printf '  total tracked  : %s files, %s\n' "$(git ls-files | wc -l | tr -d ' ')" "$(du -sh --exclude=.git . | cut -f1)"
+SIZE=$(git ls-files -z | python -c "import os, sys; names = sys.stdin.buffer.read().split(b'\0'); print(f'{sum(os.path.getsize(n) for n in names if os.path.isfile(n)) / 1e6:.1f} MB')")
+printf '  total tracked  : %s files, %s\n' "$(git ls-files | wc -l | tr -d ' ')" "$SIZE"
 
 line "2. DECLARATION: what pyproject.toml tells the build system"
 python - <<'PY'

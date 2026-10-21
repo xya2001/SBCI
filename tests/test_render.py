@@ -43,6 +43,18 @@ def test_the_headless_guard_names_the_cases_that_would_abort():
     assert not render.would_abort("win32", None, "vtkWin32OpenGLRenderWindow")
 
 
+def test_importing_pyvista_leaves_its_off_screen_setting_alone(monkeypatch):
+    """pv.OFF_SCREEN = True made every later pv.Plotter() off-screen, even after the refusal."""
+    pv = pytest.importorskip("pyvista")
+    monkeypatch.setattr(pv, "OFF_SCREEN", False)
+    monkeypatch.setattr(render, "would_abort", lambda *args: False)
+    assert render._import_pyvista() is pv and pv.OFF_SCREEN is False
+    monkeypatch.setattr(render, "would_abort", lambda *args: True)
+    with pytest.raises(RuntimeError, match="DISPLAY is unset"):
+        render._import_pyvista()
+    assert pv.OFF_SCREEN is False
+
+
 def test_a_view_renders_and_trims():
     pv = pytest.importorskip("pyvista")
     import os

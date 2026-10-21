@@ -293,6 +293,89 @@ def test_from_gifti_refuses_two_different_meshes(tmp_path):
         SphereMap.from_gifti(source, target)
 
 
+@pytest.mark.parametrize("count", [642, 4000])
+def test_a_warp_of_another_size_is_refused(count):
+    """4000 images a hemisphere migrated with errors of 180 degrees; 642 met an IndexError."""
+    images = _random_points(count, 4)
+    warp = Warp(images, np.ones(count), images, np.ones(count))
+    with pytest.raises(ValueError, match=rf"\({count}, 3\).*\(2562, 3\)"):
+        migrate_warp(warp, to="fs_LR_32k")
+
+
+def test_a_warp_of_another_grid_of_as_many_vertices_is_refused():
+    """An icosphere's 2562 vertices a hemisphere, elsewhere on the sphere, migrated silently.
+
+    The warp's grid digest says which grid it was estimated on; the bundled sphere's own
+    warps carry the bundled digest and migrate as before.
+    """
+    from types import SimpleNamespace
+
+    from sbci.alignment import bundled_grid_digest, grid_digest
+    from sbci.conseal import icosphere
+
+    vertices, faces = icosphere(4)
+    assert vertices.shape == (HALF, 3)
+    other = SimpleNamespace(vertices=vertices, faces=faces)
+    identity = Warp(vertices, np.ones(HALF), vertices, np.ones(HALF))
+    identity.grid_digest = grid_digest(other, other)
+    with pytest.raises(ValueError, match="another grid than the bundled ico4 sphere"):
+        migrate_warp(identity, to="fs_LR_32k")
+
+    sphere = sbci.load_surface("sphere")
+    bundled = normalize_rows(np.asarray(sphere.vertices, dtype=np.float64))
+    warp = Warp(bundled[:HALF], np.ones(HALF), bundled[HALF:], np.ones(HALF))
+    warp.grid_digest = bundled_grid_digest()
+    unnamed = migrate_warp(Warp(bundled[:HALF], np.ones(HALF), bundled[HALF:], np.ones(HALF)))
+    np.testing.assert_array_equal(migrate_warp(warp).lh_vertices, unnamed.lh_vertices)
+
+
+def test_a_warp_file_written_before_the_digest_migrates_on_its_size(tmp_path):
+    """A file without ``grid_digest`` loads with ``None``, and only its size is checked."""
+    sphere = sbci.load_surface("sphere")
+    vertices = normalize_rows(np.asarray(sphere.vertices, dtype=np.float64))
+    path = tmp_path / "sub-older_warp.npz"
+    ones = np.ones(HALF)
+    np.savez_compressed(
+        path,
+        lh_vertices=vertices[:HALF],
+        lh_jacobian=ones,
+        rh_vertices=vertices[HALF:],
+        rh_jacobian=ones,
+        lh_rotation=np.eye(3),
+        rh_rotation=np.eye(3),
+    )
+    older = Warp.load(path)
+    assert older.grid_digest is None
+    moved = migrate_warp(older, to="fs_LR_32k")
+    (left_vertices, _), _ = template_mesh("fs_LR_32k")
+    assert _degrees(moved.lh_vertices, left_vertices).max() < 0.3
+
+
+def test_the_deformed_spheres_name_their_hemisphere_and_space_as_hcps_do(tmp_path):
+    """HCP's spheres carry AnatomicalStructurePrimary, GeometricType and Talairach coordinates.
+
+    Connectome Workbench reads the hemisphere from the first; the files carried none of it.
+    """
+    nib = pytest.importorskip("nibabel")
+    (left, left_faces), (right, right_faces) = template_mesh("fs_LR_32k")
+    warp = TemplateWarp(
+        "fs_LR_32k",
+        left,
+        np.ones(len(left)),
+        right,
+        np.ones(len(right)),
+        faces=(left_faces, right_faces),
+    )
+    written = warp.to_gifti(tmp_path / "sub-example")
+    for path, structure in zip(written, ("CortexLeft", "CortexRight"), strict=True):
+        (points,) = [a for a in nib.load(str(path)).darrays if a.intent == 1008]
+        assert points.meta["AnatomicalStructurePrimary"] == structure
+        assert points.meta["GeometricType"] == "Spherical"
+        talairach = nib.nifti1.xform_codes.code["NIFTI_XFORM_TALAIRACH"]
+        assert points.coordsys.dataspace == points.coordsys.xformspace == talairach
+        np.testing.assert_array_equal(points.coordsys.xform, np.eye(4))
+
+
 def test_each_grid_vertex_is_the_fsaverage_vertex_of_its_own_number():
     """Grid vertex i of a hemisphere is fsaverage's vertex i, as the pipeline's mapping lists it.
 

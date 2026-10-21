@@ -73,6 +73,20 @@ def test_what_a_design_refuses():
         design({"a": [1.0, 2.0]}, categorical=["b"])
 
 
+def test_a_dataframe_is_taken_as_its_columns():
+    """design() refused a DataFrame, though its docstring offered "a table's columns"."""
+    pandas = pytest.importorskip("pandas")
+    columns = {"age": [22.0, 30.0, 35.0, 28.0, 25.0], "site": ["B", "A", "C", "A", "B"]}
+    from_frame, from_dict = design(pandas.DataFrame(columns)), design(columns)
+    assert from_frame.names == from_dict.names == ("intercept", "age", "site[B]", "site[C]")
+    np.testing.assert_array_equal(from_frame.matrix, from_dict.matrix)
+    with pytest.raises(ValueError, match="site has 1 missing value"):
+        design(pandas.DataFrame({"age": [22.0, 30.0, 35.0], "site": ["A", None, "B"]}))
+    twice = pandas.DataFrame([[1.0, 2.0], [3.0, 5.0], [4.0, 4.0]], columns=["a", "a"])
+    with pytest.raises(ValueError, match="two columns named 'a'"):
+        design(twice)
+
+
 def test_a_named_design_tests_exactly_what_the_indices_do():
     scores, table = _cohort()
     d = design(table)

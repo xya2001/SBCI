@@ -56,9 +56,11 @@ distance the reference sits from itself. That is the floor, and it is reached
 from __future__ import annotations
 
 import copy
+import hashlib
 import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -69,6 +71,12 @@ METHODS = ("encore",)
 
 DEFAULT_ORDER = 6
 """Spherical harmonic order of the tangent basis: ``2(l+1)^2 - 2`` fields."""
+
+MAX_ORDER = 85
+"""The highest order the tangent basis can be built at. At degree 86 the normalization of
+its top two orders divides by ``factorial(171)`` and more, which overflow double precision,
+and SciPy's ``lpmv`` overflows there too, so the basis came out NaN and a registration on it
+took no step."""
 
 DEFAULT_DELTA = 1e-5
 """Central-difference step. See the conditioning note in the module docstring."""
@@ -485,7 +493,8 @@ class MeshQuery:
         results come back there. On the CPU the points go in blocks of ``block``,
         each searched exactly as it would be alone, and the blocks are shared among
         ``threads`` threads: by default the cores this process may use, at most
-        eight, as :func:`sparse_times_dense` takes them. Every point's search is its
+        eight and at most what ``SBCI_THREADS``, or else ``OMP_NUM_THREADS``, allows,
+        as :func:`sparse_times_dense` takes them. Every point's search is its
         own, so the result is the same bits for any number of threads; ConSEAL,
         which locates a subject's 1.6 million endpoints after every step, spent
         most of its time here on one core (PORTING.md item 36).
@@ -710,12 +719,32 @@ PARALLEL_ELEMENTS = 1 << 21
 
 
 def _thread_count() -> int:
-    """Cores this process may use, capped at eight."""
+    """Cores this process may use, capped at eight and at what the environment asks.
+
+    ``SBCI_THREADS`` is the cap when it is set, and ``OMP_NUM_THREADS`` otherwise, so a
+    job that gives each task one thread gets one here as well: the count was the CPU
+    affinity alone, and a two-core job with ``OMP_NUM_THREADS=1`` started two threads.
+    ``OMP_NUM_THREADS`` may list a count for each level of nesting, of which the first is
+    read, and one that names no count is ignored, as OpenMP ignores it; an
+    ``SBCI_THREADS`` that names no count is refused.
+    """
     try:
         cores = len(os.sched_getaffinity(0))  # respects a SLURM allocation
     except AttributeError:  # pragma: no cover - macOS has no affinity API
         cores = os.cpu_count() or 1
-    return max(1, min(8, cores))
+    cap = 8
+    given = os.environ.get("SBCI_THREADS", "").strip()
+    if given:
+        if not (given.isdecimal() and int(given) >= 1):
+            raise ValueError(
+                f"SBCI_THREADS must be a whole number of threads, 1 or more; got {given!r}"
+            )
+        cap = min(cap, int(given))
+    else:
+        first = os.environ.get("OMP_NUM_THREADS", "").split(",")[0].strip()
+        if first.isdecimal() and int(first) >= 1:
+            cap = min(cap, int(first))
+    return max(1, min(cap, cores))
 
 
 def sparse_times_dense(matrix, dense, threads: int | None = None) -> np.ndarray:
@@ -727,7 +756,9 @@ def sparse_times_dense(matrix, dense, threads: int | None = None) -> np.ndarray:
     the same terms in the same order, so the same bits -- and on four cores
     runs about twice as fast. Below :data:`PARALLEL_ELEMENTS` elements a single
     call is made. This is the product behind the density evaluations of both
-    alignment methods.
+    alignment methods. ``threads`` defaults to the cores this process may use, at
+    most eight and at most what ``SBCI_THREADS``, or else ``OMP_NUM_THREADS``,
+    allows.
     """
     from scipy import sparse
 
@@ -841,7 +872,9 @@ class SphericalGrid:
     of the coordinate axis its fields are the reference's to rounding and their
     divergence, ``laplacian``, is not. At a vertex on the axis the reference's
     clamp drops the phi-component of the ``m = 1`` fields, which this basis
-    keeps (:func:`_harmonic_derivatives`), so there the fields differ too.
+    keeps (:func:`_harmonic_derivatives`), so there the fields differ too. The order
+    is at most :data:`MAX_ORDER`, 85, past which the basis cannot be computed in
+    double precision.
     """
 
     def __init__(self, vertices, faces, order: int = DEFAULT_ORDER):
@@ -849,6 +882,12 @@ class SphericalGrid:
         if not (1 <= float(order) < np.inf and float(order) == round(float(order))):
             raise ValueError(
                 f"order is a spherical harmonic order, a whole number of 1 or more; got {order}"
+            )
+        if float(order) > MAX_ORDER:
+            raise ValueError(
+                f"order is at most {MAX_ORDER}: above it the harmonics' normalization and "
+                f"SciPy's Legendre functions overflow double precision, and the basis would "
+                f"be NaN; got {order}"
             )
         self.vertices = normalize_rows(vertices)
         self.faces = np.asarray(faces, dtype=np.int64)
@@ -912,6 +951,21 @@ def triangles_fold(vertices, faces) -> bool:
     p1, p2, p3 = vertices[faces[:, 0]], vertices[faces[:, 1]], vertices[faces[:, 2]]
     normals = (np.cross(p2 - p1, p3 - p1) * (p1 + p2 + p3)).sum(axis=1)
     return bool(np.any(normals <= 0))
+
+
+def _displacement(displacement, n_vertices: int) -> np.ndarray:
+    """``displacement`` in float64, once it is one ``(e1, e2)`` pair a vertex, ``(n_vertices, 2)``.
+
+    Shared by ENCORE's :meth:`SphericalWarp.compose` and ConSEAL's
+    :meth:`sbci.conseal.StationaryWarp.compose`.
+    """
+    displacement = np.asarray(displacement, dtype=np.float64)
+    if displacement.shape != (n_vertices, 2):
+        raise ValueError(
+            f"a displacement is one (e1, e2) pair a vertex, ({n_vertices}, 2) here; "
+            f"got {displacement.shape}"
+        )
+    return displacement
 
 
 class SphericalWarp:
@@ -1006,9 +1060,11 @@ class SphericalWarp:
         (``test_a_step_is_composed_as_the_gradient_assumes``); on a known
         20-degree turn of a real subject ENCORE ended 0.56 degrees from the
         truth with this order and 1.30 with the reference's (PORTING.md item
-        21).
+        21). ``displacement`` is ``(n_vertices, 2)``, each vertex's components along
+        ``e1`` and ``e2``; a third column was dropped without a word, and one row
+        was taken for every vertex.
         """
-        displacement = np.asarray(displacement, dtype=np.float64)
+        displacement = _displacement(displacement, self.base.shape[0])
         tangent = self._e1 * displacement[:, :1] + self._e2 * displacement[:, 1:2]
         moved = normalize_rows(sphere_exp_map(self.base, tangent))
         _, indices = self._query.query(moved)
@@ -1084,7 +1140,8 @@ class Concon:
     ):
         if derivative not in ("analytic", "difference"):
             raise ValueError(f"derivative must be 'analytic' or 'difference', got {derivative!r}")
-        if not 0 < float(delta) < np.inf:
+        delta = _number("delta", delta)  # "1e-5" failed later, and 2 * "1e-5" repeated it
+        if not 0 < delta < np.inf:
             raise ValueError(f"delta is a central-difference step, finite and above 0; got {delta}")
         self.device = _device.check(device)
         self._xp = _device.array_module(self.device)
@@ -1181,7 +1238,17 @@ class Concon:
         return (at("px") - at("mx")) / self.step, (at("py") - at("my")) / self.step
 
     def evaluate(self, values, lh_warp: SphericalWarp, rh_warp: SphericalWarp):
-        """Push a density through a pair of warps."""
+        """Push a density through a pair of warps.
+
+        The diagonal is zeroed after the Jacobian-weighted interpolation, and the
+        mass interpolation carried onto it is not given back, as ``Concon.m``'s
+        ``evaluate`` has it (lines 66-74): a density concentrated near the
+        diagonal, as a structural connectome is, comes back short by that much.
+        Two released subjects aligned for ten steps came back 0.34% and 0.49%
+        short, the diagonal's 0.36% and 0.47%, the transport itself within 0.02%
+        (PORTING.md item 38). The registration's own transport,
+        :meth:`evaluate_root`, renormalizes every trial instead.
+        """
         xp = self._xp
         values = _device.to_device(values, self.device)
         jacobian = xp.asarray(np.concatenate([lh_warp.jacobian, rh_warp.jacobian]))
@@ -1220,6 +1287,44 @@ def _npz_path(path) -> Path:
     return path if str(path).endswith(".npz") else Path(f"{path}.npz")
 
 
+DIGEST_DECIMALS = 6
+"""Decimal places a grid's coordinates are rounded to in :func:`grid_digest`. A turn and
+its inverse move the bundled sphere's coordinates by 2.2e-16, and none of them lies nearer
+than 2.6e-10 to where the rounding changes, so every turn of it gives one digest."""
+
+
+def grid_digest(lh_grid, rh_grid, rotations=None) -> str:
+    """A SHA-256 digest naming the two hemisphere meshes a warp is estimated on.
+
+    ``lh_grid`` and ``rh_grid`` are anything with ``vertices`` and ``faces``, as
+    :class:`SphericalGrid` and :class:`~sbci.surface.Surface` are, and ``rotations``
+    the turns applied to their vertices, ``vertices @ R.T``, as :class:`Warp` records
+    them (identities when ``None``). Each mesh is turned back to the frame it came in,
+    put on the unit sphere, rounded to :data:`DIGEST_DECIMALS` places and hashed with
+    its faces, so a warp of the bundled sphere has :func:`bundled_grid_digest`, whatever
+    turn took the grid off the poles, and a warp of any other mesh has another.
+    """
+    rotations = (np.eye(3), np.eye(3)) if rotations is None else rotations
+    digest = hashlib.sha256()
+    for grid, rotation in zip((lh_grid, rh_grid), rotations, strict=True):
+        vertices = np.asarray(grid.vertices, dtype=np.float64) @ np.asarray(rotation, np.float64)
+        vertices = np.rint(normalize_rows(vertices) * 10.0**DIGEST_DECIMALS).astype("<i8")
+        faces = np.asarray(grid.faces, dtype="<i8")
+        digest.update(np.asarray(vertices.shape + faces.shape, dtype="<i8").tobytes())
+        digest.update(vertices.tobytes())
+        digest.update(faces.tobytes())
+    return digest.hexdigest()
+
+
+@lru_cache(maxsize=1)
+def bundled_grid_digest() -> str:
+    """:func:`grid_digest` of the bundled ico4 sphere's two hemispheres, in the file's frame."""
+    from .surface import load_surface
+
+    sphere = load_surface("sphere")
+    return grid_digest(sphere.hemisphere("L"), sphere.hemisphere("R"))
+
+
 @dataclass
 class Warp:
     """One subject's diffeomorphism of both hemispheres.
@@ -1230,7 +1335,9 @@ class Warp:
     rotations, identities for a grid that needed none; ``lh_vertices @
     lh_rotation`` is back in the file's frame. They are saved with the warp,
     and :func:`sbci.migrate_warp` reads them, so a warp reloaded from its file
-    still knows its frame.
+    still knows its frame. ``grid_digest`` names the grid itself
+    (:func:`grid_digest`), which :func:`sbci.migrate_warp` checks is the bundled
+    sphere; a file written before it was kept loads with ``None``.
     """
 
     lh_vertices: np.ndarray
@@ -1239,10 +1346,12 @@ class Warp:
     rh_jacobian: np.ndarray
     lh_rotation: np.ndarray = field(default_factory=lambda: np.eye(3))
     rh_rotation: np.ndarray = field(default_factory=lambda: np.eye(3))
+    grid_digest: str | None = None
 
     def save(self, path) -> Path:
         """Write the warp to ``.npz``; the path returned is the file written, suffix included."""
         path = _npz_path(path)
+        digest = {} if self.grid_digest is None else {"grid_digest": self.grid_digest}
         np.savez_compressed(
             path,
             lh_vertices=self.lh_vertices,
@@ -1251,6 +1360,7 @@ class Warp:
             rh_jacobian=self.rh_jacobian,
             lh_rotation=self.lh_rotation,
             rh_rotation=self.rh_rotation,
+            **digest,
         )
         return path
 
@@ -1265,6 +1375,7 @@ class Warp:
                 rh_jacobian=data["rh_jacobian"],
                 lh_rotation=data["lh_rotation"] if "lh_rotation" in data.files else np.eye(3),
                 rh_rotation=data["rh_rotation"] if "rh_rotation" in data.files else np.eye(3),
+                grid_digest=str(data["grid_digest"]) if "grid_digest" in data.files else None,
             )
 
 
@@ -1312,6 +1423,17 @@ def _whole(value) -> bool:
     return 0 <= float(value) < np.inf and float(value) == round(float(value))
 
 
+def _number(name: str, value) -> float:
+    """``value`` as a float, once it is a number: ``float()`` takes a bool, and a string.
+
+    A step of ``"0.1"`` passed that check and failed later, in a ufunc, and ``True`` was
+    taken for 1.0; a setting is a number, and is held as a float.
+    """
+    if isinstance(value, (bool, np.bool_, str, bytes)):
+        raise ValueError(f"{name} must be a number, not a {type(value).__name__}; got {value!r}")
+    return float(value)
+
+
 #: How far a template given in single precision may sit from unit mass and still be taken,
 #: scaled to it in float64: float32 holds the unit mass of a 5,124 x 5,124 square-root density
 #: only to about 1e-6 (1.7e-6 was seen after normalizing in float32), where the check that
@@ -1352,7 +1474,7 @@ class Encore:
 
     A step that folds a face is refused (:meth:`register`), and so is a setting
     that cannot register: a step or difference of 0, a negative threshold or
-    count, NaN.
+    count, NaN, and a step, threshold or difference given as a bool or a string.
 
     With ``device="gpu"`` the densities are held and transported on the GPU
     (:class:`Concon`) and the warps stay on the CPU; :meth:`root`,
@@ -1374,6 +1496,8 @@ class Encore:
         backtracks: int = 4,
         device: str = "cpu",
     ):
+        # held as floats: "0.1" passed float() and failed in a ufunc, and True was 1.0
+        step, threshold = _number("step", step), _number("threshold", threshold)
         self.lh_grid = lh_grid
         self.rh_grid = rh_grid
         self.concon = Concon(lh_grid, rh_grid, delta, derivative=derivative, device=device)
@@ -1385,9 +1509,9 @@ class Encore:
         # NaN fails every one of these; each setting refused returned unmoved warps, or
         # took every step whatever it did to the cost, without a word
         for name, value, ok, needs in (
-            ("step", step, 0 < float(step) < np.inf, "finite and above 0"),
+            ("step", step, 0 < step < np.inf, "finite and above 0"),
             ("max_iterations", max_iterations, _whole(max_iterations), "a whole number, 0 or more"),
-            ("threshold", threshold, 0 <= float(threshold) < np.inf, "a finite fall, 0 or more"),
+            ("threshold", threshold, 0 <= threshold < np.inf, "a finite fall, 0 or more"),
             ("backtracks", backtracks, _whole(backtracks), "a whole number, 0 or more"),
         ):
             if not ok:
@@ -1395,7 +1519,7 @@ class Encore:
         self.step = step
         self.max_iterations = int(max_iterations)
         self.threshold = threshold
-        self.delta = delta
+        self.delta = float(delta)  # a number, as Concon checked
         self.backtracks = int(backtracks)
 
     def root(self, density):
@@ -1432,10 +1556,15 @@ class Encore:
         mean direction to the subjects, until that direction is shorter than
         0.005 or ``iterations`` steps are taken. The reference stops after
         ten, short of the median; with up to a hundred the rule ends them
-        first (PORTING.md item 25). The densities are read one at a time, so a
-        generator never holds them all at once. On the GPU as many square-root
-        densities stay there as fill less than half its free memory; the rest
-        wait on the CPU and are sent across at each step.
+        first (PORTING.md item 25). With two subjects every point of the
+        geodesic between them is a median, and the steps ended a fifth of the
+        way from whichever subject rounding put nearer their mean; the template
+        is their midpoint instead, the two square-root densities' normalized
+        sum, which takes no step and does not depend on their order. The
+        densities are read one at a time, so a generator never holds them all
+        at once. On the GPU as many square-root densities stay there as fill
+        less than half its free memory; the rest wait on the CPU and are sent
+        across at each step.
         """
         if not _whole(iterations):
             raise ValueError(f"iterations must be a whole number, 0 or more; got {iterations}")
@@ -1446,6 +1575,9 @@ class Encore:
         count = len(roots)
         if not count:
             raise ValueError("a template needs at least one density")
+        if count == 2:  # the geodesic midpoint, a median whichever subject comes first
+            middle = roots[0] + roots[1]
+            return _device.to_host(middle / xp.sqrt((middle**2 * self._area_product).sum()))
         # their mean, added in the order NumPy's mean adds them
         mean = roots[0].copy()
         for i in range(1, count):
@@ -1702,15 +1834,17 @@ def align(
         What every connectome is registered onto. ``None``, the default,
         estimates it first: the Karcher median of the connectomes' square-root
         densities, so that no subject is the reference and every subject
-        moves, which is what a cohort wants. A :class:`~sbci.ContinuousConnectome`
-        registers the connectomes in the list onto that subject, which stays
-        where it is and need not be in the list: this is how one subject is
-        registered onto another. A **square-root** density array of unit
-        mass in the area inner product, with a zero diagonal, as
-        :attr:`Alignment.template` is, registers onto that: an earlier run's
-        template, to bring a new subject onto it without re-estimating. An
-        array that is not (a density passed where its root belongs, say) is
-        refused. With a template given, one connectome is enough.
+        moves, which is what a cohort wants; of two connectomes it is their
+        midpoint, in either order (:meth:`Encore.template`). A
+        :class:`~sbci.ContinuousConnectome` registers the connectomes in the
+        list onto that subject, which stays where it is and need not be in the
+        list: this is how one subject is registered onto another. A
+        **square-root** density array of unit mass in the area inner product,
+        with a zero diagonal, as :attr:`Alignment.template` is, registers onto
+        that: an earlier run's template, to bring a new subject onto it without
+        re-estimating. An array that is not (a density passed where its root
+        belongs, say) is refused, and so is a string: ``"median"`` is ``None``.
+        With a template given, one connectome is enough.
     template_iterations
         Weiszfeld steps toward the median when the template is estimated, at
         most; they stop once a step's mean direction falls below 0.005, as
@@ -1728,8 +1862,10 @@ def align(
         With ``grids``: the rotations ``R`` already applied to their vertices
         (``vertices @ R.T``), one per hemisphere, so that the warps record the
         frame they are in -- :func:`sbci.templates.migrate_warp` places a warp
-        by it, and a rotation it does not know (the bundled sphere turned off
-        its poles by hand, say) puts the warp that far from where it belongs.
+        by it, and refuses one whose grid the rotations do not turn back to
+        the bundled sphere (:attr:`Warp.grid_digest`): the bundled sphere
+        turned off its poles by hand and given without them, say, whose warps
+        it placed that far from where they belong.
     derivative
         ``"difference"``, the default, is the reference's central difference at
         ``delta``. ``"analytic"`` differentiates the piecewise-linear
@@ -1760,6 +1896,11 @@ def align(
     if not _whole(template_iterations):
         raise ValueError(
             f"template_iterations must be a whole number, 0 or more; got {template_iterations}"
+        )
+    if isinstance(template, (str, bytes)):  # numpy's string-to-float error said nothing of it
+        raise ValueError(
+            f"template={template!r} names no template: template=None, the default, estimates "
+            "the Karcher median; template= takes a connectome or a square-root density"
         )
     if len(cc_list) == 0:
         raise ValueError("alignment needs at least one connectome")
@@ -1824,6 +1965,7 @@ def align(
             placed.append((grid, rotation))
         (lh_grid, lh_rotation), (rh_grid, rh_rotation) = placed
         rotations = (lh_rotation, rh_rotation)
+    digest = grid_digest(lh_grid, rh_grid, rotations)  # the grid, whatever turn it was given
     expected = lh_grid.n_vertices + rh_grid.n_vertices
     if densities[0].shape != (expected, expected):
         raise ValueError(
@@ -1903,6 +2045,7 @@ def align(
                 rh_warp.jacobian,
                 lh_rotation=rotations[0],
                 rh_rotation=rotations[1],
+                grid_digest=digest,
             )
         )
         result.aligned.append(aligned)

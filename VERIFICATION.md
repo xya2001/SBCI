@@ -17,11 +17,16 @@ If you only do one thing, do this:
 ```bash
 bash scripts/verify_all.sh            # tiers 1, 2 and 4, against the MATLAB references present
 bash scripts/verify_all.sh --matlab   # also regenerate the MATLAB references
+bash scripts/verify_all.sh --audit    # run tier 2's audit outside a Slurm job too
 ```
 
 It runs the automated tiers, 1, 2 and 4 (tier 3's checks against lab data are
-run by hand), and prints PASS, FAIL or SKIP per stage. **A SKIP is not a pass**
--- the summary lists what each skipped stage needs. On a compute node with the
+run by hand), with the `python` on the path, which must import `sbci` and
+`pytest` (a venv or a conda environment alike; the first stage prints its
+prefix), and prints PASS, FAIL or SKIP per stage. **A SKIP is not a pass**
+-- the summary lists what each skipped stage needs. Tier 2's audit smooths,
+reduces and aligns on the full grid, so it runs inside a Slurm job and skips
+outside one unless `--audit` asks for it. On a compute node with the
 young adult download, the toolkit and the MATLAB output present, expect
 `8 passed, 0 failed, 0 skipped`.
 
@@ -35,7 +40,7 @@ git clone https://github.com/xya2001/SBCI.git && cd SBCI
 python -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
 
-python -m pytest -q                 # expect: everything passes; 72 skip with every extra installed, more without (below)
+python -m pytest -q                 # expect: everything passes; 74 skip with every extra installed, more without (below)
 ruff check src tests scripts tools && ruff format --check src tests scripts tools
 python -m build --wheel
 ```
@@ -52,15 +57,16 @@ A port can be self-consistent and still wrong; that is what Tier 4 is for.
 The skips, and what turns each on: `tests/test_five_minute_start.py` (three
 tests) downloads the released tutorial subject only with `SBCI_DOWNLOAD=1`, or
 reads it from `SBCI_HCP_DIR`; the MATLAB comparisons in
-`tests/test_matlab_reference.py` (21) need the Tier 4 reference dumps, named
+`tests/test_matlab_reference.py` (23) need the Tier 4 reference dumps, named
 by the `SBCI_*` paths at the top of that file; the planted-answer analysis on
 the ico4 grid in `tests/test_example.py` (three minutes of FPCA) runs with
 `SBCI_SLOW_TESTS=1`, which CI's `render` job sets; thirteen doctest items
 are whole examples marked `+SKIP`; the GPU's thirty-four in `tests/test_gpu.py`
 need CuPy and a CUDA GPU (Tier 3); and without the plotting and render extras the
 figure tests in `tests/test_surface.py`, `test_plot_mesh.py` and
-`test_render.py` skip as well. With a network connection, two more checks run
-on the released young adults:
+`test_render.py` skip as well (CI's test matrix, with the plotting extra and
+not the render one, skips 75: the 74 and the PyVista view). With a network
+connection, two more checks run on the released young adults:
 
 ```bash
 SBCI_DOWNLOAD=1 python -m pytest tests/test_five_minute_start.py   # the brief's acceptance lines on sub-100307, 90 MB
@@ -169,9 +175,10 @@ bit (FC parcellation to 5.6e-17); `reduce` to 1.4e-16 on the basis; ENCORE to
 iterations. ConSEAL on two subjects without `template=` started its Karcher
 median from subject 0 in one group and from subject 1 in the other, since the
 two are equally near their mean and rounding decides, and the median of two
-points is any point between them (it now ends a fifth of the way from the
-starting subject to the other; until the fix of PORTING.md item 9 it could
-also stop on the starting subject outright); its cost traces and warps are
+points is any point between them (it ended a fifth of the way from the
+starting subject to the other, and until the fix of PORTING.md item 9 it could
+also stop on the starting subject outright; since PORTING.md item 38 it is the
+point halfway, whichever subject comes first); its cost traces and warps were
 therefore comparable across machines only with `template=` given or a third
 subject in the cohort. A verifier comparing
 against the numbers in these documents should expect rounding-level

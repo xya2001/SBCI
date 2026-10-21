@@ -24,8 +24,10 @@ each, until PORTING.md item 36 about halved ConSEAL's time; on a cluster, run
 it in a batch job. `--device gpu` registers the
 cohort on a CUDA GPU instead (USAGE.md, *Running the alignments on a GPU*):
 on a V100 ENCORE takes 48 s and ConSEAL 6.6 minutes, to the same figure. `scripts/make_figures.py`
-draws the same set from the synthetic example, as a smoke test of the figure
-code on a machine without the data; no document uses those.
+draws the same set from the synthetic example into a directory you name, and
+refuses this one, as a smoke test of the figure code on a machine without the
+data; `--skip-cohort` leaves out its two slow stages, the ten-subject cohort
+and the alignment recovery. No document uses those.
 
 The analysis of the 946 young adults with complete pipeline output, published
 on UNC Dataverse (`sbci download hcp-ya --all --out hcp-ya-full`; `--sc-only` fetches the SC alone, which the coupling run below cannot use), has its own flags: `scripts/hcp_figures.py hcp-ya

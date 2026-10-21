@@ -121,6 +121,11 @@ that is missing any of them -- WP2 requirement, not a warning."""
 SC_ONLY_KEYS = ("streamline_count", "streamline_weighting", "kernel", "bandwidth")
 FC_ONLY_KEYS = ("fc_nuisance_model",)
 
+SC_OPTIONAL_KEYS = ("nu",)
+"""Keys an SC file carries only for the kernel they belong to: ``nu``, the Matern
+smoothness, written with ``kernel="matern"`` alone. A Matern file without it was
+made before it was recorded, when 3 was the only value used."""
+
 MODALITIES = ("sc", "fc")
 
 ENTRY_POINTS = ("raw", "preprocessed", "fastpath", "precomputed")

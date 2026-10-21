@@ -23,30 +23,37 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from convert_surfaces import canonical_faces
 
-canonical = canonical_faces()
-print(
-    f"canonical face list: {canonical.shape}, digest-checked against convert_surfaces.FACE_DIGEST"
-)
 
-directory = resources.files("sbci.data.surfaces")
-surfaces = {}
-for name in ("inflated", "white", "pial", "sphere"):
-    path = directory / f"{name}_ico4.npz"
-    with np.load(str(path), allow_pickle=False) as data:
-        surfaces[name] = (path, {k: data[k] for k in data.files})
-    old = np.asarray(surfaces[name][1]["faces"])
-    same_set = {tuple(sorted(t)) for t in old} == {tuple(sorted(t)) for t in canonical}
-    already = np.array_equal(np.sort(old, axis=1), np.sort(canonical, axis=1))
+def main() -> None:
+    canonical = canonical_faces()
     print(
-        f"  {name:9s} faces {old.shape} -> {canonical.shape}  "
-        f"same triangles: {same_set}  was already ordered: {already}"
+        f"canonical face list: {canonical.shape}, "
+        "digest-checked against convert_surfaces.FACE_DIGEST"
     )
-    if not same_set:
-        # only an order is put right here: other triangles would be another mesh
-        raise SystemExit(
-            f"{name}_ico4.npz holds other triangles than the grid's; nothing rewritten"
+
+    directory = resources.files("sbci.data.surfaces")
+    surfaces = {}
+    for name in ("inflated", "white", "pial", "sphere"):
+        path = directory / f"{name}_ico4.npz"
+        with np.load(str(path), allow_pickle=False) as data:
+            surfaces[name] = (path, {k: data[k] for k in data.files})
+        old = np.asarray(surfaces[name][1]["faces"])
+        same_set = {tuple(sorted(t)) for t in old} == {tuple(sorted(t)) for t in canonical}
+        already = np.array_equal(np.sort(old, axis=1), np.sort(canonical, axis=1))
+        print(
+            f"  {name:9s} faces {old.shape} -> {canonical.shape}  "
+            f"same triangles: {same_set}  was already ordered: {already}"
         )
-for path, stored in surfaces.values():
-    stored["faces"] = canonical
-    np.savez_compressed(str(path), **stored)
-print("\nrewritten")
+        if not same_set:
+            # only an order is put right here: other triangles would be another mesh
+            raise SystemExit(
+                f"{name}_ico4.npz holds other triangles than the grid's; nothing rewritten"
+            )
+    for path, stored in surfaces.values():
+        stored["faces"] = canonical
+        np.savez_compressed(str(path), **stored)
+    print("\nrewritten")
+
+
+if __name__ == "__main__":
+    main()

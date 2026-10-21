@@ -274,6 +274,47 @@ def test_fit_basis_validates_its_arguments(cohort):
         fit_basis(matrices, np.eye(n - 1), rank=2)
 
 
+def test_rank_is_a_whole_number_checked_before_the_cohort_is_read(cohort):
+    """A float rank raised a raw TypeError, and only once the whole cohort was read and stacked."""
+    matrices, _ = cohort
+
+    class Unread:
+        def __len__(self):
+            return 3
+
+        def __getitem__(self, index):
+            raise AssertionError("the cohort was read before rank was checked")
+
+    for wrong in (2.0, 2.5, True, np.float64(3.0)):
+        with pytest.raises(TypeError, match="whole number of components"):
+            reduce(Unread(), rank=wrong)
+        with pytest.raises(TypeError, match="whole number of components"):
+            fit_basis(matrices, np.eye(matrices.shape[1]), rank=wrong)
+    with pytest.raises(ValueError, match="rank must be at least 1"):
+        reduce(Unread(), rank=0)
+    assert reduce(list(matrices), rank=np.int64(2), seed=0).rank == 2
+
+
+def test_a_start_of_another_shape_or_without_a_direction_is_refused(cohort):
+    """(n, 2) for rank 3 failed after two components, (n, 5) was cut to three, a zero column NaN."""
+    matrices, _ = cohort
+    n = matrices.shape[1]
+    start = np.random.default_rng(7).standard_normal((n, 5))
+    for wrong in (start[:, :2], start, start[:-1, :3], start[:, 0]):
+        with pytest.raises(ValueError, match=rf"start is .*, expected \({n}, 3\)"):
+            fit_basis(matrices, np.eye(n), rank=3, start=wrong)
+    for bad in (np.nan, np.inf):
+        spoiled = start[:, :3].copy()
+        spoiled[4, 1] = bad
+        with pytest.raises(ValueError, match="start holds values that are not finite"):
+            fit_basis(matrices, np.eye(n), rank=3, start=spoiled)
+    flat = start[:, :3].copy()
+    flat[:, 2] = 0.0
+    with pytest.raises(ValueError, match="column 2 is all zeros"):
+        reduce(list(matrices), rank=3, start=flat)
+    assert np.isfinite(fit_basis(matrices, np.eye(n), rank=3, start=start[:, :3]).basis).all()
+
+
 def _ring_laplacian(n):
     """A one-dimensional Laplacian, as a stand-in roughness penalty."""
     ring = np.zeros((n, n))
@@ -313,7 +354,8 @@ def test_too_large_a_penalty_inverts_and_selects_the_roughest_mode(cohort):
     ring = _ring_laplacian(n)
 
     working = fit_basis(matrices, np.eye(n), ring, rank=1, alpha=1.0, seed=0)
-    inverted = fit_basis(matrices, np.eye(n), ring, rank=1, alpha=5.0, seed=0)
+    with pytest.warns(RuntimeWarning, match="roughness penalty outweighs"):
+        inverted = fit_basis(matrices, np.eye(n), ring, rank=1, alpha=5.0, seed=0)
 
     working_roughness = working.basis[:, 0] @ ring @ working.basis[:, 0]
     inverted_roughness = inverted.basis[:, 0] @ ring @ inverted.basis[:, 0]
@@ -597,6 +639,24 @@ def test_in_place_deflation_and_the_closed_form_explained_fraction():
     again = fit_basis(kept, np.eye(n), rank=4, start=start)  # the default copies
     np.testing.assert_array_equal(again.basis, result.basis)
     np.testing.assert_array_equal(again.explained, result.explained)
+
+
+def test_squared_explained_is_the_share_of_the_sum_of_squares_under_the_plain_product_only():
+    """As explained's docstring says: exact with the plain inner product, not under weights."""
+    rng = np.random.default_rng(23)
+    n, n_subjects = 25, 5
+    matrices = rng.standard_normal((n_subjects, n, n))
+    matrices = matrices @ matrices.transpose(0, 2, 1)
+    matrices -= matrices.mean(axis=0)
+    total = np.linalg.norm(matrices)
+    start = rng.standard_normal((n, 4))
+    gap = {}
+    for name, gram in (("plain", np.ones(n)), ("weighted", rng.uniform(0.5, 2.0, n))):
+        residual = matrices.copy()
+        result = fit_basis(residual, gram, rank=4, start=start, copy=False)
+        share = 1.0 - (np.linalg.norm(residual) / total) ** 2
+        gap[name] = abs(result.explained[-1] ** 2 - share)
+    assert gap["plain"] < 1e-12 < gap["weighted"]
 
 
 def test_a_support_constraint_works_with_the_default_diagonal_inner_product(cohort):

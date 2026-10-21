@@ -38,6 +38,7 @@ same arguments are free and return independent copies.
 from __future__ import annotations
 
 import copy
+import numbers
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -261,6 +262,18 @@ def _metadata(
     return template(modality, **common)
 
 
+def _whole(value, name: str, least: int) -> int:
+    """``value`` as an int, refused unless it is a whole number, ``least`` or more.
+
+    A float, a string or a bool is refused, as ``sbci example --seed`` refuses
+    one, rather than cut to a whole number: ``seed=1.7`` was seed 1, and
+    ``n_subjects=2.5`` two subjects.
+    """
+    if isinstance(value, bool) or not isinstance(value, numbers.Integral) or value < least:
+        raise ValueError(f"{name} must be a whole number, {least} or more; got {value!r}")
+    return int(value)
+
+
 def example(
     modality: str = "sc", seed: int = 0, n_streamlines: int = N_STREAMLINES
 ) -> ContinuousConnectome:
@@ -278,12 +291,12 @@ def example(
         carries; ``"fc"`` for a signed correlation matrix built from synthetic
         timeseries, which carries no endpoints because correlations have none.
     seed
-        Seed for the generator, so the same call always gives the same file.
-        Different seeds give different subjects, which gives the alignment
-        methods something to do.
+        Seed for the generator, a whole number, 0 or more, so the same call
+        always gives the same file. Different seeds give different subjects,
+        which gives the alignment methods something to do.
     n_streamlines
-        Streamlines to draw for ``"sc"``, :data:`N_STREAMLINES` by default.
-        Ignored for ``"fc"``.
+        Streamlines to draw for ``"sc"``, :data:`N_STREAMLINES` by default; a
+        whole number, 1 or more. Ignored for ``"fc"``.
 
     Returns
     -------
@@ -316,9 +329,9 @@ def example(
     """
     if modality not in spec.MODALITIES:
         raise ValueError(f"modality must be one of {spec.MODALITIES}, got {modality!r}")
-    if modality == "sc" and int(n_streamlines) < 1:
-        raise ValueError(f"n_streamlines must be at least 1, got {n_streamlines}")
-    return _copy(_build(modality, int(seed), int(n_streamlines) if modality == "sc" else 0))
+    seed = _whole(seed, "seed", 0)
+    count = _whole(n_streamlines, "n_streamlines", 1) if modality == "sc" else 0
+    return _copy(_build(modality, seed, count))
 
 
 @lru_cache(maxsize=2)
@@ -415,10 +428,11 @@ def example_cohort(
     Parameters
     ----------
     n_subjects
-        How many subjects. Each structural subject takes a second or two to
-        build and 52 MB in memory.
+        How many subjects, a whole number. Each structural subject takes a
+        second or two to build and 52 MB in memory.
     seed
-        Seed for the shared structure and, through it, every subject.
+        Seed for the shared structure and, through it, every subject: a whole
+        number, 0 or more.
     effect
         Strength of the planted effect, in ``[0, 1)``.
     modality
@@ -452,20 +466,19 @@ def example_cohort(
     """
     if modality not in spec.MODALITIES:
         raise ValueError(f"modality must be one of {spec.MODALITIES}, got {modality!r}")
-    if int(n_subjects) < 1:
-        raise ValueError(f"n_subjects must be at least 1, got {n_subjects}")
+    n_subjects = _whole(n_subjects, "n_subjects", 1)
+    seed = _whole(seed, "seed", 0)
     if not 0.0 <= float(effect) < 1.0:
         raise ValueError(f"effect must be in [0, 1), got {effect}")
-    if modality == "sc" and int(n_streamlines) < 1:
-        raise ValueError(f"n_streamlines must be at least 1, got {n_streamlines}")
+    count = _whole(n_streamlines, "n_streamlines", 1) if modality == "sc" else 0
     if float(variation) < 0 or float(anatomy) < 0:
         raise ValueError("variation and anatomy are spreads and cannot be negative")
     prototype = _build_cohort(
-        int(n_subjects),
-        int(seed),
+        n_subjects,
+        seed,
         float(effect),
         modality,
-        int(n_streamlines) if modality == "sc" else 0,
+        count,
         float(variation),
         float(anatomy),
     )

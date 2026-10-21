@@ -39,3 +39,10 @@ def test_hemisphere_split_is_left_then_right():
     assert labels.size == spec.N_VERTICES
     assert (labels[: spec.N_VERTICES_PER_HEMI] == 0).all()
     assert (labels[spec.N_VERTICES_PER_HEMI :] == 1).all()
+
+
+def test_a_vector_that_does_not_fill_the_triangle_is_refused():
+    """One value with n=3 was broadcast into every entry of the matrix."""
+    with pytest.raises(ValueError, match="1 values do not fill .* 3 x 3 matrix, which holds 3"):
+        to_dense(np.array([1.0]), 3)
+    np.testing.assert_array_equal(to_dense(np.arange(3.0), 3), to_dense(np.arange(3.0)))

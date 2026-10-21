@@ -553,6 +553,7 @@ def test_the_correlation_check_is_twelfth_and_skipped_for_sc(example_files):
         "area",
         "unit mass",
         "mask",
+        "endpoints",
     ]
     assert all(c.passed for c in checks)
     assert str(checks[8]) == "[PASS] correlation: skipped: only FC holds correlations"
@@ -583,8 +584,9 @@ def _no_streamlines(handle):
         _bary(lambda w: np.where(np.arange(len(w))[:, None] == 3, np.nan, w)),
         _bary(lambda w: np.zeros(w.shape, dtype=[("w", "f4"), ("v", "f4")])),
         _no_streamlines,
+        _bary(lambda w: np.where(np.arange(len(w))[:, None] == 3, 0.0, w)),
     ],
-    ids=["a NaN weight", "weights of a compound type", "no streamlines"],
+    ids=["a NaN weight", "weights of a compound type", "no streamlines", "a row of zeros"],
 )
 def test_endpoints_load_refuses_fail_validate_and_info_without_a_traceback(
     example_files, tmp_path, change
@@ -598,3 +600,22 @@ def test_endpoints_load_refuses_fail_validate_and_info_without_a_traceback(
     checks = validate_file(path)
     assert [c.name for c in checks] == ["readable"] and not checks[0].passed
     assert main(["info", str(path)]) == 1
+
+
+# --- the review of 20 October 2026 -------------------------------------------------
+
+
+def test_triangles_stored_in_another_face_order_fail_the_endpoints_check(example_files, tmp_path):
+    """Every stored triangle once named another, a median 85 degrees off, and nothing failed."""
+
+    def reorder(handle):  # the same triangles of each hemisphere, numbered backwards
+        triangle = handle["endpoints/triangle_in"][()]
+        handle["endpoints/triangle_in"][...] = triangle // 5120 * 5120 + 5119 - triangle % 5120
+
+    checks = {c.name: c for c in validate_file(_changed(example_files, "sc", tmp_path, reorder))}
+    assert not checks["endpoints"].passed and "farther than one edge" in checks["endpoints"].detail
+    assert all(c.passed for name, c in checks.items() if name != "endpoints")
+    good = {c.name: c for c in validate_file(example_files["sc"])}["endpoints"]
+    assert good.passed and "every endpoint rebuilds within one edge (4.74 degrees)" in good.detail
+    fc = {c.name: c for c in validate_file(example_files["fc"])}["endpoints"]
+    assert str(fc) == "[PASS] endpoints: skipped: no endpoint positions"

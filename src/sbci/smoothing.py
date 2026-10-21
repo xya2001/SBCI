@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import lru_cache, partial
 
 import numpy as np
 
@@ -75,6 +75,10 @@ to be read together with ``kernel`` in the metadata.
 
 TRUNCATION_FLOOR = 1e-30
 """Kernel eigenvalues below this are set to zero, as in the MATLAB."""
+
+DEFAULT_NU = 3.0
+"""The Matern smoothness :func:`smooth` uses when given none: the ``nu = 3`` of
+``rdk_smoothed_concon_compute.m``, which names 1, 2 and 3 as the values to use."""
 
 
 def diffusion_kernel(eigenvalues: np.ndarray, eigenvectors: np.ndarray, kappa: float) -> np.ndarray:
@@ -197,6 +201,29 @@ more memory traffic than they save: 4096 meant 245 such passes per million
 endpoints, 65536 means 16.
 """
 
+SPARSE_PAIR_BUDGET = 10**9
+"""Bytes a block's (vertex, endpoint) pairs may take on the sparse path, one side at a time.
+
+The tree search returns each pair as two indices and a distance, 24 bytes, and
+the block's other arrays grow with its pairs. An endpoint reaches the vertices
+of its hemisphere inside the cutoff: 29 at the default bandwidth, 46 MB for a
+block of :data:`SPARSE_BLOCK`, but 1,911 at sigma 0.5, 3.0 GB. The default block
+is shrunk to stay within this (:func:`_sparse_block`).
+"""
+
+PAIR_BYTES = 24
+"""Bytes of one pair as ``cKDTree.sparse_distance_matrix`` returns it: two indices, a distance."""
+
+
+def _check_sigma(sigma) -> None:
+    """Refuse a bandwidth that is not finite and above 0, which the series took without a word.
+
+    A NaN made a cutoff of 180 degrees and a kernel of NaNs, and a negative
+    sigma weights the high degrees up rather than down.
+    """
+    if not (sigma > 0 and np.isfinite(sigma)):  # written so that NaN fails too
+        raise ValueError(f"sigma must be positive and finite, got {sigma}")
+
 
 @lru_cache(maxsize=32)
 def kernel_cutoff(
@@ -217,6 +244,7 @@ def kernel_cutoff(
     >>> round(float(np.degrees(kernel_cutoff(0.01))), 3)
     17.369
     """
+    _check_sigma(sigma)
     cosines = np.arange(1.0, -1.0, -0.0001)
     values = _legendre_series(cosines, sigma, harmonics)
     below = np.nonzero(values * values[0] < epsilon)[0]
@@ -311,14 +339,24 @@ class KernelTable:
         return float(np.arccos(np.clip(self.cutoff_cosine, -1.0, 1.0)))
 
     def __call__(self, cosine, truncate: bool = True) -> np.ndarray:
-        """Kernel values by truncation lookup, zero beyond the cutoff unless ``truncate`` is off."""
+        """Kernel values by truncation lookup, zero beyond the cutoff unless ``truncate`` is off.
+
+        A NaN cosine gives NaN: the cast to an index mapped it onto an entry of
+        the table, so a NaN position read as a finite kernel value.
+        """
         # No `out=` anywhere here: a scalar argument is a 0-d array, which
         # numpy refuses as an output buffer.
         cosine = np.clip(np.asarray(cosine, dtype=np.float64), -1.0, 1.0)
+        missing = np.isnan(cosine)
+        nan = bool(missing.any())
+        if nan:
+            cosine = np.where(missing, 1.0, cosine)  # any entry, so the cast below stays defined
         index = np.clip(
             (cosine * self.samples + self.samples).astype(np.int64), 0, 2 * self.samples
         )
         values = self.values[index]
+        if nan:
+            values = np.where(missing, np.nan, values)
         if not truncate:
             return values
         return np.where(cosine < self.cutoff_cosine, 0.0, values)
@@ -342,6 +380,7 @@ def concon_kernel_table(
     >>> round(float(np.degrees(table.cutoff)), 3)
     12.231
     """
+    _check_sigma(sigma)
     degree = np.arange(harmonics)
     big_l = 10**harmonic_exponent
     big_m = 10**kernel_exponent
@@ -435,7 +474,7 @@ def spherical_heat_kernel(
     cosine
         Cosines of the angle between points, any shape. Clipped to ``[-1, 1]``.
     sigma
-        Bandwidth. The released cohorts use 0.005.
+        Bandwidth, positive and finite. The released cohorts use 0.005.
     harmonics
         Number of terms. ``concon`` hardcodes 33 -- see :data:`NUM_HARMONICS`.
     epsilon
@@ -468,6 +507,7 @@ def spherical_heat_kernel(
     >>> float(spherical_heat_kernel(np.cos(np.radians(20.0)), 0.005))  # past the cutoff
     0.0
     """
+    _check_sigma(sigma)
     cosine = np.clip(np.asarray(cosine, dtype=np.float64), -1.0, 1.0)
     if epsilon is None:
         return _legendre_series(cosine, sigma, harmonics)
@@ -475,6 +515,25 @@ def spherical_heat_kernel(
         return concon_kernel_table(sigma, harmonics, epsilon)(cosine)
     total = _legendre_series(cosine, sigma, harmonics)
     return np.where(cosine < np.cos(kernel_cutoff(sigma, epsilon, harmonics)), 0.0, total)
+
+
+def _sparse_block(cutoff: float, n_hemisphere: int) -> int:
+    """Endpoints a block of the sparse path takes: :data:`SPARSE_BLOCK`, fewer for a wide kernel.
+
+    An endpoint pairs with the vertices of its hemisphere inside the cutoff,
+    the cap's share of them, ``n_hemisphere * (1 - cos(cutoff)) / 2``: 29 of
+    2562 at the default bandwidth, every one at sigma 1. The block holds its
+    pairs within :data:`SPARSE_PAIR_BUDGET`, at :data:`PAIR_BYTES` each.
+
+    Examples
+    --------
+    >>> _sparse_block(concon_kernel_table(DEFAULT_SIGMA).cutoff, 2562) == SPARSE_BLOCK
+    True
+    >>> _sparse_block(np.pi, 2562)    # the whole hemisphere: 2562 pairs an endpoint
+    16263
+    """
+    pairs = max(1.0, n_hemisphere * (1.0 - np.cos(cutoff)) / 2.0)
+    return int(max(1, min(SPARSE_BLOCK, SPARSE_PAIR_BUDGET // (PAIR_BYTES * pairs))))
 
 
 def endpoint_density(
@@ -515,8 +574,10 @@ def endpoint_density(
         over the grid; it was a workaround for a scale mismatch that turned out
         to be the kernel's weight, and is kept only for comparison.
     block
-        Endpoints processed at a time; defaults to :data:`SPARSE_BLOCK` or
-        :data:`DENSE_BLOCK` according to ``method``.
+        Endpoints processed at a time, a positive whole number; defaults to
+        :data:`DENSE_BLOCK` on the dense path, and on the sparse path to
+        :data:`SPARSE_BLOCK`, or fewer where the kernel reaches so many
+        vertices that a block's pairs would pass :data:`SPARSE_PAIR_BUDGET`.
     method
         ``"sparse"``, the default, finds each endpoint's neighbourhood with a
         KD-tree and evaluates the kernel only there: the kernel is zero past
@@ -545,8 +606,13 @@ def endpoint_density(
     hemisphere_out = np.asarray(hemisphere_out)
     n = vertices.shape[0]
     total = points_in.shape[0]
+    _check_sigma(sigma)
+    sized = block is None  # the sparse path fits its default block to the kernel's reach, below
     if block is None:
         block = DENSE_BLOCK if method == "dense" else SPARSE_BLOCK
+    # a block of -1 made an empty range and a density of zeros
+    if isinstance(block, (bool, np.bool_)) or not isinstance(block, (int, np.integer)) or block < 1:
+        raise ValueError(f"block must be a positive whole number of endpoints, got {block!r}")
     if (
         vertices.ndim != 2
         or vertices.shape[1] != 3
@@ -615,6 +681,8 @@ def endpoint_density(
     sides = np.unique(vertex_hemisphere)
     trees = {int(h): cKDTree(vertices[vertex_hemisphere == h]) for h in sides}
     members = {int(h): np.nonzero(vertex_hemisphere == h)[0] for h in sides}
+    if sized:
+        block = _sparse_block(cutoff, max((part.size for part in members.values()), default=0))
 
     def sparse_columns(points, hemisphere):
         rows, cols, vals = [], [], []
@@ -669,6 +737,11 @@ def endpoint_positions(endpoints, surface=None):
     surface, not on the nearest vertex, so the file stores each crossing as a
     triangle plus barycentric weights. This rebuilds the position from them.
 
+    A position lies within one edge of the grid of the endpoint's stored
+    vertex when its triangle index refers to the grid's own face list
+    (SPEC_QUESTIONS.md item 13). Endpoints whose positions lie farther away
+    are refused: their triangles name other triangles than were crossed.
+
     Parameters
     ----------
     endpoints
@@ -680,6 +753,26 @@ def endpoint_positions(endpoints, surface=None):
     -------
     tuple of ndarray
         ``(points_in, points_out)``, each ``(s, 3)`` on the unit sphere.
+    """
+    points_in, points_out, offsets, edge = _vertex_offsets(endpoints, surface)
+    far = offsets > edge
+    if far.any():
+        raise ValueError(
+            f"{int(far.sum()):,} of {offsets.size:,} endpoint positions lie farther than one "
+            f"edge of the grid ({edge:.2f} degrees) from their stored vertex, up to "
+            f"{offsets.max():.1f} degrees: their triangle indices name other triangles than "
+            "the grid's own face list does (SPEC_QUESTIONS.md item 13)"
+        )
+    return points_in, points_out
+
+
+def _vertex_offsets(endpoints, surface=None):
+    """The positions rebuilt from the triangles, and how far each lies from its stored vertex.
+
+    Returns ``(points_in, points_out, offsets, edge)``: the offsets in degrees,
+    the ``in`` ends' and then the ``out`` ends', and the grid's longest edge in
+    degrees, as far as a position may lie from its vertex. ``sbci validate``
+    reports them, and :func:`endpoint_positions` refuses an offset past the edge.
     """
     if not endpoints.has_positions:
         raise MissingDataError(_NO_POSITIONS)
@@ -706,9 +799,27 @@ def endpoint_positions(endpoints, surface=None):
         point = np.einsum("sk,skj->sj", np.asarray(bary, dtype=np.float64), corners)
         return point / np.linalg.norm(point, axis=1, keepdims=True)
 
+    points_in = rebuild(endpoints.tri_in, endpoints.bary_in, endpoints.surf_in)
+    points_out = rebuild(endpoints.tri_out, endpoints.bary_out, endpoints.surf_out)
+    if 2 * endpoints.n_per_hemi != vertices.shape[0]:
+        raise ValueError(
+            f"the endpoints are on a grid of {2 * endpoints.n_per_hemi} vertices and the "
+            f"surface has {vertices.shape[0]}, so their vertex indices name other vertices there"
+        )
+    unit = vertices / np.linalg.norm(vertices, axis=1, keepdims=True)
+    cosine = np.concatenate(
+        [
+            np.einsum("ij,ij->i", points_in, unit[endpoints.global_vertex_in]),
+            np.einsum("ij,ij->i", points_out, unit[endpoints.global_vertex_out]),
+        ]
+    )
+    edges = faces[:, [0, 1, 1, 2, 2, 0]].reshape(-1, 2)
+    longest = np.einsum("ij,ij->i", unit[edges[:, 0]], unit[edges[:, 1]]).min()  # its cosine
     return (
-        rebuild(endpoints.tri_in, endpoints.bary_in, endpoints.surf_in),
-        rebuild(endpoints.tri_out, endpoints.bary_out, endpoints.surf_out),
+        points_in,
+        points_out,
+        np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0))),
+        float(np.degrees(np.arccos(np.clip(longest, -1.0, 1.0)))),
     )
 
 
@@ -770,12 +881,21 @@ def _indices(name, values) -> np.ndarray:
     return raw.astype(np.int64)
 
 
+BARYCENTRIC_TOLERANCE = 1e-4
+"""How far a row of barycentric weights may sum from one: the files keep them in
+float32, which moves a sum by about 1e-7."""
+
+
 def _weights(name, values) -> np.ndarray:
     """Barycentric weights as ``float64``, checked before the cast and after it.
 
     NumPy reads text such as ``b"0.5"`` as a number when cast, and a compound
     value raised a ``TypeError``; a NaN weight loaded, validated, and made
-    ``smooth()`` fail on a NaN position.
+    ``smooth()`` fail on a NaN position. Each row has to sum to one, within
+    :data:`BARYCENTRIC_TOLERANCE`: a row of zeros put its endpoint nowhere, and
+    another sum weighed its streamline by that sum in ConSEAL's counts. A
+    weight may be slightly negative, as the point search leaves one for a
+    point just outside its triangle.
     """
     raw = np.asarray(values)
     if raw.dtype.kind not in "biuf":
@@ -787,6 +907,15 @@ def _weights(name, values) -> np.ndarray:
             f"{name} holds {bad} weight(s) that are not finite, which would put their "
             "endpoints nowhere and make the density NaN"
         )
+    if weights.ndim == 2 and weights.shape[1] == 3:  # another shape is refused with the count
+        sums = weights.sum(axis=1)
+        off = np.abs(sums - 1.0) > BARYCENTRIC_TOLERANCE
+        if off.any():
+            raise ValueError(
+                f"{name} holds {int(off.sum())} row(s) that do not sum to 1 (the first sums "
+                f"to {sums[off][0]:.6g}); barycentric weights sum to 1, within "
+                f"{BARYCENTRIC_TOLERANCE:g}, and a row of zeros puts its endpoint nowhere"
+            )
     return weights
 
 
@@ -825,7 +954,7 @@ class Endpoints:
         """Coerce the fields to arrays and check they describe the same streamlines.
 
         Indices have to be whole numbers on the grid, and barycentric weights
-        finite numbers; each is checked before it is cast.
+        finite numbers whose rows sum to one; each is checked before it is cast.
         """
         for name in ("surf_in", "surf_out"):
             raw = np.asarray(getattr(self, name)).ravel()
@@ -1374,6 +1503,22 @@ def _resolve_eigenpairs(eigenpairs):
     )
 
 
+def _positive(name: str, value) -> float:
+    """A number :func:`smooth` takes, as a float, refused unless it is positive and finite.
+
+    ``True`` and ``"0.005"`` are refused before the cast, which reads them as
+    1.0 and 0.005. A NumPy float counts as the decimal it prints as: a float32
+    0.005 is 0.004999999888 as a float, which a file recorded and the cohort
+    loader told apart from the 0.005 of every other file.
+    """
+    if isinstance(value, (bool, np.bool_, str, bytes)):
+        raise TypeError(f"{name} takes a number, got {value!r}")
+    number = float(str(value)) if isinstance(value, np.floating) else float(value)
+    if not (number > 0 and np.isfinite(number)):
+        raise ValueError(f"{name} must be positive and finite, got {number}")
+    return number
+
+
 def smooth(
     connectome,
     kernel: str = "shk",
@@ -1381,13 +1526,14 @@ def smooth(
     eigenpairs=None,
     mask_medial_wall: bool = False,
     progress=None,
+    nu: float | None = None,
 ):
     """Re-smooth a connectome from its stored endpoints.
 
     Returns a new connectome of the same type, carrying the same endpoints,
-    mask, areas and coordinates, with ``kernel``, ``bandwidth`` and the
-    streamline count in its metadata set to what was actually used: a half
-    of a subject's streamlines records its own count.
+    mask, areas and coordinates, with ``kernel``, ``bandwidth`` (and ``nu``
+    for ``matern``) and the streamline count in its metadata set to what was
+    actually used: a half of a subject's streamlines records its own count.
 
     :func:`smooth_endpoints` normalizes its density to sum to one over the
     whole matrix, diagonal included. This renormalizes to the package's
@@ -1404,7 +1550,9 @@ def smooth(
     bandwidth
         ``sigma`` for ``shk``, defaulting to :data:`DEFAULT_SIGMA`; ``kappa``
         for ``rdk`` and ``matern``, defaulting to the value the reference
-        selection formula picks, ``kappa_candidates(eigenvalues)[3]``.
+        selection formula picks, ``kappa_candidates(eigenvalues)[3]``. A
+        positive finite number; a NumPy float counts as the decimal it prints
+        as, so ``np.float32(0.005)`` is smoothed and recorded as 0.005.
     eigenpairs
         Directory holding the Laplace-Beltrami basis, or a pair of
         ``(eigenvalues, eigenvectors)`` tuples. Without it the basis is looked
@@ -1418,13 +1566,22 @@ def smooth(
     progress
         Optional ``progress(done, total)`` callable, called after each block of
         endpoints for the ``shk`` kernel.
+    nu
+        The Matern kernel's smoothness, a positive number, recorded in the
+        metadata as ``nu``; ``None`` means :data:`DEFAULT_NU`, the reference
+        script's 3 (it names 1, 2 and 3). Only ``matern`` takes it.
     """
     if kernel not in KERNELS:
         raise ValueError(f"kernel must be one of {KERNELS}, got {kernel!r}")
     if bandwidth is not None:
-        bandwidth = float(bandwidth)
-        if not (bandwidth > 0 and np.isfinite(bandwidth)):
-            raise ValueError(f"bandwidth must be positive and finite, got {bandwidth}")
+        bandwidth = _positive("bandwidth", bandwidth)
+    if nu is not None:
+        if kernel != "matern":
+            raise ValueError(
+                f"nu is the Matern kernel's smoothness, and kernel={kernel!r} has none; "
+                f"got nu={nu!r}"
+            )
+        nu = _positive("nu", nu)
     if getattr(connectome, "endpoints", None) is None:
         raise MissingDataError(_NO_ENDPOINTS)
     modality = getattr(getattr(connectome, "metadata", None), "modality", "sc")
@@ -1436,11 +1593,12 @@ def smooth(
 
     if kernel == "shk":
         sigma = DEFAULT_SIGMA if bandwidth is None else bandwidth
+        vertices = _grid_vertices(connectome)  # off ico4 refused first: positions are on its sphere
         points_in, points_out = endpoint_positions(connectome.endpoints)
         from .grid import hemisphere_labels
 
         density = endpoint_density(
-            _grid_vertices(connectome),
+            vertices,
             points_in,
             points_out,
             connectome.endpoints.surf_in,
@@ -1461,14 +1619,16 @@ def smooth(
     if bandwidth is None:
         bandwidth = float(kappa_candidates(lam_left)[3])
 
-    build = diffusion_kernel if kernel == "rdk" else matern_kernel
+    if kernel == "matern" and nu is None:
+        nu = DEFAULT_NU
+    build = diffusion_kernel if kernel == "rdk" else partial(matern_kernel, nu=nu)
     density = smooth_endpoints(
         connectome.endpoints,
         build(lam_left, vec_left, bandwidth),
         build(lam_right, vec_right, bandwidth),
     )
 
-    return _finish(connectome, density, kernel, bandwidth, mask_medial_wall)
+    return _finish(connectome, density, kernel, bandwidth, mask_medial_wall, nu)
 
 
 def apply_final_threshold(
@@ -1516,9 +1676,18 @@ def _grid_vertices(connectome) -> np.ndarray:
 
 
 def _finish(
-    connectome, density: np.ndarray, kernel: str, bandwidth: float, mask_medial_wall: bool = False
+    connectome,
+    density: np.ndarray,
+    kernel: str,
+    bandwidth: float,
+    mask_medial_wall: bool = False,
+    nu: float | None = None,
 ):
-    """Normalize a re-smoothed density and wrap it back into a connectome."""
+    """Normalize a re-smoothed density and wrap it back into a connectome.
+
+    ``nu`` is recorded for the Matern kernel, :data:`DEFAULT_NU` if not given;
+    any other kernel leaves the key out, whatever the connectome carried.
+    """
     from .grid import to_condensed
     from .metadata import Metadata
 
@@ -1547,6 +1716,9 @@ def _finish(
 
     fields = copy.deepcopy(connectome.metadata.fields)  # not sharing its lists with the input
     fields.update(kernel=kernel, bandwidth=float(bandwidth), normalization="unit-mass")
+    fields.pop("nu", None)
+    if kernel == "matern":
+        fields["nu"] = float(DEFAULT_NU if nu is None else nu)
     if getattr(connectome, "endpoints", None) is not None:
         fields["streamline_count"] = int(connectome.endpoints.n_streamlines)
     return type(connectome)(

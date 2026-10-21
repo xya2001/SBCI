@@ -221,7 +221,7 @@ def test_two_files_for_one_subject_are_named(folder):
     add("sub-02_sc.h5")
     add("sub-02_desc-old_sc.h5", where="old")
     cohort = load_cohort(root)
-    assert cohort.excluded == {"sub-02": "2 sc files: sub-02_desc-old_sc.h5, sub-02_sc.h5"}
+    assert cohort.excluded == {"sub-02": "2 sc files: old/sub-02_desc-old_sc.h5, sub-02_sc.h5"}
 
 
 def test_sessions_must_be_chosen(folder):
@@ -487,6 +487,20 @@ def test_numbers_compare_as_numbers(folder):
     add("sub-01_sc.h5", _header(bandwidth=2))
     add("sub-02_sc.h5", _header(bandwidth=2.0))
     assert load_cohort(root).n_subjects == 2
+
+
+def test_matern_files_differ_by_nu_and_one_made_before_it_was_recorded_has_three(folder):
+    """Matern files at nu 1 and 3, up to 7% apart, came in together: nu was no setting."""
+    root, add = folder
+    add("sub-01_sc.h5", _header(kernel="matern", bandwidth=0.2, nu=3.0))
+    add("sub-02_sc.h5", _header(kernel="matern", bandwidth=0.2))  # written before nu was
+    add("sub-03_sc.h5", _header(kernel="matern", bandwidth=0.2, nu=1))
+    with pytest.raises(
+        ValueError, match=r"sc nu: 3\.0 in 2, 1\.0 in 1 \(first of the others: sub-03"
+    ):
+        load_cohort(root)
+    kept = load_cohort(root, mismatch="exclude")
+    assert kept.subjects == ["sub-01", "sub-02"] and kept.settings["sc"]["nu"] == 3.0
 
 
 def test_a_table_with_two_columns_of_one_name_is_refused(folder, tmp_path):
@@ -989,3 +1003,88 @@ def test_an_empty_endpoint_group_is_left_out_as_load_refuses_it(written, tmp_pat
         sbci.load(path)
     cohort = load_cohort([written / "sub-a_sc.h5", path])
     assert cohort.subjects == ["sub-a"] and "holds no streamlines" in cohort.excluded["sub-z"]
+
+
+# --- PORTING.md item 38 -------------------------------------------------------------------
+
+
+def test_the_summary_counts_a_reason_holding_a_semicolon_once(folder):
+    """Split on "; ", one reason of two subjects was counted as two reasons of two each."""
+    root, add = folder
+    for subject in ("01", "02", "03", "04"):
+        add(f"sub-{subject}_sc.h5")
+    for subject in ("05", "06"):
+        add(f"sub-{subject}_sc.h5", _header(kernel="rdk", bandwidth=0.01))
+    cohort = load_cohort(root, mismatch="exclude", exclude={"01": "motion"})
+    left = [line for line in cohort.summary().splitlines() if line.startswith("  left out")]
+    assert left == [
+        "  left out, 2: sc kernel is 'rdk', not the cohort's 'shk'; sc bandwidth is 0.01, not "
+        "the cohort's 0.005",
+        "  left out, 1: excluded by the caller: motion",
+    ]
+    assert cohort.reasons["sub-05"] == [cohort.excluded["sub-05"]]
+
+
+def test_empty_columns_without_a_name_are_dropped(folder, tmp_path):
+    """subject,age,, was refused as two columns named '', and subject,age, read a covariate ''."""
+    root, add = folder
+    for subject in ("01", "02"):
+        add(f"sub-{subject}_sc.h5")
+    for blank in (1, 2):
+        rows = [["subject", "age", *[""] * blank], ["01", "25", *[""] * blank], ["02", "31"]]
+        cohort = load_cohort(root, _table(tmp_path / f"blank{blank}.csv", rows))
+        assert list(cohort.covariates) == ["age"] and cohort.column("age").tolist() == [25.0, 31.0]
+    unnamed = _table(tmp_path / "unnamed.csv", [["subject", "age", ""], ["01", "25", "x"]])
+    with pytest.raises(ValueError, match="unnamed.csv: column 3 holds values but has no name"):
+        load_cohort(root, unnamed)
+
+
+def test_a_table_that_is_not_utf8_is_named_and_a_bom_is_read(folder, tmp_path, capsys):
+    """A table saved as cp1252 raised a bare UnicodeDecodeError that named no file."""
+    from sbci.cli import main
+
+    root, add = folder
+    for subject in ("01", "02"):
+        add(f"sub-{subject}_sc.h5")
+    text = "subject,site\n01,Malmö\n02,Zürich\n"
+    windows = tmp_path / "sites.csv"
+    windows.write_bytes(text.encode("cp1252"))
+    with pytest.raises(ValueError, match="sites.csv, line 2: not UTF-8 .*Save it as UTF-8") as no:
+        load_cohort(root, windows)
+    assert type(no.value) is ValueError
+    assert main(["cohort", str(root), "--table", str(windows)]) == 1
+    assert capsys.readouterr().err.startswith("error: sites.csv, line 2: not UTF-8 text")
+    marked = tmp_path / "marked.csv"
+    marked.write_bytes(text.encode("utf-8-sig"))
+    assert load_cohort(root, marked).column("site").tolist() == ["Malmö", "Zürich"]
+
+
+def test_the_sub_prefix_is_read_in_any_case(folder):
+    """SUB-01_sc.h5 was not read, and subject_id("SUB-01") was 'sub-SUB-01'."""
+    root, add = folder
+    add("SUB-01_sc.h5")
+    add("Sub-02_SC.H5")
+    assert subject_id("SUB-01") == "sub-01" and parse_name("SUB-01_sc.h5")[0] == "sub-01"
+    cohort = load_cohort(root, {"subject": ["SUB-01", "sub-02"]})
+    assert cohort.subjects == ["sub-01", "sub-02"]
+
+
+def test_a_hyphen_in_an_id_is_not_taken_for_a_key(folder):
+    """sub-NDAR_INV-1_sc.h5 was read as subject sub-NDAR, with INV-1 a key and its value."""
+    root, add = folder
+    add("sub-NDAR_INV-1_sc.h5")
+    add("sub-NDAR_INV-2_ses-1_sc.h5")
+    assert parse_name("sub-NDAR_INV-1_sc.h5") == ("sub-NDAR_INV-1", None, "sc")
+    assert parse_name("sub-NDAR_INV-2_ses-1_sc.h5") == ("sub-NDAR_INV-2", "1", "sc")
+    assert load_cohort(root).subjects == ["sub-NDAR_INV-1", "sub-NDAR_INV-2"]
+
+
+def test_two_files_of_one_name_are_told_apart_by_their_folders(folder):
+    """Listed by name alone, they read 2 sc files: sub-01_sc.h5, sub-01_sc.h5."""
+    root, add = folder
+    add("sub-01_sc.h5", where="visit-a")
+    add("sub-01_sc.h5", where="visit-b")
+    add("sub-02_sc.h5")
+    assert load_cohort(root).excluded == {
+        "sub-01": "2 sc files: visit-a/sub-01_sc.h5, visit-b/sub-01_sc.h5"
+    }

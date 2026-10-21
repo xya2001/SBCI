@@ -115,3 +115,16 @@ def test_a_file_without_a_spec_version_is_a_metadata_error_not_a_key_error():
     del fields["spec_version"]
     with pytest.raises(MetadataError, match="no spec_version"):
         Metadata(fields).validate()
+
+
+def test_nu_belongs_to_a_matern_file_and_is_a_positive_number(sc_metadata):
+    """smooth() records the Matern smoothness, and load_cohort sets files apart by it."""
+    template("sc", **{**sc_metadata.fields, "kernel": "matern", "nu": 2.0}).validate()
+    for changes, message in (
+        ({"kernel": "rdk", "nu": 2.0}, "but this file's kernel is 'rdk'"),
+        ({"kernel": "matern", "nu": 0}, "positive number, got 0"),
+        ({"kernel": "matern", "nu": "3"}, "positive number, got '3'"),
+        ({"kernel": "matern", "nu": True}, "positive number, got True"),
+    ):
+        with pytest.raises(MetadataError, match=message):
+            template("sc", **{**sc_metadata.fields, **changes}).validate()

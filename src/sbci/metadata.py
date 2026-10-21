@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import math
+import numbers
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -146,6 +148,18 @@ class Metadata:
             raise MetadataError(
                 f"spec_version {version!r} is not compatible with {spec.SPEC_VERSION!r}"
             )
+
+        # nu, of spec.SC_OPTIONAL_KEYS, is the Matern kernel's own: smooth() writes it
+        # for kernel="matern" alone, and load_cohort tells files apart by it
+        nu = self.fields.get("nu")
+        if nu is not None:
+            kernel = self.fields.get("kernel")
+            if kernel != "matern":
+                raise MetadataError(
+                    f"nu is the Matern kernel's smoothness, but this file's kernel is {kernel!r}"
+                )
+            if isinstance(nu, bool) or not isinstance(nu, numbers.Real) or not 0 < nu < math.inf:
+                raise MetadataError(f"nu must be a positive number, got {nu!r}")
 
 
 def _plain(value: Any) -> Any:

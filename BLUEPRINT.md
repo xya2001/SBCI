@@ -174,7 +174,8 @@ under `/work/users/x/y/xya/`.
   Desikan retains 100.0000%, consistent with its full cortical coverage
 - 44 atlases bundled in 238 kB, region counts matching each published atlas
   (Desikan 68, Glasser 360, Gordon 333, Yeo-7 14) except where ico4 is too
-  coarse (Schaefer-900 and -1000: 899 and 999 regions)
+  coarse (Schaefer-900, Schaefer-1000 and CoCoNest-500: 899, 999 and 499
+  regions; USAGE.md, *Atlases*)
 - Riemannian kernel smoothing — 4.4 s per subject, against a WP3 target of
   60 s and the current pipeline's 2–8 hours
 - Structure–function coupling, all three forms
@@ -319,7 +320,7 @@ nothing and prevents an awkward rename later.
 | Q3/Q9 picks the plain sum | the legacy importer normalizes wrongly | decide before importing a cohort |
 | a cohort mixes the two kernels | the files are silently incomparable | metadata records which was used, and `sbci.load_cohort` refuses a cohort whose files mix kernels or bandwidths |
 | ~~FPCA dependencies stay unobtainable~~ | resolved | none were needed; verified to 1e-15 at the reference's fixed point (PORTING.md item 5) |
-| ico4 cannot resolve the finest atlases | Schaefer900 and Schaefer1000 lose parcels outright | already measured and documented; do not advertise them |
+| ico4 cannot resolve the finest atlases | Schaefer900, Schaefer1000 and CoCoNest_500 lose a parcel each outright | already measured and documented; do not advertise them |
 
 ## 9. Decisions needed, with owners
 

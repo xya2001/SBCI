@@ -187,6 +187,111 @@ def test_plot_handles_a_constant_map():
     matplotlib.pyplot.close(figure)
 
 
+@needs_plotting
+def test_a_colour_range_that_is_empty_or_inverted_is_refused():
+    """``vmin == vmax`` crashed in matplotlib's colorbar; ``vmin > vmax`` drew inverted colours."""
+    from sbci.plotting import plot_surface
+
+    values = np.linspace(-1.0, 1.0, N_VERTICES)
+    for bounds in (dict(vmin=0.5, vmax=0.5), dict(vmin=1.0, vmax=-1.0)):
+        for engine in ("matplotlib", "pyvista"):
+            with pytest.raises(ValueError, match="vmin and vmax given.*vmin has to lie below"):
+                plot_surface(values, views=("lateral",), engine=engine, **bounds)
+    with pytest.raises(ValueError, match="vmin given, the other the map's largest value"):
+        plot_surface(values + 2.0, views=("lateral",), vmin=4.0)
+
+
+@needs_plotting
+def test_a_range_too_narrow_for_two_digits_still_has_its_colorbar(monkeypatch):
+    """0.501 to 0.502 printed as 0.5 twice in nilearn's colorbar, which then divided by zero.
+
+    So did a map constant to nine digits; six significant digits cannot label
+    its scale, so it is drawn without a colorbar, as a constant map is.
+    """
+    from nilearn import plotting as nilearn_plotting
+
+    from sbci.plotting import plot_surface
+
+    rng = np.random.default_rng(0)
+    values = rng.standard_normal(N_VERTICES)
+    usual = plot_surface(values, views=("lateral",), vmin=0.25, vmax=0.75)
+    narrow = plot_surface(values, views=("lateral",), vmin=0.501, vmax=0.502)
+    assert len(narrow.axes) == len(usual.axes) > 2  # the panels and their colorbars
+    near = plot_surface(0.5 + 1e-9 * rng.standard_normal(N_VERTICES), views=("lateral",))
+    assert len(near.axes) == 2
+    for figure in (usual, narrow, near):
+        matplotlib.pyplot.close(figure)
+    recorded = []
+    monkeypatch.setattr(nilearn_plotting, "plot_surf", lambda *a, **k: recorded.append(k))
+    matplotlib.pyplot.close(plot_surface(values, views=("lateral",), vmin=0.501, vmax=0.502))
+    assert recorded[-1]["cbar_tick_format"] == "%.3g"
+    matplotlib.pyplot.close(plot_surface(values, views=("lateral",), vmin=0.25, vmax=0.75))
+    assert "cbar_tick_format" not in recorded[-1]  # nilearn's own, as before
+
+
+def _fake_view(drawn):
+    """A stand-in for render.render_view that records its calls and draws nothing."""
+
+    def fake(coordinates, faces, rgb, view, side, **kwargs):
+        drawn.append((side, view))
+        return np.zeros((8, 10, 4), dtype=np.uint8)
+
+    return fake
+
+
+@needs_plotting
+def test_a_bg_map_is_one_value_per_grid_vertex_split_as_the_map_is(monkeypatch):
+    """bg_map went to nilearn whole: 5124 values were refused, 2562 shaded both hemispheres."""
+    from nilearn import plotting as nilearn_plotting
+
+    from sbci import render
+    from sbci.plotting import plot_surface
+
+    half = N_VERTICES_PER_HEMI
+    flat = np.ones(N_VERTICES)
+    background = np.random.default_rng(1).uniform(-1.0, 1.0, N_VERTICES)
+    recorded = []
+    monkeypatch.setattr(nilearn_plotting, "plot_surf", lambda *a, **k: recorded.append(k))
+    matplotlib.pyplot.close(plot_surface(flat, views=("lateral",), bg_map=background))
+    for drawn, rows in zip(recorded, (slice(0, half), slice(half, None)), strict=True):
+        np.testing.assert_array_equal(drawn["bg_map"], background[rows])
+        assert drawn["bg_on_data"] is True and drawn["alpha"] == 1.0
+    # the pyvista engine shades by it the same way, the medial wall included
+    shaded = []
+
+    def shade(depth, cortex):
+        shaded.append((depth, cortex))
+        return depth
+
+    monkeypatch.setattr(render, "shade", shade)
+    monkeypatch.setattr(render, "render_view", _fake_view([]))
+    figure = plot_surface(flat, views=("lateral",), bg_map=background, engine="pyvista")
+    matplotlib.pyplot.close(figure)
+    np.testing.assert_array_equal(np.concatenate([depth for depth, _ in shaded]), background)
+    assert all(cortex.all() for _, cortex in shaded)
+    for wrong in (background[:half], np.where(background > 0.9, np.nan, background)):
+        with pytest.raises(ValueError, match="bg_map has"):
+            plot_surface(flat, views=("lateral",), bg_map=wrong)
+    with pytest.raises(ValueError, match="shading=False"):
+        plot_surface(flat, views=("lateral",), bg_map=background, shading=False)
+
+
+@needs_plotting
+def test_the_pyvista_engine_refuses_keywords_it_would_drop(monkeypatch):
+    """no_such_option=1 drew without a word under pyvista; nilearn refuses it under matplotlib."""
+    from sbci import render
+    from sbci.plotting import plot_surface
+
+    drawn = []
+    monkeypatch.setattr(render, "render_view", _fake_view(drawn))
+    values = np.linspace(-1.0, 1.0, N_VERTICES)
+    with pytest.raises(TypeError, match="does not take: alpha, no_such_option"):
+        plot_surface(values, views=("lateral",), engine="pyvista", no_such_option=1, alpha=0.5)
+    assert not drawn
+    matplotlib.pyplot.close(plot_surface(values, views=("lateral",), engine="pyvista"))
+    assert drawn == [("L", "lateral"), ("R", "lateral")]
+
+
 def test_the_sphere_is_turned_into_anatomical_orientation_for_display():
     """The bundled sphere sits in the pipeline's frame, a half-turn about z from RAS.
 

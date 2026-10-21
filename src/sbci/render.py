@@ -60,7 +60,8 @@ def _import_pyvista():
         import pyvista as pv
     except ImportError as exc:  # pragma: no cover - depends on environment
         raise ImportError(_MISSING) from exc
-    pv.OFF_SCREEN = True
+    # PyVista's global pv.OFF_SCREEN is left alone: set here, it made every later
+    # pv.Plotter() of the caller's session off-screen. render_view asks for its own.
     if would_abort(sys.platform, os.environ.get("DISPLAY"), window_class()):
         raise RuntimeError(_NO_DISPLAY)
     return pv

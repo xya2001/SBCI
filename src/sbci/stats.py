@@ -80,9 +80,17 @@ def benjamini_hochberg(pvalues):
     """Benjamini-Hochberg adjusted p-values, monotone and clipped to one.
 
     A ``NaN`` (a component that could not be tested) stays ``NaN`` and does
-    not count towards the number of tests.
+    not count towards the number of tests. Any other value outside ``[0, 1]``,
+    an infinity included, is no p-value and is refused.
     """
     pvalues = np.asarray(pvalues, dtype=np.float64).ravel()
+    outside = ~np.isnan(pvalues) & ~((pvalues >= 0) & (pvalues <= 1))
+    if outside.any():
+        first = int(np.flatnonzero(outside)[0])
+        raise ValueError(
+            f"p-values lie in [0, 1], and NaN marks one not tested; entry {first} is "
+            f"{float(pvalues[first])}"
+        )
     adjusted = np.full(pvalues.size, np.nan)
     finite = np.isfinite(pvalues)
     values = pvalues[finite]
@@ -275,7 +283,8 @@ def design(
     ----------
     covariates
         ``{name: values}``, one value per subject in each: a table's columns,
-        or :attr:`sbci.LoadedCohort.covariates` as it is.
+        or :attr:`sbci.LoadedCohort.covariates` as it is. A pandas DataFrame
+        is taken as its columns.
     intercept
         Put a column of ones first, named ``intercept``. Without it the first
         factor is coded with a column for every level, which together stand in
@@ -311,10 +320,19 @@ def design(
     >>> d.columns("sex")
     [2]
     """
-    from .cohort import MISSING, _markers, _missing
+    from .cohort import MISSING, _is_frame, _markers, _missing
 
+    if _is_frame(covariates):  # a DataFrame, read without importing pandas
+        header = list(covariates.columns)
+        covariates = {name: covariates.iloc[:, j] for j, name in enumerate(header)}
+        if len(covariates) < len(header):
+            repeated = next(name for name in header if header.count(name) > 1)
+            raise ValueError(f"the table has two columns named {repeated!r}; rename one")
     if not isinstance(covariates, Mapping) or not covariates:
-        raise ValueError("design() takes a dict of named covariates, one value per subject")
+        raise ValueError(
+            "design() takes a dict of named covariates, one value per subject, or a DataFrame "
+            "of them"
+        )
     markers = MISSING if missing is None else _markers(missing)
     reference = {str(k): v for k, v in (reference or {}).items()}
     categorical = {categorical} if isinstance(categorical, str) else {str(c) for c in categorical}
@@ -746,7 +764,8 @@ def local_test(
         needs a label: a missing one -- ``NaN``, ``None``, or an empty or blank
         string -- is refused, since coded like any other label it would put
         every subject without a family into one family together. A subject
-        without a family takes a label of its own.
+        without a family takes a label of its own. Labels that differ as given
+        but are one once written as text, 1 and ``"1"``, are refused too.
     contrast
         Instead of ``terms``, a contrast of the coefficients to test for zero:
         a weight per design column -- an array of them, or with a
@@ -876,6 +895,13 @@ def local_test(
                 "subject a family, or a label of its own for a subject without one"
             )
         _, codes = np.unique(labels, return_inverse=True)
+        if codes.max() + 1 < len(set(given.tolist())):
+            # NumPy writes a list of numbers and text all as text, so 1 and "1" were
+            # one family (1.0 and "1", written "1.0" and "1", stayed two)
+            raise ValueError(
+                "two groups= labels that differ as given are one once NumPy reads them together, "
+                "as 1 and '1' are, both written as text; give the labels in one type"
+            )
         if codes.max() + 1 < 2:
             raise ValueError("groups= needs at least two groups")
         if permutations > 0:
@@ -1175,7 +1201,8 @@ def icc(sessions, kind: str = "agreement") -> np.ndarray:
         ``(k, n_subjects, n_features)``, or a list of ``k`` arrays of
         ``(n_subjects, n_features)``: the same features measured ``k >= 2``
         times on the same subjects, in one subject order -- two days' FC, or
-        two halves of the same streamlines.
+        two halves of the same streamlines. A 2-D array is refused rather than
+        guessed at: one feature measured ``k`` times is ``(k, n_subjects, 1)``.
     kind
         ``"agreement"``, Shrout and Fleiss's ICC(2,1) (McGraw and Wong's
         ICC(A,1)): two-way random effects, absolute agreement, so a shift
@@ -1208,12 +1235,17 @@ def icc(sessions, kind: str = "agreement") -> np.ndarray:
     if kind not in ICC_KINDS:
         raise ValueError(f"kind must be one of {ICC_KINDS}, got {kind!r}")
     data = np.asarray(sessions, dtype=np.float64)
-    if data.ndim == 2:
-        data = data[:, :, None]
     if data.ndim != 3:
+        # read as (k, n_subjects, 1), one session's 2-D array went through as n_subjects sessions
+        hint = (
+            ": one session alone has nothing to agree with, and k sessions of one feature are "
+            "(k, n_subjects, 1)"
+            if data.ndim == 2
+            else ""
+        )
         raise ValueError(
             f"sessions are (k, n_subjects, n_features), or a list of (n_subjects, n_features) "
-            f"arrays; got shape {data.shape}"
+            f"arrays; got shape {data.shape}{hint}"
         )
     k, n, _ = data.shape
     if k < 2 or n < 2:
@@ -1248,7 +1280,8 @@ class Identification:
     """``(n, n)``: Pearson's r of subject ``i``'s first session with subject ``j``'s second."""
     accuracy: tuple
     """``(first to second, second to first)``: the share of subjects whose own other session
-    is the most similar of all subjects'."""
+    is the most similar of all subjects'. A subject whose own session ties with others for
+    the most similar, ``t`` sessions in all, counts ``1/t``, whatever the subjects' order."""
     within: float
     """Mean similarity of a subject's two sessions: the diagonal."""
     between: float
@@ -1260,6 +1293,15 @@ class Identification:
 
 #: Values, subjects times features, that :func:`identification` holds in float64 at a time.
 _BLOCK_ELEMENTS = 1 << 24
+
+
+def _identified(similarity) -> float:
+    """The share of rows whose own column is their largest, a ``t``-way tie counting ``1/t``.
+
+    ``argmax`` gave a tie to its first column, so the share depended on the subjects' order.
+    """
+    best = similarity == similarity.max(axis=1, keepdims=True)
+    return float((np.diagonal(best) / best.sum(axis=1)).mean())
 
 
 def identification(first, second) -> Identification:
@@ -1280,7 +1322,10 @@ def identification(first, second) -> Identification:
     connectomes fit, and the sums keep float64's precision, which they need.
     Smoothed SC is mostly near zero with a few large values, and float32
     sums over its millions of pairs drift by more than a percent, to
-    correlations above one.
+    correlations above one. A subject is identified when its own other
+    session is the most similar; when ``t`` sessions tie exactly for the
+    most similar, its own among them, it counts ``1/t``, so the accuracy
+    does not depend on the order the subjects come in.
 
     Examples
     --------
@@ -1330,13 +1375,10 @@ def identification(first, second) -> Identification:
     if not (norms > 0).all():
         raise ValueError("a subject's features do not vary, so it has no correlation with any")
     similarity = cross / np.outer(norms[0], norms[1])
-    own = np.arange(n)
-    forward = float((similarity.argmax(axis=1) == own).mean())
-    backward = float((similarity.argmax(axis=0) == own).mean())
     off = ~np.eye(n, dtype=bool)
     return Identification(
         similarity=similarity,
-        accuracy=(forward, backward),
+        accuracy=(_identified(similarity), _identified(similarity.T)),
         within=float(np.diag(similarity).mean()),
         between=float(similarity[off].mean()),
         features=int(present.sum()),

@@ -440,7 +440,8 @@ of the scheme, which shrinks under refinement), so the aligned density lost
 reproduced here to rounding until the reviews; items 8 and 9 have the sizes.
 The port now corrects them -- the Jacobian is calibrated by the identity's own
 value, so a zero step gives exactly 1 and the transported mass is conserved to
-1e-4. Until 11 October 2026 `reference=True` restored the first, second and
+1e-4 (to about 2e-4 on real subjects, before the zeroed diagonal loses 0.3% to 0.5%:
+item 38). Until 11 October 2026 `reference=True` restored the first, second and
 fourth for the comparison with MATLAB; since item 21 there is no such switch,
 and the comparison puts the reference's choices back into the port's output
 instead.
@@ -1875,7 +1876,7 @@ and set against the first review's recording on the same CPU type with
   Desikan and Schaefer-200), the three couplings, seeding, smoothing, the
   FPCA fit and both projections; and so is ENCORE under `reference=True`.
 - **ENCORE**: the calibrated Jacobian keeps the aligned density's mass,
-  0.70% more of it than before; the warped vertices move 0.001 degrees on
+  0.70% more of it than before (but not what lands on the zeroed diagonal: item 38); the warped vertices move 0.001 degrees on
   average (0.003 at most) and the costs 3e-5 to 6e-5 relative. The
   known-warp recovery figure is unchanged to the digits it quotes.
 - **ConSEAL**: the vector smoothing moves the aligned endpoints of the two
@@ -5166,6 +5167,222 @@ the asked one, vanished from the report the same way.
 
 Only `load_cohort`, the command line's report, the tests and the documents change here.
 
+## 38. The review of 20 October 2026 -- ELEVEN MEDIUM FINDINGS AND THE LOW ONES FIXED; THE NUMBERS UNCHANGED BUT FOR TWO-SUBJECT TEMPLATES
+
+An external review of 5095374, on macOS with Python 3.10 and 3.12, found nothing broken. It
+reported eleven medium findings, about forty-five low ones and some drift in the documents.
+Each was checked again on Longleaf, read-only, by reproducing it. All held but one, the
+import time, which is 0.2 to 0.3 s on Longleaf, as USAGE.md says; several went further
+than the review said. The second medium finding, a session label no file carries, is item
+37. This item fixes the rest.
+
+### The user's decisions
+
+- **Every save has a temporary file of its own.** A killed write may leave one stray file
+  with a recognizable name; that is accepted.
+- **ENCORE's diagonal keeps the MATLAB's arithmetic.** The reference zeroes the diagonal
+  after the interpolation and does not give its mass back (ConCon_Alignment
+  `scripts/Concon.m` lines 71-73, the same in the fork's `ConConInterpolator.m`), so the
+  numbers stay and the loss is documented. Items 4 and 9's claims are corrected (see
+  *Corrections*).
+- **A template of two subjects is their geodesic midpoint**, in both methods.
+- **Warps record their grid.**
+- **The Matérn smoothness is recorded.**
+- **Unchanged:** the LICENSE holder (BLUEPRINT.md Q7, the user's), the Python
+  classifiers and the import-time sentence.
+
+### Saving, reading and fetching files
+
+- **Temporary files.** `write_hdf5` and `export._atomic` each write to a file of their own
+  in the target's folder: `.<name>.<random>.partial` for HDF5, and
+  `.partial-<random>-<name>` for exports, since nibabel writes CIFTI and GIFTI only to a
+  name with the target's ending. Two saves of one path no longer delete each other's file.
+  With HDF5's file locking off they had also replaced a good file with an unreadable one,
+  and two table writes had spliced their rows. The file is made with mode 0666 and the
+  umask, as a file written in place is (`tempfile.mkstemp`'s 0600 would have carried over
+  to every saved file).
+- **The cohort loader:**
+  - `summary()` counts each reason once: the joined text was split on the "; " that some
+    reasons hold. `LoadedCohort.reasons` keeps them as lists.
+  - Empty, unnamed table columns (Excel's trailing ones) are dropped, and an unnamed
+    column with values is refused.
+  - A table that is not UTF-8 is refused by name.
+  - The `sub-` prefix is read in any case, as the documents said.
+  - A part of a name is a key only if it starts with a lowercase key and a hyphen, as in
+    BIDS. So `sub-NDAR_INV-1_sc.h5` is one subject, where it was read as `sub-NDAR`. A
+    capitalized key such as `SES-1` is now part of the id.
+  - Two files of one name are named by their folders.
+- **Downloads:**
+  - A terms record of another shape counts as not accepted.
+  - DATA_USE.txt is written before the first file is fetched.
+  - manifest.csv lists only files the index knows.
+  - A subject id may be any whole number (100307.0 is sub-100307).
+  - An `out` that is a file is refused before the terms are asked.
+- **The command line** ends quietly when its reader stops reading (`--list | head` printed
+  a traceback every time).
+- **`example` and `example_cohort`** refuse a seed or a count that is not a whole number,
+  where `seed=1.7` became 1.
+
+### Smoothing
+
+- **The Matérn smoothness.**
+  - `smooth()` takes `nu=`: 3, as before, by default, and refused with any other kernel.
+  - A Matérn file records it, and `load_cohort` compares it, reading a Matérn file written
+    before as 3.
+  - Two files at different `nu` differ by up to 7%, and the cohort had taken them as one
+    way of making.
+- **The spherical kernel's memory.** Its sparse path shrinks a block of endpoints until its
+  neighbour pairs fit a budget of 1 GB a side. It keeps 65,536 endpoints at the default
+  bandwidth and up to 0.1, and takes 21,805 at 0.5, where a block had needed 13.5 GB.
+  `bandwidth=True` and `bandwidth="0.005"` are refused.
+- **What the kernel is given:**
+  - sigma must be finite and positive, and a block a positive whole number;
+  - a NaN cosine gives NaN;
+  - `to_dense` refuses a vector of the wrong size;
+  - a NumPy float bandwidth is the decimal it prints as, so `np.float32(0.005)` is 0.005.
+- **The endpoints.** A row of barycentric weights must sum to 1 within 1e-4; slightly
+  negative weights stay, since the search keeps unclamped ones. SPEC_QUESTIONS item 13's
+  rule, a stored vertex within one edge of its triangle, is checked where positions are
+  rebuilt and is `sbci validate`'s thirteenth check. The released subjects lie at most
+  2.73 degrees from their vertex, against an edge of up to 4.74. The item-13 probe runs
+  again: it had divided the bundled sphere's read-only array in place.
+
+### The alignments
+
+- **Warps know their grid.**
+  - `Warp` and `EndpointWarp` record a digest of the grid they were estimated on; a turn of
+    the bundled sphere gives the same digest.
+  - `migrate_warp` refuses a warp whose hemispheres are not 2,562 vertices each, and one
+    whose digest is not the bundled sphere's.
+  - A warp of another size had "migrated" with 180-degree errors. One from a same-size
+    icosphere had passed silently, with garbage.
+  - A warp saved before has no digest and is checked on its size alone.
+- **Two subjects.** `Encore.template` and `ConSEAL.template` return the normalized sum of
+  the two square-root densities, a Karcher median that does not depend on their order. The
+  median had ended a fifth of the way from the first-listed subject. Three or more subjects
+  give the same bits as before.
+- **GIFTI spheres** carry their structure, `GeometricType=Spherical` and a Talairach
+  transform, as HCP's do.
+- **ConSEAL:**
+  - A connectome whose weights do not sum to one is refused, as the moving subject or as
+    the fixed one.
+  - The vertex-wise overlap and Dice check their threshold. They score two empty sets 1, as
+    the connection-wise pair does; the MATLAB gives 0/0 there.
+  - `template=` is checked before the kernel is built.
+  - The spin shells are cached.
+  - The threads the package starts are capped by `SBCI_THREADS`, else `OMP_NUM_THREADS`.
+- **ENCORE:**
+  - `step`, `threshold` and `delta` refuse a bool or a string. `threshold=True` had made a
+    registration take no step, silently.
+  - `compose` takes only a displacement of one 2-vector per vertex.
+  - A string `template=` is refused with a pointer to `template=None`.
+  - A basis order above 85 is refused, since it gave a NaN basis.
+- **ENCORE's diagonal:**
+  - `Concon.evaluate`'s docstring and USAGE.md say the aligned density loses the mass the
+    interpolation puts on the diagonal, as the MATLAB's does.
+  - On two released subjects after ten steps, the loss was 0.34% and 0.49%, almost all of
+    it on the diagonal; the transport itself moved the mass by about 2e-4 (job 5958360).
+  - A test pins it on an SC-like density.
+
+### Seeds, plots and statistics
+
+- **Seeds.** A boolean region mask must be one entry per vertex: a (5124, 1) mask had
+  broadcast, and a single-vertex region had given a wrong profile with no error.
+- **Plots:**
+  - `bg_map` is a named parameter: one value per grid vertex, split by hemisphere and
+    brought onto the fsaverage meshes as the map is. A half map had shaded both
+    hemispheres.
+  - Under `engine="pyvista"` a keyword the engine would drop is refused.
+  - `render.py` no longer sets PyVista's `OFF_SCREEN` for the whole session.
+  - An explicit `vmin >= vmax` is refused. A range nilearn's two-digit ticks cannot tell
+    apart gets enough digits, and one that six digits cannot tell apart is drawn without a
+    colorbar; both had crashed.
+- **Statistics:**
+  - `icc` refuses a bare 2-D array.
+  - `benjamini_hochberg` refuses p outside [0, 1].
+  - `identification` gives a t-way tie 1/t, so the subjects' order no longer matters.
+  - `design()` takes a DataFrame.
+  - Family labels that are one only as text (1 and "1") are refused.
+- **Reduction.** `reduce()` checks `rank` before reading the cohort, and `start=` must be
+  (n, rank), finite and without an empty direction. `explained`'s docstring says that its
+  square is the share of the sum of squares exactly only under a plain inner product; under
+  ico4's areas it differs by about 1e-9.
+
+### Tests, CI, scripts and documents
+
+- **Test collection.** A root `conftest.py` keeps pytest out of `tests/reference`,
+  `scripts` and `tools` from any folder. `pytest .` from the root had imported them, and
+  two do damage on import: `write_exchange_file.py`, which writes the 16.9 GB exchange
+  file, and `tools/align_surface_faces.py`, which rewrites the bundled surfaces. Those two
+  now run only as scripts. The suite collects the same 1,422 tests, in the same order.
+- **`make_figures.py`** parses its arguments (`--help` had made a folder of that name),
+  takes `--skip-cohort`, and refuses to write into `docs/figures`, whose real figures it
+  would have overwritten.
+- **CI** uses actions/checkout and actions/setup-python v7 (Node 24) and Ubuntu 24.04,
+  where `ubuntu-latest` was moving to 26.
+- **`verify_all.sh`** asks that python import sbci and pytest instead of a virtual
+  environment, so it runs from conda too, and takes `--audit` for tier 2 outside Slurm.
+  `show_build.sh` sizes the tree portably.
+- **The documents:**
+  - README.md's alignment and reduction rows unwrap the cohort as USAGE.md does.
+  - The skip counts are 74 on a clean install, with 23 MATLAB-reference tests, and CI's 75.
+  - Schaefer-900, Schaefer-1000 and CoCoNest-500 have 899, 999 and 499 regions at ico4. A
+    label after a gap is renumbered, and CoCoNest's labels never equal its cluster ids, so
+    regions are matched by name.
+  - The sdist leaves out docs/figures' PNGs, with hatchling 1.22 or later.
+  - A deliberate warning in tests/test_reduction.py is caught.
+
+### Left as they are
+
+- **Download parts.** A download's `.part` files keep their fixed names so that a re-run
+  resumes them. Two downloads into one folder at once still share them.
+- **Broken pipes in some commands.** `sbci download`, `info` and `cohort` still print
+  `error: [Errno 32] Broken pipe` when their reader stops, since they catch OSError
+  themselves.
+- **Scripts without a guard.** `scripts/audit_api.py`, `plot_examples.py`,
+  `plot_exchange_file.py` and `tour.py`, and `tools/age_probe.py` and
+  `build_fslr_surfaces.py`, still run on import. They write only to their own folders, and
+  pytest no longer collects them.
+- **`sbci info`** does not print `nu`.
+
+### Corrections
+
+- **Item 4.** Item 4 said the calibrated Jacobian conserves the transported mass to 1e-4.
+  The transport alone moves it by about 2e-4 on two released subjects. Zeroing the
+  diagonal, as the MATLAB does, then loses 0.3% to 0.5% of the aligned density
+  (`Concon.evaluate`); the square-root density the cost compares is normalized after its
+  diagonal is zeroed, as item 4 says.
+- **Item 9.** Item 9's "keeps the aligned density's mass" holds against the reference's
+  0.7% loss only.
+
+### Verified
+
+- **The suite.** 1,474 tests pass with 48 skipped on the released subjects, and 1,471 with 51
+  skipped as a fresh clone has it. That is item 37's counts and 100 new tests, with no
+  warning left (job 5961302, an AMD EPYC 9654). `ruff check` and `ruff format --check`
+  pass on CI's paths.
+- **The CPU computes as before.** Before (5095374) and after, on one AMD EPYC 9654 node
+  (job 5961303):
+  - the 95 arrays of `cpu_parity_probe.py` are identical, bit for bit;
+  - of the 29 of `record_outputs.py`, the 15 outside the alignments are identical. The 14
+    of ENCORE and ConSEAL move, since it aligns two subjects, whose template is now their
+    midpoint.
+  - Templates and registrations of three to six subjects keep their bits (48 arrays, job
+    5958273).
+  - The default smoothing keeps its bits with all three kernels, on a synthetic subject
+    and the tutorial subject (job 5958391).
+- **On a GPU.** On a V100 (job 5961304):
+  - tests/test_gpu.py, test_alignment.py and test_conseal.py pass, 332 of 332;
+  - `gpu_review_probe.py` finds what items 28 and 36 found, every registration the tests
+    compare within 0.062 of its allowance;
+  - `gpu_probe.py conseal` finds the GPU as near the CPU as before: the costs 2.0e-9 apart
+    after ten iterations, the twin's 4.0e-9.
+- **The MATLAB tier.** It passes, 23 of 23.
+
+Five parts were written in parallel, one per group of modules, each with its own tests. They
+were then merged without a conflict and checked together. The checks, the probes and their
+outputs are in `/work/users/x/y/xya/edits/i38/` and `/work/users/x/y/xya/edits/review-1020/`.
+
 ## Status
 
 All seven ports are done and verified, and the reviews of 5 to 7 October
@@ -5198,7 +5415,9 @@ and the overlap of bundles after alignment, connection-wise as the ConSEAL paper
 is in the package, agrees with the MATLAB exactly, and rises under both methods (item 35);
 and ConSEAL's search of the grid runs in threads, with the same bits and a registration about
 twice as fast on eight cores (item 36); and a session label no file carries is refused as
-that, with its report (item 37). What is left: the
+that, with its report (item 37); and the review of 20 October is answered, its eleven medium
+findings and the low ones fixed, the numbers unchanged but for two-subject templates (item
+38). What is left: the
 decisions item 33 leaves the user (what panel D of the paper shows, and whether the ADNI
 subjects may stay in the MATLAB comparisons); a version of the dataset whose README names
 the commit that holds the code now, and GitHub's removal of the commits before it (item 33,

@@ -135,6 +135,15 @@ def test_a_region_mask_of_the_wrong_length_is_refused(connectome):
         connectome.seed(region=np.array([True, False, True]))
 
 
+def test_a_region_mask_is_one_entry_per_vertex_not_a_column(connectome):
+    """A (5, 1) or (1, 5) mask broadcast against the grid: a wrong profile, or an IndexError."""
+    member = np.array([True, False, False, False, False])
+    for shape in ((5, 1), (1, 5)):
+        with pytest.raises(ValueError, match=rf"shape \({shape[0]}, {shape[1]}\), expected \(5,\)"):
+            connectome.seed(region=member.reshape(shape))
+    np.testing.assert_allclose(connectome.seed(region=member), connectome.seed(vertex=0))
+
+
 @pytest.mark.parametrize("kernel", KERNELS)
 def test_no_kernel_is_a_placeholder(connectome, kernel):
     """Every name in KERNELS has to be implemented, not a stub.

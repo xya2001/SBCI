@@ -322,3 +322,21 @@ def test_a_negative_seed_is_refused_by_the_parser(capsys):
     with pytest.raises(SystemExit):
         main(["example", "--seed", "-1"])
     assert "a seed is 0 or more" in capsys.readouterr().err
+
+
+# --- PORTING.md item 38 -------------------------------------------------------------------
+
+
+def test_a_seed_or_a_count_that_is_not_a_whole_number_is_refused():
+    """int() cut them without a word: seed=1.7 was seed 1, and n_subjects=2.5 two subjects."""
+    for seed in (1.7, np.float64(1.0), True, "1", -1):
+        with pytest.raises(ValueError, match="seed must be a whole number, 0 or more"):
+            sbci.example(seed=seed)
+        with pytest.raises(ValueError, match="seed must be a whole number, 0 or more"):
+            sbci.example_cohort(n_subjects=1, seed=seed)
+    with pytest.raises(ValueError, match="n_subjects must be a whole number, 1 or more"):
+        sbci.example_cohort(n_subjects=2.5)
+    with pytest.raises(ValueError, match="n_streamlines must be a whole number, 1 or more"):
+        sbci.example(n_streamlines=1000.9)
+    taken = sbci.example(seed=np.int64(5), n_streamlines=np.int64(200))
+    assert taken.endpoints.n_streamlines == 200

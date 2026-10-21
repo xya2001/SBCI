@@ -818,3 +818,119 @@ def test_the_suite_never_fetches_the_real_basis():
     """conftest.py's guard: outside the tests above, the fetch is refused."""
     with pytest.raises(OSError, match="do not fetch"):
         download.fetch_basis()
+
+
+# --- PORTING.md item 38 -------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("text", ["[]", '"accepted"', '{"hcp-ya": "yes"}', "null"])
+def test_a_terms_record_of_another_shape_is_terms_not_accepted(monkeypatch, config, text):
+    """JSON, but not an object of objects: it escaped as an AttributeError or a TypeError."""
+    manifest, _ = release(FILES)
+    use(monkeypatch, manifest, accepted=False)
+    config.mkdir()
+    (config / download.TERMS_RECORD).write_text(text)
+    assert not download.terms_accepted("hcp-ya")
+    download.accept_terms("hcp-ya")
+    assert download.terms_accepted("hcp-ya")
+
+
+def test_a_download_that_fails_part_way_leaves_the_terms_beside_its_files(tmp_path, monkeypatch):
+    """DATA_USE.txt was written once every file had come, so a failure left files without it."""
+    manifest, blobs = release(FILES)
+    use(monkeypatch, manifest)
+    fetcher, calls = local_fetcher(blobs)
+
+    def second_fails(source, destination, report):
+        if calls:
+            raise ConnectionResetError("connection reset by peer")
+        fetcher(source, destination, report)
+
+    with pytest.raises(ConnectionResetError):
+        download.fetch_cohort(tmp_path, fetcher=second_fails, **QUIET)
+    assert (tmp_path / "sub-A_sc.h5").exists() and not (tmp_path / "sub-A_fc.h5").exists()
+    assert (tmp_path / "DATA_USE.txt").read_text().startswith(TERMS)
+
+
+def test_manifest_csv_lists_a_subject_only_for_a_file_the_index_knows(tmp_path, monkeypatch):
+    """A file of a subject's name was enough: an empty one, or a stale one being replaced."""
+    manifest, blobs = release(MORE)
+    use(monkeypatch, manifest)
+    fetcher, _ = local_fetcher(blobs)
+    download.fetch_cohort(tmp_path, modalities="sc", fetcher=fetcher, **QUIET)  # sub-A
+    (tmp_path / "sub-B_sc.h5").write_bytes(b"")
+    stale = tmp_path / "sub-C_sc.h5"
+    stale.write_bytes(bytes(len(MORE[("sub-C", "sc")])))  # the size the index gives, not its bytes
+
+    def cut_off(source, destination, report):
+        raise ConnectionResetError("connection reset by peer")
+
+    with pytest.raises(ConnectionResetError):
+        download.fetch_cohort(tmp_path, subjects="C", modalities="sc", fetcher=cut_off, **QUIET)
+    assert stale.exists()
+    assert (tmp_path / "manifest.csv").read_text().splitlines()[1:] == ["sub-A,F,26-30"]
+
+
+def test_one_id_may_be_any_whole_number_and_a_fraction_is_refused(tmp_path, monkeypatch):
+    """np.int64(100307) and 100307.0 raised TypeErrors; [100307.0] named sub-100307.0 unknown."""
+    import numpy as np
+
+    manifest, blobs = release({("sub-100307", "sc"): b"x" * 10}, tutorial=("sub-100307",))
+    use(monkeypatch, manifest)
+    fetcher, _ = local_fetcher(blobs)
+    for subjects in (np.int64(100307), 100307.0, [100307.0], [np.float32(100307)], "SUB-100307"):
+        written = download.fetch_cohort(tmp_path, subjects=subjects, fetcher=fetcher, **QUIET)
+        assert [p.name for p in written] == ["sub-100307_sc.h5"]
+    for subjects in (100307.5, [np.float64(100307.5)], float("nan")):
+        with pytest.raises(ValueError, match="a subject id is a name or a whole number"):
+            download.fetch_cohort(tmp_path, subjects=subjects, fetcher=fetcher, **QUIET)
+
+
+def test_a_listing_whose_reader_stops_reading_ends_quietly():
+    """Piped into head -3, sbci download hcp-ya --list ended in a BrokenPipeError traceback.
+
+    The pipe's reading end is closed before the command starts, as head's is
+    once it has its three lines.
+    """
+    import os
+    import subprocess
+    import sys
+
+    reader, writer = os.pipe()
+    os.close(reader)
+    try:
+        done = subprocess.run(
+            [sys.executable, "-c", "import sys; from sbci.cli import main; sys.exit(main())"]
+            + ["download", "hcp-ya", "--list"],
+            stdout=writer,
+            stderr=subprocess.PIPE,
+            timeout=300,
+        )
+    finally:
+        os.close(writer)
+    assert done.returncode == 1
+    assert b"Traceback" not in done.stderr and b"BrokenPipeError" not in done.stderr
+
+
+def test_an_out_that_is_a_file_is_refused_before_the_terms(tmp_path, monkeypatch, config, capsys):
+    """--out naming a file recorded the terms, then failed with a bare [Errno 17]."""
+    manifest, blobs = release(FILES)
+    use(monkeypatch, manifest, accepted=False)
+    fetcher, calls = local_fetcher(blobs)
+    taken = tmp_path / "hcp-ya"
+    taken.write_text("a file")
+
+    class Terminal:
+        def isatty(self):
+            return True
+
+    monkeypatch.setattr("sys.stdin", Terminal())
+    monkeypatch.setattr("builtins.input", lambda prompt="": pytest.fail("the terms were asked for"))
+    for out in (taken, taken / "inside"):
+        with pytest.raises(NotADirectoryError, match="hcp-ya is a file"):
+            download.fetch_cohort(out, fetcher=fetcher, accept_terms=True, **QUIET)
+        for flags in ([], ["--accept-terms"]):
+            assert main(["download", "hcp-ya", "--out", str(out), *flags]) == 1
+            assert "hcp-ya is a file" in capsys.readouterr().err
+    assert not calls and not (config / download.TERMS_RECORD).exists()
+    assert taken.read_text() == "a file"

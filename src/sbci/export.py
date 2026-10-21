@@ -44,6 +44,7 @@ from __future__ import annotations
 import csv
 import os
 import re
+import secrets
 from collections.abc import Mapping
 from contextlib import contextmanager
 from functools import lru_cache
@@ -125,26 +126,46 @@ def _target(path: Path) -> Path:
     return target
 
 
+def _temporary(target: Path, prefix: str, suffix: str) -> Path:
+    """A new, empty file beside ``target``, named ``prefix``, eight random hex digits, ``suffix``.
+
+    Each write takes one of its own. It is created exclusively, as
+    :func:`tempfile.mkstemp` creates one, but with the mode a file written in
+    place has, ``0o666`` less the umask: ``mkstemp``'s ``0o600``, carried onto
+    the target by ``os.replace``, would leave every file written readable by its
+    owner alone.
+    """
+    for _ in range(100):
+        temporary = target.parent / f"{prefix}{secrets.token_hex(4)}{suffix}"
+        try:
+            os.close(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666))
+        except FileExistsError:
+            continue
+        return temporary
+    raise FileExistsError(f"no temporary name beside {target} is free")
+
+
 @contextmanager
 def _atomic(path: Path):
-    """A temporary name beside where ``path`` lands, with its ending; moved onto it once written.
+    """A temporary file beside where ``path`` lands, with its ending; moved onto it once written.
 
     Entered for both files of a pair before either is written, it checks both
-    targets first (:func:`_target`), so a pair is not left half written. The
-    name is the target's alone, so a write killed part way -- a 17 GB exchange
-    file, out of memory -- leaves a partial file the next write replaces;
-    named for the process, as it was until 11 October 2026, each such file
-    stayed beside the target for good.
+    targets first (:func:`_target`), so a pair is not left half written. Each
+    write has a file of its own (:func:`_temporary`), ``.partial-<random>-<name>``,
+    which keeps the ending nibabel reads the form from. Under the one name
+    ``.partial-<name>``, taken on 11 October 2026 so that the next write would
+    replace what a killed one left, two writes of a table at once wrote into one
+    file and spliced their rows. A write killed part way -- a 17 GB exchange file,
+    out of memory -- may leave one stray ``.partial-*-<name>`` file beside the target.
     """
     target = _target(path)
-    temporary = target.parent / f".partial-{target.name}"
+    temporary = _temporary(target, ".partial-", f"-{target.name}")
     try:
         yield temporary
         os.replace(temporary, target)
-    except BaseException:
+    finally:
         if temporary.exists():
             temporary.unlink()
-        raise
 
 
 def _as_maps(values, names=None) -> tuple[list[str], np.ndarray]:

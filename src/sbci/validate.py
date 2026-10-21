@@ -1,9 +1,11 @@
 """The checks behind ``sbci validate <file>``.
 
 Every one of the 946 young adults passed them when the cohort was built
-(PORTING.md item 6), and every file of theirs passes the twelve there are since
-12 October 2026 (item 27); CI runs them on synthetic files. Each check returns
-a human-readable line; the command exits non-zero if any check fails.
+(PORTING.md item 6), and every file of theirs passes the twelve there were from
+12 October 2026 (item 27); the thirteenth, the endpoints' positions against
+their vertices, holds on the eleven released subjects (item 38). CI runs them
+on synthetic files. Each check returns a human-readable line; the command
+exits non-zero if any check fails.
 """
 
 from __future__ import annotations
@@ -43,11 +45,12 @@ def validate_file(path: str | Path, tolerance: float = 1e-5) -> list[Check]:
     strict upper triangle in float32, every value finite, SC nonnegative, FC
     within ``[-1, 1]`` to rounding (:data:`sbci.parcellation.CORRELATION_ROUNDING`),
     the area weights positive and in the pipeline's units, the area-weighted
-    mass one, and the medial wall empty with some cortex beside it. Tolerances
-    are relative to the file's own scale where a scale exists. Everything
-    ``load`` refuses fails some check here; the converse does not hold, since
-    ``load`` checks few of the values -- the mask's, the endpoints' -- and
-    none of the connectivity's.
+    mass one, the medial wall empty with some cortex beside it, and each
+    stored endpoint's position, rebuilt from its triangle, within one edge of
+    its stored vertex. Tolerances are relative to the file's own scale where a
+    scale exists. Everything ``load`` refuses fails some check here; the
+    converse does not hold, since ``load`` checks few of the values -- the
+    mask's, the endpoints' -- and none of the connectivity's.
     """
     path = Path(path)
     checks: list[Check] = []
@@ -203,5 +206,33 @@ def validate_file(path: str | Path, tolerance: float = 1e-5) -> list[Check]:
             checks.append(Check("mask", ok, f"medial wall carries {share:.3g} of the total"))
     else:
         checks.append(Check("mask", False, "the arrays' shapes do not match the grid"))
+
+    # Endpoints: the position rebuilt from an endpoint's triangle lies within one edge of
+    # its stored vertex when the triangles index the grid's own face list; against a
+    # face list in another order it lands about 85 degrees away (SPEC_QUESTIONS.md item 13).
+    endpoints = parts["endpoints"]
+    if endpoints is None or not endpoints.has_positions:
+        checks.append(Check("endpoints", True, "skipped: no endpoint positions"))
+    elif n != spec.N_VERTICES:
+        checks.append(
+            Check("endpoints", True, "skipped: not on the ico4 grid, whose faces they index")
+        )
+    else:
+        from .smoothing import _vertex_offsets
+
+        try:
+            _, _, offsets, edge = _vertex_offsets(endpoints)
+        except ValueError as exc:
+            checks.append(Check("endpoints", False, str(exc)))
+        else:
+            far = int(np.count_nonzero(offsets > edge))
+            detail = (
+                f"{far:,} of {offsets.size:,} endpoints rebuild farther than one edge "
+                f"({edge:.2f} degrees) from their stored vertex, up to {offsets.max():.1f}"
+                if far
+                else f"every endpoint rebuilds within one edge ({edge:.2f} degrees) of its "
+                f"stored vertex, at most {offsets.max():.2f}"
+            )
+            checks.append(Check("endpoints", far == 0, detail))
 
     return checks

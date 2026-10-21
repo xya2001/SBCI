@@ -4,17 +4,27 @@
 #
 #   bash scripts/verify_all.sh            # tiers 1, 2 and 4, against the MATLAB references present
 #   bash scripts/verify_all.sh --matlab   # also regenerate the MATLAB references
+#   bash scripts/verify_all.sh --audit    # run tier 2's audit outside a Slurm job too
 #
-# Each stage prints PASS or FAIL and the script exits non-zero if any failed.
-# Stages that need data which is not present are reported as SKIP, never as a
-# pass -- a verifier should be able to tell the difference at a glance.
+# It uses the `python` on the PATH, in any environment (venv or conda) that
+# imports sbci and pytest. Each stage prints PASS or FAIL and the script exits
+# non-zero if any failed. Stages that need data which is not present are
+# reported as SKIP, never as a pass -- a verifier should be able to tell the
+# difference at a glance.
 
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 ROOT=$PWD
 
 WITH_MATLAB=0
-[ "${1:-}" = "--matlab" ] && WITH_MATLAB=1
+WITH_AUDIT=0
+for arg in "$@"; do
+    case "$arg" in
+        --matlab) WITH_MATLAB=1 ;;
+        --audit) WITH_AUDIT=1 ;;
+        *) echo "unknown option $arg; the options are --matlab and --audit" >&2; exit 2 ;;
+    esac
+done
 
 PASS=0; FAIL=0; SKIP=0
 declare -a RESULTS
@@ -37,15 +47,15 @@ echo "=============================================================="
 # --- environment ----------------------------------------------------------
 echo
 echo "--- environment ---"
-if [ -z "${VIRTUAL_ENV:-}" ]; then
-    echo "  no virtual environment active."
+if ! PREFIX=$(python -c "import sys, sbci, pytest; print(sys.prefix)" 2>&1 | tail -1); then
+    echo "  this python does not import sbci and pytest: $PREFIX"
     echo "  On Longleaf:  module load python/3.12.4"
     echo "                source /work/users/x/y/xya/sbci-venv/bin/activate"
-    echo "  Elsewhere:    python -m venv .venv && . .venv/bin/activate"
+    echo "  Elsewhere:    activate the environment (venv or conda) where you ran"
     echo "                pip install -e '.[dev]'"
     exit 1
 fi
-record PASS "python $(python -V 2>&1 | cut -d' ' -f2)" "$VIRTUAL_ENV"
+record PASS "python $(python -V 2>&1 | cut -d' ' -f2)" "$PREFIX"
 
 # --- tier 1 ---------------------------------------------------------------
 echo
@@ -87,10 +97,11 @@ rm -rf "$TMPW"
 echo
 echo "--- tier 2: the documented API on real data ---"
 HCP=${SBCI_HCP_DIR:-/work/users/x/y/xya/hcp-ya/data}
-if [ -z "${SLURM_JOB_ID:-}" ]; then
+if [ -z "${SLURM_JOB_ID:-}" ] && [ "$WITH_AUDIT" = "0" ]; then
     # The audit smooths, reduces and aligns on the full grid: hours of CPU
     # and gigabytes of memory, which belong on a compute node, never the login node.
-    record SKIP "API audit (22 checks)" "heavy compute: run inside sbatch/srun"
+    # Outside Slurm, --audit runs it anyway: on a workstation, say.
+    record SKIP "API audit (22 checks)" "heavy compute: run inside sbatch/srun, or pass --audit"
 elif [ -f "$HCP/sub-100307_sc.h5" ] && [ -f "$HCP/sub-100307_fc.h5" ]; then
     if OUT=$(python scripts/audit_api.py 2>&1 | tail -1); then
         record PASS "API audit (22 checks)" "$OUT"

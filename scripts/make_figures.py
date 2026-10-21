@@ -5,17 +5,21 @@ Nothing here needs lab data: every figure comes from ``sbci.example()`` and
 render extra (PyVista draws the surfaces) are installed::
 
     python scripts/make_figures.py figures-synthetic
+    python scripts/make_figures.py figures-synthetic --skip-cohort   # the quick figures alone
 
-Name a directory of your own: five of the files share their names with the
+Name a directory of your own: six of the files share their names with the
 real-data figures in ``docs/figures/`` (``scripts/hcp_figures.py`` draws
-those), and no document uses what is drawn here. The cohort figures fit a
-rank-4 FPCA on ten subjects and register two of them with ConSEAL, which takes
-a few minutes; run it in a batch job on a cluster. ``hcp_figures.py`` imports
+those), so that directory is refused, and no document uses what is drawn
+here. The cohort figures fit a rank-4 FPCA on ten subjects, and the alignment
+recovery registers a deformed subject onto its undeformed copy with ENCORE and
+ConSEAL; the two take a few minutes, so run the set in a batch job on a
+cluster, or leave them out with ``--skip-cohort``. ``hcp_figures.py`` imports
 its colours, its rendering and the figures that need no data from here.
 """
 
 from __future__ import annotations
 
+import argparse
 import sys
 import time
 from pathlib import Path
@@ -53,6 +57,8 @@ DISPLAY_ENGINE = "pyvista"
 #: Marker radii (mm) for the endpoints and the seed on the rendered smoothing figure.
 DOT_SIZE, SEED_SIZE = 1.1, 2.4
 TITLE_SIZE = 17  # the surface figures are large; a 12-point title reads as a footnote on them
+#: The real-data figures, which ``hcp_figures.py`` draws; ``main`` refuses to draw over them.
+DOCS_FIGURES = Path(__file__).resolve().parents[1] / "docs" / "figures"
 
 plt.rcParams.update(
     {
@@ -554,11 +560,23 @@ def spherical_kernel(out: Path) -> None:
     save(figure, out, "spherical_kernel.png")
 
 
-def main(argv: list[str]) -> int:
-    if len(argv) < 2:
-        print("usage: python scripts/make_figures.py OUT_DIR (not docs/figures)", file=sys.stderr)
-        return 2
-    out = Path(argv[1])
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Draw synthetic counterparts of the documentation figures into OUT."
+    )
+    parser.add_argument("out", type=Path, metavar="OUT", help="a directory of your own")
+    parser.add_argument(
+        "--skip-cohort",
+        action="store_true",
+        help="leave out the slow figures: the ten-subject cohort and the alignment recovery",
+    )
+    args = parser.parse_args(argv)
+    out = args.out
+    if out.resolve() == DOCS_FIGURES.resolve():
+        parser.error(
+            f"{out} is the repository's docs/figures, which hcp_figures.py draws from real "
+            "data; name another directory"
+        )
     out.mkdir(parents=True, exist_ok=True)
     print("single subject", flush=True)
     sc, fc = sbci.example("sc", n_streamlines=N_STREAMLINES), sbci.example("fc")
@@ -568,6 +586,8 @@ def main(argv: list[str]) -> int:
     coupling(out, sc, fc)
     print("kernel", flush=True)
     spherical_kernel(out)
+    if args.skip_cohort:
+        return 0
     print("cohort", flush=True)
     cohort_figures(out)
     print("alignment", flush=True)
@@ -576,4 +596,4 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    sys.exit(main())

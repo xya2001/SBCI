@@ -53,12 +53,19 @@ Issues = "https://github.com/xya2001/SBCI/issues"
 [tool.hatch.build.targets.wheel]
 packages = ["src/sbci"]
 
+# The documents' figures, 15 MB, stay in the repository and out of the sdist (the wheel
+# holds src/sbci alone). Since hatchling 1.22 this overrides .gitignore's !docs/figures/*.png.
+[tool.hatch.build.targets.sdist]
+exclude = ["docs/figures/*.png"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests", "src"]
 addopts = "--doctest-modules --strict-markers --ignore=tests/reference"
 # tests/reference holds MATLAB-facing generators that are run by hand.
 # --doctest-modules imports every .py it collects, and importing a script
-# runs it, so they are kept out of collection entirely.
+# runs it, so they are kept out of collection entirely. The --ignore works
+# from the root only; conftest.py there keeps them out, with scripts/ and
+# tools/, wherever pytest runs.
 doctest_optionflags = "ELLIPSIS NORMALIZE_WHITESPACE"
 markers = [
   "needs_data: needs data outside the repository, the downloaded tutorial subject (SBCI_HCP_DIR or SBCI_DOWNLOAD=1) or the lab's MATLAB references (the SBCI_* paths in tests/test_matlab_reference.py); skips without it",

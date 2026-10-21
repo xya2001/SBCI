@@ -355,6 +355,12 @@ class Reduction:
     The norm is the square root of the sum of squares, as the reference
     reports it, so square it for the share of the sum of squares that a PCA
     calls variance explained: 0.26 of the norm is 7% of the sum of squares.
+    The square is that share exactly under the plain inner product, where
+    what the components remove is orthogonal to what they leave. Under the
+    grid's area weights, which :func:`reduce` uses on ico4, the components
+    are orthogonal in those weights instead, and the square differs from
+    ``1 - |residual|^2 / |cohort|^2`` by about 1e-9 (3e-9 at rank 10 on six
+    or ten :func:`sbci.example` subjects).
     """
     objective: np.ndarray
     """``(rank, iterations)``; the objective at each outer iteration."""
@@ -382,6 +388,15 @@ class Reduction:
             f"<Reduction rank {self.rank} over {self.scores.shape[0]} subjects, "
             f"{self.explained[-1]:.1%} of the norm explained>"
         )
+
+
+def _whole_rank(rank) -> int:
+    """``rank`` as an ``int``: a whole number of components, one at least, and no bool."""
+    if isinstance(rank, (bool, np.bool_)) or not isinstance(rank, (int, np.integer)):
+        raise TypeError(f"rank= takes a whole number of components, got {rank!r}")
+    if rank < 1:
+        raise ValueError(f"rank must be at least 1, got {rank}")
+    return int(rank)
 
 
 def fit_basis(
@@ -418,7 +433,7 @@ def fit_basis(
     roughness
         ``(n, n)`` penalty matrix, or ``None`` for no penalty.
     rank
-        Components to extract.
+        Components to extract: a whole number, one at least.
     alpha
         Weight on the roughness penalty.
     support
@@ -433,7 +448,8 @@ def fit_basis(
         notes).
     start
         ``(n, rank)`` initial vectors, one per component, used instead of the
-        random draws (and instead of ``candidates``).
+        random draws (and instead of ``candidates``). Any other shape is
+        refused, and so are values that are not finite and a column of zeros.
     candidates
         How many eigenvectors of the mode-1 Gram matrix to try as the start of
         each component. ``1`` is the reference: a random vector put through
@@ -455,8 +471,7 @@ def fit_basis(
     if matrices.ndim != 3 or matrices.shape[1] != matrices.shape[2]:
         raise ValueError(f"expected (n_subjects, n, n), got {matrices.shape}")
     n_subjects, n, _ = matrices.shape
-    if rank < 1:
-        raise ValueError(f"rank must be at least 1, got {rank}")
+    rank = _whole_rank(rank)
     if int(candidates) < 1:
         raise ValueError(f"candidates must be at least 1, got {candidates}")
     candidates = int(candidates)
@@ -478,6 +493,19 @@ def fit_basis(
 
     rng = np.random.default_rng(seed)
     starts = None if start is None else np.asarray(start, dtype=np.float64)
+    if starts is not None:
+        # unchecked, (n, 2) for rank 3 failed after two components, (n, 5) was cut to
+        # three, and a column of zeros started its component from nothing: NaN
+        if starts.shape != (n, rank):
+            raise ValueError(
+                f"start is {starts.shape}, expected {(n, rank)}: one vector of {n} values per "
+                "component"
+            )
+        if not np.isfinite(starts).all():
+            raise ValueError("start holds values that are not finite, NaN or infinite")
+        flat = np.flatnonzero(~starts.any(axis=0))
+        if flat.size:
+            raise ValueError(f"start's column {flat[0]} is all zeros: no direction to start from")
 
     # The tensor is (n, n, n_subjects) in the reference; keep subjects first
     # here and contract explicitly, which is clearer and avoids a transpose.
@@ -796,7 +824,8 @@ def reduce(cc_list, rank: int = 10, **kwargs) -> Reduction:
         read, by its index and, for a file, its path: one such value made the
         whole fit NaN.
     rank
-        Components to keep.
+        Components to keep: a whole number, one at least, checked before the
+        cohort is read.
     **kwargs
         Passed to :func:`fit_basis`.
 
@@ -807,6 +836,7 @@ def reduce(cc_list, rank: int = 10, **kwargs) -> Reduction:
     (40, 20)
     >>> result = sbci.reduce(sorted(Path("cohort").glob("*_sc.h5")), rank=20)  # doctest: +SKIP
     """
+    rank = _whole_rank(rank)  # before the cohort is read, not after
     items = _subjects(cc_list)
     if len(items) == 0:
         raise ValueError("reduce needs at least one connectome")
