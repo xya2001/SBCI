@@ -294,7 +294,8 @@ and the format version keeps its `-draft` suffix.
 
 1. **The spherical kernel**, which the Q10 decision makes the default -- now
    **done**. It reproduces `c3_main` at r = 1.000000 at full scale on a
-   pipeline subject. The residual recorded here for months as "a normalization or
+   released young adult, but for the grid's south pole, which the binary never
+   writes. The residual recorded here for months as "a normalization or
    sampling convention" was neither: `concon`'s kernel is not the heat kernel,
    its weight is `(2l+1)^(3/2)/sqrt(4 pi)` and it has compact support, both
    read from its source once the binary was found to run. The naming the
@@ -315,7 +316,7 @@ nothing and prevents an awkward rename later.
 | Risk | Consequence | Mitigation |
 | --- | --- | --- |
 | ~~Q6 answers "credentials required"~~ | resolved | the young adult open-access terms allow derived data to be redistributed under the same terms; all 946 subjects are public |
-| ~~the spherical kernel port does not reproduce the released files~~ | resolved | r = 1.000000 and scale 1.000000 against `smoothed_sc_avg_0.005_ico4.mat` at full scale (PORTING.md item 6) |
+| ~~the spherical kernel port does not reproduce the released files~~ | resolved | r = 1.000000 and scale 1.000000 against `c3_main` run on a released young adult, at full scale, but for the south pole the binary never writes (PORTING.md item 6) |
 | Q2 flips to "include the diagonal" | every released file must be rewritten | freeze before the first release, not after |
 | Q3/Q9 picks the plain sum | the legacy importer normalizes wrongly | decide before importing a cohort |
 | a cohort mixes the two kernels | the files are silently incomparable | metadata records which was used, and `sbci.load_cohort` refuses a cohort whose files mix kernels or bandwidths |
@@ -475,7 +476,8 @@ validator must refuse to mix kernels within a cohort; and the two take
 different bandwidth parameters — `sigma` for the spherical kernel, `kappa` for
 the Riemannian one — so `bandwidth` in the metadata is meaningful only
 alongside `kernel`. The spherical kernel is ported and, unusually, checked
-against the released files themselves: r = 1.000000 (PORTING.md item 6).
+against the binary itself, at full scale: r = 1.000000, but for the one vertex
+the binary never writes (PORTING.md item 6).
 
 ### Closed
 

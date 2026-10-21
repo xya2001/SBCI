@@ -7,13 +7,17 @@ crossings the SBCI pipeline wrote), aligns the three with
 1e-4), and reports what a reviewer would ask for: cost traces, iterations,
 refused steps, Jacobian ranges, pairwise square-root-density distances and
 endpoint-overlap coefficients before and after, and wall time. Run by hand on
-Longleaf through SLURM; it takes hours. Lab data is read only.
+Longleaf through SLURM; it takes hours. Lab data is read only. The subjects are
+named in the environment, not here: ADNI's data are shared under their own
+agreement, and the lab keeps the list with them (PORTING.md item 39).
 
-    python tests/reference/conseal_adni_ico4.py /work/users/x/y/xya/conseal-ref
+    SBCI_ADNI_SUBJECTS=sub-A,sub-B,sub-C python tests/reference/conseal_adni_ico4.py \
+        /work/users/x/y/xya/conseal-ref
 """
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 
@@ -29,7 +33,7 @@ from sbci.conseal import (
 from sbci.smoothing import Endpoints
 
 ROOT = "/overflow/zzhanglab/ADNI/ADNI-bids"
-SUBJECTS = ("sub-168S6561", "sub-068S0473", "sub-002S0413")
+SUBJECTS = tuple(s for s in os.environ.get("SBCI_ADNI_SUBJECTS", "").split(",") if s)
 THRESHOLD = 1e-4  # endpoint density per vertex; the mean over 5,124 vertices is 1.95e-4
 
 
@@ -42,6 +46,8 @@ def matrix(function, items):
 
 
 def main(out):
+    if len(SUBJECTS) < 2:
+        raise SystemExit("set SBCI_ADNI_SUBJECTS to two or more subjects, comma-separated")
     t0 = time.time()
     lh, rh = default_grids(15)
     subjects = []

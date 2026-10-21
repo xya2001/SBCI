@@ -137,24 +137,15 @@ Two checks need more than one subject.
 **Alignment must make subjects more alike.** A registration can run, reduce its
 own cost, and leave the cohort no more similar than before — which would make it
 useless. `tests/reference/align_adni_ico4.py` measures mean pairwise
-correlation between subjects before and after, on the five ADNI subjects the
-pipeline produced on ico4 (an earlier check on the lab's HCP test-retest
-tensors, which exist only on the retired 4121-vertex grid, gave +0.023; that
-script was retired with the grid). On the five, as recorded on 22 September
-2026, before items 8, 9 and 21 of PORTING.md changed ENCORE's gradient, the
-scale of its Jacobian and its order of composition:
-
-```
-before 0.737617   after 0.781972   change +0.044354   (min pair 0.682 -> 0.720)
-costs 0.142, 0.126, 0.042, 0.112, 0.185
-Jacobians: every one strictly positive, smallest 0.6146;
-           per subject lh in [0.61, 1.38], rh in [0.63, 1.46]
-```
-
-Both criteria held on the package's own grid: the cohort got more alike, and
-no warp folded. With today's code the eleven released young adults, aligned
-ten steps onto ENCORE's median, rise from a mean pairwise correlation of
-0.7163 to 0.7615 (PORTING.md item 25).
+correlation between subjects before and after, and every Jacobian, on five of
+the lab's ADNI subjects the pipeline produced on ico4 (an earlier check on the
+lab's HCP test-retest tensors, which exist only on the retired 4121-vertex
+grid, gave +0.023; that script was retired with the grid). It reads the
+subjects from `SBCI_ADNI_SUBJECTS`; ADNI's data are shared under their own
+agreement, so this page gives neither the subjects nor their numbers
+(PORTING.md item 39). On the released young adults, with today's code, the
+eleven aligned ten steps onto ENCORE's median rise from a mean pairwise
+correlation of 0.7163 to 0.7615 (PORTING.md item 25).
 
 Re-run it on a different cohort. **The correlation must go up and every
 Jacobian must stay positive**; a negative Jacobian means the warp has folded and
@@ -343,7 +334,7 @@ Expected agreement, and what to reject:
 | `seed` | float32 rounding | worse than 10 float32-eps |
 | `coupling` (3 forms) | 3.6 to 88.2 float64-eps | worse than 1e-12 |
 | `smooth` (rdk) | 3.14 float32-eps (`smooth_matlab_probe.py`) | worse than 10 float32-eps |
-| `smooth` (shk) | r = 1.00000000, scale 1.000000 against the released matrices | see PORTING.md item 6 |
+| `smooth` (shk) | r = 1.00000000, scale 1.000000 against `c3_main` run on the tutorial subject, the south pole it never writes emptied (`concon_fullscale.py`) | see PORTING.md item 6 |
 | `endpoints_align` (ConSEAL), the reference's errors put back | the single precision the MATLAB reference carries: kernel 4e-8, gradient 5.7e-7 (left) and 1.2e-6 (right), the six-iteration cost trace 3.5e-7, the template 2e-5 (`tests/reference/conseal_compare.py`) | see PORTING.md items 7 and 22 |
 | `reduce` | 1e-15 on every component at the reference's fixed point; at its default tolerance the first vector to 2e-16, with that vector's scores (item 11 below) | worse than 1e-12 |
 | `align` geometry, basis and divergence, template, warp composition | 0.5 to 44 float64-eps, the basis and divergence with the reference's two errors put back | worse than 1e-12 |
@@ -491,24 +482,30 @@ what it changes on the 943 young adults; this page, which names subjects in its
 commands, quotes nothing a family table went into.
 
 **The spherical kernel ships, and is verified against the binary itself.**
-`kernel="shk"` is the default by the WP1 decision and it works. It reproduces
-`c3_main` at **r = 1.000000** over all 13,125,126 pairs at full scale on
-`sub-168S6561`, the ADNI subject under `/overflow/zzhanglab/ADNI/ADNI-bids/`
-whose input to `c3_main` and output from it were both kept, with the scale
-factor at 1.000000 and nothing fitted (0.99858 for the closed-form series,
-`quantized=False`). The kernel was read from `concon`'s source -- public MIT code, named by
+`kernel="shk"` is the default by the WP1 decision and it works. Run on the
+tutorial subject's stored endpoints, `c3_main` writes what the package computes
+from the same positions everywhere but at one vertex per hemisphere: the binary
+never writes the grid's south pole, which a half-open range test in its vertex
+lookup skips, and the package does. With that vertex emptied, the two agree at
+**r = 1.00000000** over all 13,125,126 pairs, with the scale factor at
+1.000000 and nothing fitted (0.998591 for the closed-form series,
+`quantized=False`); as computed, with the pole kept, the correlation is
+0.99910256 (PORTING.md item 6). The kernel was read from `concon`'s source -- public MIT code, named by
 the binary's debug info -- and confirmed by running `c3_main` on a single
 streamline so that its output is the kernel: `tests/reference/concon_probe.py`
 regenerates that measurement, and `tests/test_smoothing.py` pins the kernel to
 the binary's own numbers at rms 0.0005.
 
-One residual remains: 0.071% more non-zero pairs, where one ULP in a dot
-product moves a vertex across the kernel cutoff (PORTING.md item 6). The 0.14%
-amplitude offset an earlier version carried was the binary's lookup-table quantization
-and is reproduced. A reviewer can re-run the comparison from PORTING.md item 6
-(*Full scale*); it needs the lab data and about a minute. The other four ADNI
-subjects with pipeline output on ico4 were checked for unit mass and used for
-the alignment check, not for a second full-scale kernel comparison.
+One residual remains, 6e-6 relative, at the level of the binary's own
+arithmetic: the dot products are formed in a different order, and one ULP moves
+a truncation bucket (PORTING.md item 6). The amplitude offset an
+earlier version carried was the binary's lookup-table quantization and is
+reproduced. A reviewer can re-run the comparison with
+`tests/reference/concon_fullscale.py`; it needs the `c3_main` binary, the
+pipeline grid's `.m` files and the released file, and takes about
+40 to 50 minutes, nearly all of it the binary's. The port was first checked against the pipeline's own
+run on the lab's ADNI subjects, whose numbers this page does not give
+(PORTING.md item 39).
 
 
 **The format is a draft.** `SPEC_VERSION` is `0.1.0-draft` and

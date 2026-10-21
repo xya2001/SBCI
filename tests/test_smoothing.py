@@ -898,6 +898,38 @@ def test_sparse_density_matches_dense():
     np.testing.assert_allclose(sparse, dense, rtol=0, atol=1e-9 * dense.max())
 
 
+def test_the_south_pole_takes_its_mass_which_c3_main_never_writes():
+    """The vertex at (0, 0, -1) gets what the kernel puts there.
+
+    ``c3_main`` looks the vertices near an endpoint up in a quad tree over the
+    polar angle, clipping the range at pi, and the tree's range test is
+    half-open, so the vertex at exactly pi -- vertex 11 of each hemisphere -- is
+    never found, and every connectome the binary made is empty there
+    (PORTING.md item 6). That is the reference's error, not this package's.
+    """
+    from sbci.grid import hemisphere_labels
+    from sbci.smoothing import endpoint_density
+    from sbci.surface import load_surface
+
+    sphere = load_surface("sphere")
+    vertices = sphere.vertices / np.linalg.norm(sphere.vertices, axis=1, keepdims=True)
+    hemi = hemisphere_labels(vertices.shape[0])
+    half = vertices.shape[0] // 2
+    poles = np.flatnonzero(vertices[:, 2] < -0.9999)
+    assert poles.tolist() == [11, half + 11]
+
+    tilt = np.radians(1.0)  # each streamline starts a degree from the south pole
+    start = np.array([[np.sin(tilt), 0.0, -np.cos(tilt)]] * 2)
+    end = np.array([[1.0, 0.0, 0.0]] * 2)
+    side = np.array([0, 1])
+    density = endpoint_density(vertices, start, end, side, side, hemi, 0.005)
+    rows = density.sum(axis=1)
+    for pole, hemisphere in zip(poles, (0, 1), strict=True):
+        near = (hemi == hemisphere) & (vertices @ start[0] > np.cos(np.radians(10.0)))
+        assert rows[pole] > 0
+        assert np.flatnonzero(near)[np.argmax(rows[near])] == pole, "the pole is the nearest vertex"
+
+
 def test_progress_callback_reports_every_block():
     from sbci.grid import hemisphere_labels
     from sbci.smoothing import endpoint_density

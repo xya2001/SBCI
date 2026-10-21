@@ -55,7 +55,8 @@ item 10.
     The spherical kernel ``concon`` applies (Moyer et al., MICCAI 2016), the
     default, and the one that produced every released ``smoothed_sc_avg_*.mat``.
     Its bandwidth is ``sigma``. Reproduces ``c3_main`` at r = 1.000000 and
-    scale 1.000000 at full scale on a pipeline subject; the 0.14% amplitude offset an
+    scale 1.000000 at full scale on the tutorial subject, but for the grid's
+    south pole, which the binary never writes and this does; the amplitude offset an
     earlier version carried was the binary's lookup-table quantization, which
     :class:`KernelTable` reproduces -- see PORTING.md item 6. Not the heat
     kernel, despite the name: :func:`spherical_heat_kernel` explains the weight.
@@ -311,9 +312,9 @@ class KernelTable:
     table read the same way, ``harm_lookup_table[l][(int)(x * L + L)]``. Both
     reads truncate, so every lookup lands on the sample at or below the true
     cosine -- a slightly larger angle, a slightly smaller kernel -- and the
-    bias grows with ``l(l+1)``. That is the 0.14% amplitude offset the exact
-    series left against the released files, and reproducing the tables removes
-    it: on a single streamline the binary's peak entry is
+    bias grows with ``l(l+1)``. That is the amplitude offset the exact series
+    leaves against the binary, 0.14% on the tutorial subject, and
+    reproducing the tables removes it: on a single streamline the binary's peak entry is
     ``K(1.0) * K(1 - 1e-12) = 270.2668 * 269.9403``, whose square root is the
     measured 270.1035, at all five bandwidths tested.
 
@@ -493,9 +494,10 @@ def spherical_heat_kernel(
     Verified against ``c3_main`` itself, run on a single streamline so its
     output is the kernel: the quantized form reproduces the binary's peak entry
     to six digits at five bandwidths, and its ring values at sigma 0.005 to rms
-    0.0005; against the released matrix of a pipeline subject, at full scale,
-    the density correlates at 1.000000. ``tests/reference/concon_probe.py`` regenerates the
-    measurement.
+    0.0005; against the binary run on the tutorial subject, at full scale, the
+    density correlates at 1.000000 once the grid's south pole, which the binary
+    never writes, is emptied. ``tests/reference/concon_probe.py`` and
+    ``concon_fullscale.py`` regenerate the measurements.
 
     Examples
     --------

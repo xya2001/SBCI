@@ -798,16 +798,16 @@ as objects and as arrays, with both starts. On Longleaf a fit runs on one core
 when eight one-CPU tasks leave `OMP_NUM_THREADS=1`; one task with eight CPUs
 gives the linear algebra its threads.
 
-## 6. Spherical kernel -- DONE, r = 1.000000 AT FULL SCALE
+## 6. Spherical kernel -- DONE, r = 1.000000 AT FULL SCALE, BUT FOR THE SOUTH POLE THE BINARY NEVER WRITES
 
 - **From:** [`dcmoyer/concon`](https://github.com/dcmoyer/concon), C++, MIT.
   Invoked by `sbci_step5_structural.sh` as `c3_main Compute_Kernel --sigma
   ${BANDWIDTH} --epsilon 0.001 --final_thold 0.000000001 --OPT_VAL_num_harm 33
   --OPT_VAL_exp_num_kern_samps 6 --OPT_VAL_exp_num_harm_samps 5`.
 - **To:** `src/sbci/smoothing.py`, reached through `cc.smooth(kernel="shk")`.
-  Against the correct reference the port reaches **r = 1.00000000** at full
-  scale (see below); the 0.65 this file reported for most of its life was
-  measured against the wrong input.
+  Against `c3_main` itself the port reaches **r = 1.00000000** at full
+  scale, but for the one vertex the binary never writes (*Full scale*, below); the
+  0.65 this file reported for most of its life was measured against the wrong input.
 
 ### The verification that was missing, and now exists
 
@@ -815,34 +815,28 @@ Every earlier comparison used `mesh_intersections_ico4.mat` as the input and
 `smoothed_sc_avg_0.005_ico4.mat` as the target. The pipeline script shows those
 come from different branches, so they were never the same data.
 
-Five ADNI subjects under `/overflow/zzhanglab/ADNI/ADNI-bids/` carry the real
-pairing, from one run in one directory:
+What was needed is a pairing from one run: `subject_xing_sphere_avg_coords.tsv`,
+exactly what `c3_main` was fed (both endpoints of every streamline as
+continuous unit-sphere positions), beside what `c3_main` wrote from it and the
+grid it was handed (`SBCI_AVE/lh_grid_avg_ico4.vtk`, which matches the bundled
+ico4 sphere to 6.0e-12). The lab keeps such pairings for some of its ADNI
+subjects, whose data are shared under ADNI's own agreement. The port was first
+checked on those, and the reference scripts that use them are kept, but this
+file no longer names the subjects or gives the numbers measured on them (item
+39). The full-scale comparison it reports instead runs `c3_main` on a released
+young adult's stored endpoints (*Full scale*, below).
 
-| File | What it is |
-| --- | --- |
-| `subject_xing_sphere_avg_coords.tsv` | exactly what `c3_main` was fed: 1,001,877 streamlines, both endpoints as continuous unit-sphere positions |
-| `smoothed_sc_avg_0.005_ico4.mat` | exactly what `c3_main` wrote |
-| `SBCI_AVE/lh_grid_avg_ico4.vtk` | the grid it was handed -- matches the bundled ico4 sphere to 6.0e-12 |
+Recomputing the density from such a pairing at sigma = 0.005 with 33 harmonics
+left two differences, which the rest of this item traces.
 
-Recomputing the density from those endpoints at sigma = 0.005 with 33
-harmonics:
-
-| Measure | Value |
-| --- | --- |
-| correlation over the upper triangle | **0.977757** |
-| rank correlation | 0.912600 |
-| restricted to the support `c3_main` kept | 0.978489 |
-| best global scale | 6.52 |
-| relative error after scaling | 0.206 |
-
-**The global scale** of 6.5 was a normalization convention: that draft
+**The global scale** was a normalization convention: that draft
 normalized each endpoint's kernel column to sum one, while `convert_raw.py`
 applies no normalization at all -- its normalizing block is commented out in
 the source. The shipped port follows `convert_raw.py` and needs no scale.
 
-**The 20% residual after scaling is compact support.** An earlier draft of this
+**The residual after scaling is compact support.** An earlier draft of this
 section said "the support difference is not the issue", on the grounds that
-this port places only 0.43% of its mass outside the *released file's* support.
+this port placed little of its mass outside the *released file's* support.
 That was the wrong comparison. The released file's support is the union over a
 million streamlines and says almost nothing about the support of the *kernel*,
 which is far tighter -- and it is the kernel's support that differs.
@@ -906,29 +900,14 @@ the one it has.
 
 ### Confirming it on the released data
 
-Applying a window that vanishes at the measured cutoff, against the ADNI
-subject's own endpoints (40,000 sampled of 1,001,877) and its released matrix:
-
-| kernel | r | drift | 2-6 deg | 6-12 | 12-25 | 25-60 | 60-180 |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| no window (the draft at the time) | 0.9747 | 1.86 | 0.97 | 0.88 | **0.65** | **0.52** | 0.56 |
-| times `1 - u^3` | 0.9882 | 1.36 | 1.04 | 1.05 | 1.13 | 1.24 | 0.91 |
-| times `1 - u^4` | **0.9891** | 1.37 | 1.02 | 1.03 | 1.07 | 1.12 | 0.82 |
-
-where `u = theta / (2.9 sqrt(sigma))` and "drift" is how far the ratio against
-the released file wanders across the distance bands -- a flat ratio means the
-shape is right, which correlation alone does not test.
-
-The 12-60 degree deficit that no bandwidth and no threshold could remove is
-gone: 0.65 and 0.52 become 1.07 and 1.12. The remaining error halves, `1 - r`
-falling from 0.0253 to 0.0109. The windows above are approximations chosen to
-test the diagnosis, not the real taper, so the residual overshoot at 12-60
-degrees and the shortfall beyond 60 are what identifying the true form should
-remove.
-
-(The support counts are not comparable in that table: it samples 40,000
-streamlines where the released file used 1,001,877, so this port's density is
-sparser for that reason alone.)
+The draft's kernel was multiplied by a window that vanishes at the measured
+cutoff, `1 - u^3` or `1 - u^4` with `u = theta / (2.9 sqrt(sigma))`, and
+compared again with a pairing of `c3_main`'s input and output (item 39). The
+deficit at 12-60 degrees that no bandwidth and no threshold had removed went
+away, and the ratio against the released matrix flattened across the distance
+bands -- a flat ratio means the shape is right, which correlation alone does
+not test. The windows were approximations chosen to test the diagnosis, not the
+real taper, which the next section identifies.
 
 ### The kernel, resolved
 
@@ -946,7 +925,7 @@ polynomial was intended where a normalized harmonic was used. Intended or not,
 it produced every released cohort, so it is what this package reproduces. The
 extra `sqrt(2l+1)` upweights high degrees, which is the whole reason concon's
 kernel is so much narrower than a heat kernel -- and the reason the port's
-correlation sat at 0.978 for months.
+kernel could not match the binary's for months.
 
 The term count is 33, degrees `l = 0..32`, fixed by measuring the binary's
 peak at five bandwidths rather than by reading: at sigma 0.01 and above the
@@ -961,30 +940,41 @@ give the same angle, which is why sweeping the flag against the binary looked
 inert. `compute_kernel.cpp` also divides by the streamline count, which is why
 the normalizing block in `convert_raw.py` is commented out.
 
-### Full scale, all 1,001,877 endpoints
+### Full scale, on a released young adult
 
-Against what `c3_main` wrote for `sub-168S6561`, with the heat kernel the
-package used to implement as a control:
+`tests/reference/concon_fullscale.py` writes the stored endpoints of the
+tutorial subject's released file, all 803,741 streamlines, as `c3_main`'s input,
+runs the binary with the pipeline's flags, and compares what it writes with the
+package's density from the same positions (job 5989183):
 
-| | shipped kernel | heat kernel |
+| | as computed | the south pole emptied |
 | --- | --- | --- |
-| correlation | **1.000000** | 0.981784 |
-| best scale | **0.99858** | 155.83 |
-| relative error after scaling | **0.00007** | 0.18980 |
-| relative error, no rescaling | **0.00142** | 0.99381 |
-| drift across distance bands | **1.000** | 1.756 |
-| ratio by band | **1.000 throughout** | 0.872 ... 0.497 |
-| non-zero pairs | 7,671,633 | 13,125,126 |
+| correlation, all 13,125,126 pairs | 0.99910256 | **1.00000000** |
+| best scale | 0.998245 | **1.000000** |
+| relative error, nothing rescaled | 0.041928 | **0.000006** |
+| non-zero pairs | 6,892,526, against the binary's 6,887,499 | **6,887,499**, the same |
+| median ratio by distance band | 1.000001 throughout | 1.000001 throughout |
 
-against the released file's 7,664,821. The scale factor is 0.99858 with
-nothing fitted, where the old kernel needed 6.5 on this subject and 155.8 once
-the normalization by streamline count was applied correctly. Correlation is
-1.000000 over all 13,125,126 pairs.
+**`c3_main` never writes the grid's south pole.** The vertex at (0, 0, -1),
+vertex 11 of each hemisphere, in the left fusiform and the right inferior
+temporal cortex, gets nothing from the binary -- in this run, and in the
+toolkit's example output alike -- while the package gives it what the kernel
+puts there: 0.072% of the tutorial subject's mass, in the 5,027
+pairs the binary lacks. The cause is in concon's source (commit `ce7e0d9`):
+`compute_kernel.cpp` looks up the vertices near an endpoint in a quad tree over
+the polar angle, clipping the range it asks for at pi, and `quad_tree.cpp`'s
+range test is half-open, `x < max_x`, so a vertex at exactly pi is never
+returned. Every connectome `c3_main` made has that hole. The package, which
+finds neighbours with a KD-tree, has none, and keeps it that way: the hole is
+the reference's error, put back only for the comparison, as the MATLAB
+references' are. With the pole emptied, the two agree to the binary's own
+arithmetic and write the same pairs.
 
-The port kept 0.09% more pairs than `c3_main` until `apply_final_threshold`
+The port kept more pairs than `c3_main` until `apply_final_threshold`
 reproduced `--final_thold 1e-9`, the per-streamline value below which the
-reference writes nothing; what remains (+0.071%) sits on the kernel's cutoff
-boundary -- *Shipping it*, below.
+reference writes nothing. Earlier versions of this item put the pairs that
+remained on the kernel's cutoff boundary; on the tutorial subject every one of
+them is the south pole's.
 
 ### Endpoints from the snapped streamlines
 
@@ -1049,19 +1039,15 @@ from `mesh_intersections_ico4.mat`, calling the method, saving, validating --
 is what found the three bugs *Shipping it* records, and the face-order one could
 not have been found any other way.
 
-It scores r = 0.972 rather than 1.000000, and that is the input file, not the
-port. Both endpoint sources on the **same 200,000 rows**, so sampling noise is
-identical and only the endpoints differ:
-
-| endpoint source | correlation |
-| --- | --- |
-| `subject_xing_sphere_avg_coords.tsv`, what `c3_main` was fed | **0.998193** |
-| `mesh_intersections_ico4.mat` | 0.969720 |
-
-The two disagree by a median 1.25 degrees, but with a tail: 3.14 at the 90th
-percentile and 42 at the maximum. Displacing the correct endpoints uniformly by
-1.25 degrees costs almost nothing (0.99263 to 0.99235), so it is that tail of
-relocated endpoints that accounts for the gap, not the typical difference.
+Against `c3_main`'s output on a pairing from the lab's archive (item 39) it
+fell short of the match above, and that was the input file, not the port. On
+the same rows, so that sampling noise is identical and only the endpoints
+differ, endpoints read from `subject_xing_sphere_avg_coords.tsv`, what
+`c3_main` was fed, matched, and those read from `mesh_intersections_ico4.mat`
+did not. The two endpoint sets mostly agree to about a degree but have a tail
+of endpoints placed far apart, and moving every endpoint by the typical
+difference costs almost nothing, so it is that tail of relocated endpoints that
+accounts for the gap (*Endpoints from the snapped streamlines*, above).
 
 ### Shipping it
 
@@ -1080,7 +1066,7 @@ caught, because none of its tests had barycentric endpoints:
    triangles, and every index resolved about 85 degrees from where it should.
    This was latent in the format handling long before the kernel was touched.
 
-**The 0.142% amplitude offset is explained and removed.** `c3_main` never
+**The closed form's amplitude offset is explained and removed.** `c3_main` never
 evaluates the series at a point. `compute_kernel.cpp` reads
 `kern_lookup_table[(int)(dot * M + M)]`, a table of `2M+1` values with
 `M = 10^6` (`subject.cpp`: `num_kern_samps = pow(10, exp_num_kern_samps)`),
@@ -1095,27 +1081,26 @@ measured 270.1035 to six digits, and likewise at all five bandwidths.
 `sbci.smoothing.KernelTable` is that emulation and is the default;
 `quantized=False` gives the closed-form series the tables approximate.
 
-At full scale, all 1,001,877 endpoints of `sub-168S6561` against the matrix
-`c3_main` wrote, the two paths side by side:
+At full scale, on the tutorial subject with the south pole emptied as in *Full
+scale* above, the two paths side by side (job 5989183):
 
 | | tables (default) | closed form |
 | --- | --- | --- |
-| correlation | **1.00000000** | 1.00000000 |
-| best scale | **1.000000** | 0.998584 |
-| relative error, nothing rescaled | **0.000021** | 0.001420 |
-| pairs equal to 1e-6 relative | **2,100,505** | 32 |
-| ratio by distance band | 1.00000 throughout | 0.9985 throughout |
+| correlation, all pairs | **1.00000000** | 1.00000000 |
+| best scale | **1.000000** | 0.998591 |
+| relative error, nothing rescaled | **0.000006** | 0.001413 |
+| pairs equal to 1e-6 relative | **3,092,070** | 1 |
+| median ratio by distance band | 1.000001 throughout | 0.99834 to 0.99851 |
 
-The residual is 2e-5 relative, at the level of the binary's own arithmetic:
-the dot products are formed in a different order, and one ULP moves a
-truncation bucket.
+The residual is 6e-6 relative, at the level of the binary's own
+arithmetic: the dot products are formed in a different order, and one ULP moves
+a truncation bucket.
 
-The **excess of non-zero pairs** is mostly `--final_thold`: `compute_kernel.cpp`
+The **excess of non-zero pairs** was mostly `--final_thold`: `compute_kernel.cpp`
 writes a pair only `if(temp > final_thold)` after dividing by the streamline
-count, and `smooth()` now applies the same rule on the same scale. At full
-scale that takes the tables' 7,676,193 pairs to 7,670,250 against the
-released 7,664,821 -- **+0.071%**. What remains sits on the cutoff boundary,
-where one ULP in a dot product moves a vertex across `dot >= cutoff_distance`.
+count, and `smooth()` now applies the same rule on the same scale. The rest is
+the south pole (*Full scale*, above): with it emptied, the package writes the
+binary's 6,887,499 pairs and no others.
 
 ### Speed
 
@@ -1131,9 +1116,11 @@ rule is enforced by construction) and evaluates the kernel only there -- about
 With the kernel itself a table lookup, the evaluation is a gather. The dense
 path is kept as `method="dense"` and `test_sparse_density_matches_dense`
 holds the two to 1e-9 of the peak. A `progress(done, total)` callback reports
-each block. Full scale on `sub-168S6561`: **53 s** for the density, and
-`cc.smooth(kernel="shk")` end to end in **54 s**, against 3,184 s for the dense
-exact path and 6,114 s before the in-place recurrence -- about 110x.
+each block. On a subject of about a million streamlines the density took
+**53 s**, and `cc.smooth(kernel="shk")` end to end **54 s**, against 3,184 s for
+the dense exact path and 6,114 s before the in-place recurrence -- about 110x.
+The tutorial subject's 803,741 took 15 s (job 5989183), where the binary
+took 2,975 s.
 
 ### What this cost, and what it bought
 
@@ -1525,34 +1512,16 @@ errors live in the smaller ones.
 
 ### On ico4, real data
 
-*Measured before the correction of the shared divergence (item 8, finding
-2). On two released young adults the corrected gradient moves ConSEAL's
-aligned endpoints by 0.02 degrees on average after three iterations (item
-8, *What the corrections change*).*
-
-`tests/reference/conseal_adni_ico4.py` aligns three ADNI subjects
-(`sub-168S6561`, `sub-068S0473`, `sub-002S0413`: 1,001,877, 1,034,758 and
-937,465 streamlines) from their `mesh_intersections_ico4.mat` at the public
-defaults, on 8 cores:
-
-| | sub-168S6561 | sub-068S0473 | sub-002S0413 |
-| --- | --- | --- | --- |
-| cost, initial to final | 0.07128 to 0.05616 (-21.2%) | 0.05210 to 0.04193 (-19.5%) | 0.07049 to 0.05548 (-21.3%) |
-| iterations to the 1e-4 threshold | 29 | 20 | 27 |
-| refused steps | 0 | 0 | 0 |
-| cost trace monotone | yes | yes | yes |
-| Jacobian range | 0.37 to 2.06 | 0.56 to 1.78 | 0.49 to 1.77 |
-| distance to the template, before to after | 0.268 to 0.238 | 0.229 to 0.205 | 0.266 to 0.236 |
-
-Pairwise distances between the subjects' square-root densities fall from
-0.433, 0.453 and 0.432 to 0.380, 0.400 and 0.385; endpoint-overlap
-coefficients at a density threshold of 1e-4 rise from 0.761, 0.775 and 0.798
-to 0.777, 0.786 and 0.802. The heat kernel at the published bandwidth has 89
-nonzeros per row (cutoff 21.5 degrees); loading and locating three million
-endpoints took 16 s and the template plus three registrations 1,616 s
-together, about 21 s per iteration for a million streamlines. Every Jacobian
-is positive and no step was refused, so the fold check never fired. The warps
-and the aligned endpoints are in `/work/users/x/y/xya/conseal-ref/`.
+`tests/reference/conseal_adni_ico4.py` aligns three subjects of the lab's
+archive from their `mesh_intersections_ico4.mat` at the public defaults, and
+prints what a registration has to show: the cost falls and its trace is
+monotone, every Jacobian stays positive, each subject moves closer to the
+template, and the subjects' pairwise distances and endpoint overlaps improve.
+It reads the subjects from `SBCI_ADNI_SUBJECTS`; they, and the numbers measured
+on them, are not given here (item 39). The heat kernel at the published
+bandwidth has 89 nonzeros per row (cutoff 21.5 degrees). ConSEAL on released
+young adults -- known warps undone, bundle overlaps after alignment, and the
+time an iteration takes -- is in items 19, 35 and 36.
 
 ### How to run it
 
@@ -5383,6 +5352,62 @@ Five parts were written in parallel, one per group of modules, each with its own
 were then merged without a conflict and checked together. The checks, the probes and their
 outputs are in `/work/users/x/y/xya/edits/i38/` and `/work/users/x/y/xya/edits/review-1020/`.
 
+## 39. The lab's ADNI subjects out of the documents, 21 October 2026 -- THE CHECKS KEPT; THE KERNEL COMPARED ON A RELEASED YOUNG ADULT, WHERE THE BINARY NEVER WRITES THE SOUTH POLE
+
+Three reference checks ran on the lab's ADNI subjects, the only subjects for which the
+pipeline had kept both what `c3_main` was fed and what it wrote: the spherical kernel at
+full scale against that output (item 6), ENCORE making five subjects more alike
+(VERIFICATION.md, Tier 3), and ConSEAL on three (item 7). The face-order check of
+SPEC_QUESTIONS.md item 13 read them too. ADNI's data are shared under their own agreement,
+which governs what may be published from them, so on 21 October 2026 the user asked that
+the checks stay and that the subjects and their results leave the public documents.
+
+- **The documents.** Items 6 and 7, VERIFICATION.md, SPEC_QUESTIONS.md items 10 and 13,
+  BLUEPRINT.md, USAGE.md and the docstrings of `sbci.smoothing` name none of those
+  subjects and give no number measured on them. What their comparisons taught about the
+  kernel stays, in words; item 6 keeps one timing, on "a subject of about a million
+  streamlines".
+- **The checks.** `tests/reference/align_adni_ico4.py` and `conseal_adni_ico4.py` read
+  their subjects from `SBCI_ADNI_SUBJECTS`, comma-separated, and refuse to run with fewer
+  than two; the lab keeps the list with its data. Nothing else in them changes, and
+  neither runs in CI.
+- **The kernel's full-scale comparison** runs on the tutorial subject instead.
+  `tests/reference/concon_fullscale.py` writes the stored endpoints of its released file
+  as `c3_main`'s input, runs the binary with the pipeline's flags, and compares what it
+  writes with the package's density from the same positions. On all 803,741 streamlines
+  the two agree at r = 1.00000000 over the 13,125,126 pairs, scale 1.000000 with
+  nothing fitted, and write the same 6,887,499 pairs (job 5989183) -- once the grid's south
+  pole is emptied. Like `concon_probe.py`, it needs the binary and the pipeline grid's
+  `.m` files, neither of which is in this repository.
+- **What the new comparison found: `c3_main` never writes the south pole**, the vertex
+  at (0, 0, -1) in each hemisphere (left fusiform, right inferior temporal). A half-open
+  range test in concon's vertex lookup skips it, so every connectome the binary made has
+  nothing there; the toolkit's example output is empty there too. The package writes it,
+  0.072% of the tutorial subject's mass, and keeps doing so: the hole is the
+  reference's error, put back only in the comparison. As computed, the correlation over
+  all pairs is 0.99910256. Item 6 used to put the extra pairs on the kernel's cutoff
+  boundary; they are the pole's (item 6, *Full scale*).
+- **The lab's fMRI copy** is now at `/hickory/proj/STOR/zz10c`.
+  USAGE.md's note on lab paths, its FC example and the usage line of
+  `tools/build_hcp_fc.py` name it.
+- **Panel D** of the paper shows the test at every vertex (item 34), so the Status no
+  longer lists it as open.
+
+### Verified
+
+- **The suite.** 1,475 tests pass with 48 skipped on the released subjects, and 1,472 with 51
+  skipped as a fresh clone has it: item 38's counts and the new
+  `test_the_south_pole_takes_its_mass_which_c3_main_never_writes` (job 5988556, an AMD EPYC
+  9654). `ruff check` and `ruff format --check` pass on CI's paths. Three docstrings of
+  `sbci.smoothing` were reworded after it ran; its doctests and `tests/test_smoothing.py`
+  pass on the final text.
+- **The full-scale comparison** is job 5989183, on an AMD EPYC 7763: the binary took 2,975 s and
+  the package's density 15 s. A first run of the same comparison (job 5981456) found
+  the pole, and the toolkit's example output is empty at both poles too (job 5987601).
+- **The ADNI checks still run.** Without `SBCI_ADNI_SUBJECTS` both refuse; given the lab's
+  list, both load their subjects and start.
+- **Nothing else changes.** `src/` differs from item 38 only in those docstrings.
+
 ## Status
 
 All seven ports are done and verified, and the reviews of 5 to 7 October
@@ -5417,9 +5442,9 @@ and ConSEAL's search of the grid runs in threads, with the same bits and a regis
 twice as fast on eight cores (item 36); and a session label no file carries is refused as
 that, with its report (item 37); and the review of 20 October is answered, its eleven medium
 findings and the low ones fixed, the numbers unchanged but for two-subject templates (item
-38). What is left: the
-decisions item 33 leaves the user (what panel D of the paper shows, and whether the ADNI
-subjects may stay in the MATLAB comparisons); a version of the dataset whose README names
+38); and the lab's ADNI subjects are out of the documents, the checks on them kept and the
+kernel's full-scale comparison made on a released young adult instead, which found that
+`c3_main` never writes the grid's south pole (item 39). What is left: a version of the dataset whose README names
 the commit that holds the code now, and GitHub's removal of the commits before it (item 33,
 *The history*); the components' sex result, which sits at the edge of the threshold (item
 32); the WP1 sign-offs of items 3 (the

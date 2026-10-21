@@ -331,8 +331,8 @@ where `src/sbci/spec.py` currently carries a **provisional** value, marked
     `("shk", "rdk", "matern")`: `shk` is the spherical heat kernel and is the
     default, and the Matern kernel is `matern`. The spherical kernel is shipped
     and is the default: it reproduces `c3_main` at r = 1.00000000 and scale
-    1.000000 on all 1,001,877 endpoints of a pipeline subject -- PORTING.md
-    item 6.
+    1.000000 on all 803,741 streamlines of the tutorial subject, once the grid's
+    south pole, which the binary never writes, is emptied -- PORTING.md item 6.
 
 11. ~~**No anatomical surface can be drawn.**~~ **RESOLVED.**
 
@@ -409,10 +409,11 @@ where `src/sbci/spec.py` currently carries a **provisional** value, marked
     against the bundled mesh.
 
     It surfaced only when `smooth(kernel="shk")` was wired up and produced a
-    density uncorrelated with the reference (r = 0.236 where the same kernel
-    scores 1.000000 from continuous positions). Reordering the bundled faces to
-    the grid's own order brought the rebuilt endpoints from 83.1 to 1.25 degrees
-    of the positions `c3_main` was fed.
+    density uncorrelated with the reference, where the same kernel matched it
+    from the continuous positions `c3_main` was fed. Reordering the bundled
+    faces to the grid's own order brought the rebuilt endpoints to within about
+    a degree of those positions (on one of the lab's ADNI subjects, whose
+    numbers PORTING.md item 39 says are not given).
 
     **The convention, now fixed:** triangle indices refer to the face list of
     `?h_grid_avg_ico4.m` and its matching `.vtk`, which carry identical order --
@@ -424,9 +425,10 @@ where `src/sbci/spec.py` currently carries a **provisional** value, marked
     **Is that order canonical, or one run's accident?** Checked without any
     `.tsv`: a file stores both the nearest vertex and the crossing triangle, so
     the position rebuilt from the triangle must sit within one edge (about 4
-    degrees on ico4) of that vertex. Against the bundled face list, all five
-    ADNI subjects resolve at median 1.59-1.62 degrees (99th percentile 2.44),
-    and so does the toolkit's own example subject (1.62). Six subjects from two
+    degrees on ico4) of that vertex. Against the bundled face list, the
+    toolkit's own example subject resolves at a median 1.62 degrees, and five
+    of the lab's ADNI subjects resolve within the edge as well (PORTING.md
+    item 39 says why their numbers are not given). Six subjects from two
     pipeline sources, one face order -- it is canonical.
 
     What is *not* in that order is the toolkit's

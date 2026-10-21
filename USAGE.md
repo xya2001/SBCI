@@ -75,7 +75,7 @@ On Longleaf the lab's copy of the download is already there:
 Every file passes every validator check. To convert other pipeline output,
 use `tools/import_legacy.py`.
 
-> Paths under `/work/users/x/y/xya/`, `/overflow/zzhanglab/` and `/proj/STOR/`
+> Paths under `/work/users/x/y/xya/`, `/overflow/zzhanglab/` and `/hickory/proj/STOR/`
 > are the lab's copies on Longleaf of what is not public, to be substituted;
 > everything else is literal and copy-pasteable, the released subjects read
 > from `./hcp-ya`.
@@ -650,14 +650,18 @@ both within 10 float32-eps; `tests/reference/smooth_matlab_probe.py` prints
 them (PORTING.md item 24).
 
 `kernel="shk"`, the default, reproduces `c3_main` at **r = 1.000000** at full
-scale on a pipeline subject, with the scale factor at 1.000000 and nothing fitted
-(0.99858 with the closed-form series, `quantized=False`). The kernel is not
+scale on the tutorial subject, with the scale factor at 1.000000 and nothing fitted
+(0.998591 with the closed-form series, `quantized=False`), but for one vertex
+per hemisphere: the binary never writes the grid's south pole, in the left
+fusiform and the right inferior temporal cortex, and the package does. So
+connectomes the pipeline's `c3_main` made are empty there and the package's are
+not, a difference of 0.072% of the tutorial subject's mass. The kernel is not
 the heat kernel its name suggests: `concon` compounds a `(2l+1)` weight with a
 normalized spherical harmonic, giving `(2l+1)^(3/2)`, and it has compact
-support at about `2.9*sqrt(sigma)` radians. The 0.14% amplitude offset the
-closed form carried was the binary's lookup-table quantization, and the tables
-are now reproduced; what remains is 0.071% more non-zero pairs, where one ULP
-in a dot product moves a vertex across the kernel cutoff (PORTING.md item 6). A full subject takes about a
+support at about `2.9*sqrt(sigma)` radians. The amplitude offset the closed
+form carries, 0.14%, is the binary's lookup-table quantization, and the tables
+are now reproduced; what remains is the binary's own arithmetic, 6e-6
+relative (PORTING.md item 6). A full subject takes about a
 minute. See PORTING.md item 6.
 
 A re-smoothed density can carry mass on the medial wall, exactly as both
@@ -668,8 +672,8 @@ end on a real subject -- and `progress=lambda done, total: ...` to watch a run.
 
 The kernel is evaluated the way `c3_main` evaluates it: through two
 truncation-indexed lookup tables (10^5 harmonic samples, 10^6 kernel samples),
-which is what removed the last 0.14% amplitude offset against the released
-files. `spherical_heat_kernel(..., quantized=False)` gives the closed-form
+which is what removes the closed form's amplitude offset against the
+binary. `spherical_heat_kernel(..., quantized=False)` gives the closed-form
 series the tables approximate. Only the ~31 vertices inside the 12.2-degree
 cutoff are visited per endpoint, found with a KD-tree.
 
@@ -1644,7 +1648,7 @@ of 0.72 s on the 32k fs_LR surface.
 
 ```bash
 python tools/build_hcp_fc.py --manifest manifest.csv \
-    --fmri /proj/STOR/zz10c/HCP_fMRI --fmri more_runs/ \
+    --fmri /hickory/proj/STOR/zz10c/HCP_fMRI --fmri more_runs/ \
     --spheres /overflow/zzhanglab/encore_project/encore_paper_code/prediction_subs \
     --fslr fslr/ --mapping mapping_avg_ico4.npz --out hcp-ya-fc
 ```

@@ -1,7 +1,7 @@
 r"""Build HCP Young Adult functional connectomes on the ico4 grid from the HCP's resting state.
 
     python tools/build_hcp_fc.py --manifest manifest.csv \
-        --fmri /proj/STOR/zz10c/HCP_fMRI --fmri SUPPLEMENT \
+        --fmri /hickory/proj/STOR/zz10c/HCP_fMRI --fmri SUPPLEMENT \
         --spheres /overflow/zzhanglab/encore_project/encore_paper_code/prediction_subs \
         --fslr <...>/fslr --mapping <...>/fsaverage_label/mapping_avg_ico4.npz \
         --out /work/users/x/y/xya/hcp-ya/fc/data \
