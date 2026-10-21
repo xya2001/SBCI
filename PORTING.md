@@ -5408,6 +5408,51 @@ the checks stay and that the subjects and their results leave the public documen
   list, both load their subjects and start.
 - **Nothing else changes.** `src/` differs from item 38 only in those docstrings.
 
+## 40. The paper's three worked examples as notebooks, 21 October 2026 -- EVERY NUMBER THEY QUOTE REPRODUCED
+
+The paper's Section 5 walks through three examples, each a notebook; until now only the
+evidence sections' two analyses were notebooks. `notebooks/01_explore.ipynb`,
+`02_coupling.ipynb` and `03_cohort.ipynb` follow each example's items -- question, input,
+choices, execution, output, interpretation, sensitivity -- in the form of the two before
+them: the lab's paths at the top, the package's figure style, prose whose every number is
+the notebook's own output, saved with the outputs.
+
+- **01_explore** opens with the paper's listing as printed and runs it: `fetch_cohort` finds
+  the eleven files present and verified, and fetches nothing. Subject A's seed profile at
+  vertex 1234, the split-half check (raw maps r = 0.41, smoothed 0.99, against 0.54 to 0.80
+  between subjects), the Desikan and Schaefer-200 matrices as mass and as mean, what the
+  banks-superior temporal entry gathers (3,885 vertex pairs whose densities span 1,865-fold),
+  the export, and the matrices at sigma 0.01 (Schaefer-200 r = 0.993, Desikan 0.998) with the
+  control at 0.005 (r = 1.000000).
+- **02_coupling**: the eleven's coupling (highest in occipital cortex, 0.36 to 0.41; lowest
+  in the caudal anterior cingulate, entorhinal and posterior cingulate cortex, 0.05 to 0.09;
+  subjects' maps r = 0.53 to 0.71), the precentral gyrus (0.14 to 0.37 inside, rising
+  dorsally), the cingulate against the medial wall (63% of its gap is nearness to the wall),
+  negative FC set to zero (r = 0.885 to 0.957 per subject) and FC without global signal
+  regression (r = 0.684 to 0.926, median 0.815), the last run only where that FC exists.
+- **03_cohort**: the 943, the rank-20 fit (27.3% of the norm), the component tests (fluid
+  intelligence in none; sex in components 3, 5 and 8, adjusted p 0.035), the test at every
+  vertex (sex at 433), the results in Desikan terms, bctpy's graph measures and the
+  network-based statistic with whole-family sign flips (343 and 60 connections), and the
+  sensitivity checks. `scripts/cohort_data.py` reads each SC file once for it; its arrays
+  are bit for bit the ones the earlier runs used.
+- **The HCP's terms.** The cohort notebook reads the family table at run time and prints
+  counts only, and names no subject. The first two use no family table.
+
+Building them found four places where the paper's wording or this repository's notes ran
+ahead of the numbers, which the user has: the zeroed-negative range rounds to 0.88, not
+0.89; association regions vary less, not more, inside than unimodal ones, except relative
+to their mean; without global signal regression the temporal pole is among the lowest; and
+for fluid intelligence two Desikan regions tie for closest.
+
+### Verified
+
+- **The notebooks** run without an error, a traceback or a line on stderr, and the first
+  holds the paper's listing as printed (jobs 6105246, 6107062 and 6106816 on Longleaf).
+- **No subject id** appears in the cohort notebook; the other two show the eleven's only in
+  `fetch_cohort`'s report.
+- **`scripts/cohort_data.py`** passes `ruff check` and `ruff format --check`.
+
 ## Status
 
 All seven ports are done and verified, and the reviews of 5 to 7 October
@@ -5444,7 +5489,8 @@ that, with its report (item 37); and the review of 20 October is answered, its e
 findings and the low ones fixed, the numbers unchanged but for two-subject templates (item
 38); and the lab's ADNI subjects are out of the documents, the checks on them kept and the
 kernel's full-scale comparison made on a released young adult instead, which found that
-`c3_main` never writes the grid's south pole (item 39). What is left: a version of the dataset whose README names
+`c3_main` never writes the grid's south pole (item 39); and the paper's three worked
+examples are notebooks, every number they quote reproduced (item 40). What is left: a version of the dataset whose README names
 the commit that holds the code now, and GitHub's removal of the commits before it (item 33,
 *The history*); the components' sex result, which sits at the edge of the threshold (item
 32); the WP1 sign-offs of items 3 (the

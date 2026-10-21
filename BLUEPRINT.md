@@ -190,7 +190,9 @@ fetches any of the 946 HCP Young Adult subjects published on UNC Dataverse and
 verifies each file.
 Ahead of WP5, two notebooks run on young adults are in `notebooks/`: how far a
 continuous connectome repeats, across days and across halves of its
-streamlines, and prediction with every fit inside the training folds.
+streamlines, and prediction with every fit inside the training folds. The
+paper's three worked examples followed as `01_explore`, `02_coupling` and
+`03_cohort` (PORTING.md item 40).
 
 ### The exchange file, as built
 

@@ -131,7 +131,7 @@ output (USAGE.md, *Getting the data* and *Using legacy pipeline output*).
 | --- | --- |
 | [USAGE.md](USAGE.md) | every function with a worked example on the released subjects, and what the common errors tell you |
 | [docs/RESULTS.md](docs/RESULTS.md) | what the methods do on real data: the figures, and the analysis of the 946 young adults |
-| [notebooks/](notebooks/README.md) | two analyses of young adults, saved with their outputs: how far a continuous connectome repeats, across days and across halves of its streamlines, and prediction with every fit inside the training folds |
+| [notebooks/](notebooks/README.md) | the paper's three worked examples -- one subject explored, structure against function in the eleven, a cohort analysis of 943 -- and two analyses of young adults, saved with their outputs: how far a continuous connectome repeats, across days and across halves of its streamlines, and prediction with every fit inside the training folds |
 | [PORTING.md](PORTING.md) | how each of the seven MATLAB methods was ported and verified, and the errors found in the references |
 | [VERIFICATION.md](VERIFICATION.md) | how to check every claim yourself, in tiers from five minutes to a MATLAB licence |
 | [docs/review-2026-10-05.md](docs/review-2026-10-05.md) | the independent reviews of October 2026, of the implementation and then of the notebooks: what they found, which errors were the MATLAB references' own, and what was done about each |

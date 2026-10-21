@@ -5,8 +5,9 @@ Everything below is live. `scripts/tour.py` runs the single-subject sections,
 prints the output quoted there (the Desikan-level coupling comes from
 `tests/reference/eleventh_list_probe.py`); the
 cohort sections quote batch jobs whose output PORTING.md records, and the
-notebooks in `notebooks/`, saved with their outputs, hold the test-retest and
-prediction analyses, whose findings docs/RESULTS.md gives.
+notebooks in `notebooks/`, saved with their outputs, hold the paper's three
+worked examples and the test-retest and prediction analyses, whose findings
+docs/RESULTS.md gives.
 
 ## Setup anywhere
 
