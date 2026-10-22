@@ -378,7 +378,7 @@ Two things worth knowing: **negative FC values are kept**, as the package's
 brief asks and the reference does -- on the eleven, 0.5% to 1.7% of a subject's
 cortical vertices then have negative coupling, and setting negative FC to zero
 instead raises coupling everywhere (0.30 to 0.38 over unimodal regions, 0.19 to
-0.30 over association regions) while keeping the map's pattern (r = 0.89 to
+0.30 over association regions) while keeping the map's pattern (r = 0.88 to
 0.96 subject by subject) -- and **`discrete_coupling` is
 a Pearson correlation, not a cosine**, matching MATLAB's `corr2`, while global
 and region are uncentred cosine similarity.
@@ -518,7 +518,10 @@ sbci validate sub-copy_sc.h5
 ```
 
 Exit status 0 means every check passed. `save()` validates before writing, so a
-run that forgot to record its bandwidth fails without leaving a partial file.
+run that forgot to record its bandwidth fails without leaving a partial file. A
+save is written to a temporary beside its target, `.<name>.<random>.partial`,
+and moved onto it whole, so a save killed part-way leaves that temporary and no
+half-written file; the exports do the same with `.partial-<random>-<name>`.
 
 ## The kernel maths, usable directly
 
@@ -661,8 +664,9 @@ the heat kernel its name suggests: `concon` compounds a `(2l+1)` weight with a
 normalized spherical harmonic, giving `(2l+1)^(3/2)`, and it has compact
 support at about `2.9*sqrt(sigma)` radians. The amplitude offset the closed
 form carries, 0.14%, is the binary's lookup-table quantization, and the tables
-are now reproduced; what remains is the binary's own arithmetic, 6e-6
-relative (PORTING.md item 6). A full subject takes about a
+are now reproduced; what remains, 6e-6 relative, is the binary's single-precision
+read of its positions and its harmonics library's six-digit constants, with which
+put back the two agree to machine precision (PORTING.md item 6). A full subject takes about a
 minute. See PORTING.md item 6.
 
 A re-smoothed density can carry mass on the medial wall, exactly as both

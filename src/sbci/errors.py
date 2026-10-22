@@ -34,10 +34,10 @@ class FormatError(SbciError, KeyError):
 
     Examples
     --------
-    >>> raise FormatError("sub-01.h5 has no /connectivity dataset")
+    >>> raise FormatError("sub-01.h5: no /connectivity")  # doctest: +IGNORE_EXCEPTION_DETAIL
     Traceback (most recent call last):
         ...
-    sbci.errors.FormatError: sub-01.h5 has no /connectivity dataset
+    sbci.errors.FormatError: sub-01.h5: no /connectivity
     """
 
     def __str__(self) -> str:

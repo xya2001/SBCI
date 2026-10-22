@@ -47,11 +47,17 @@ def tutorial_dir(tmp_path_factory):
         where = tmp_path_factory.mktemp("brief")
         previous = os.getcwd()
         os.chdir(where)
+        config = os.environ.get("SBCI_CONFIG_DIR")
+        os.environ["SBCI_CONFIG_DIR"] = str(where / "config")  # the terms recorded here, not in ~
         try:
             # the brief's line, the HCP's terms accepted as a script accepts them
             assert main(["download", "hcp-ya", "--subject", SUBJECT, "--accept-terms"]) == 0
         finally:
             os.chdir(previous)
+            if config is None:
+                del os.environ["SBCI_CONFIG_DIR"]
+            else:
+                os.environ["SBCI_CONFIG_DIR"] = config
         assert (where / TUTORIAL).exists() and (where / "DATA_USE.txt").exists()
         return where
     pytest.skip("set SBCI_HCP_DIR to a directory holding sub-100307_sc.h5, or SBCI_DOWNLOAD=1")

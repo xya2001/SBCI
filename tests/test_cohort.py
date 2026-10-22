@@ -224,6 +224,36 @@ def test_two_files_for_one_subject_are_named(folder):
     assert cohort.excluded == {"sub-02": "2 sc files: old/sub-02_desc-old_sc.h5, sub-02_sc.h5"}
 
 
+def test_an_uppercase_bids_key_is_read_into_the_id_with_a_warning(folder):
+    """sub-01_SES-1_sc.h5 was taken silently as a subject named sub-01_SES-1."""
+    root, add = folder
+    add("sub-01_SES-1_sc.h5")
+    add("sub-01_SES-2_sc.h5")
+    add("sub-02_sc.h5")
+    with pytest.warns(UserWarning) as record:  # one warning a spelling, SES-1 and SES-2
+        loaded = load_cohort(root, modalities="sc")
+    assert loaded.subjects == ["sub-01_SES-1", "sub-01_SES-2", "sub-02"]
+    messages = sorted(str(w.message) for w in record)
+    assert len(messages) == 2 and "'SES-1' is read as part of the subject id" in messages[0]
+    assert "BIDS keys are lowercase (ses-2)" in messages[1]
+
+
+def test_a_blank_session_label_is_refused(folder):
+    root, add = folder
+    add("sub-01_sc.h5")
+    with pytest.raises(ValueError, match="session= is blank"):
+        load_cohort(root, modalities="sc", session="")
+    with pytest.raises(ValueError, match="session= is blank for sc"):
+        load_cohort(root, modalities="sc", session={"sc": "  "})
+
+
+def test_the_summary_leaves_out_a_setting_the_files_do_not_record(folder):
+    root, add = folder
+    add("sub-01_sc.h5")
+    summary = load_cohort(root, modalities="sc").summary()
+    assert "kernel 'shk'" in summary and "nu" not in summary
+
+
 def test_sessions_must_be_chosen(folder):
     root, add = folder
     for s in ("01", "02"):
@@ -1075,6 +1105,8 @@ def test_a_hyphen_in_an_id_is_not_taken_for_a_key(folder):
     add("sub-NDAR_INV-1_sc.h5")
     add("sub-NDAR_INV-2_ses-1_sc.h5")
     assert parse_name("sub-NDAR_INV-1_sc.h5") == ("sub-NDAR_INV-1", None, "sc")
+    assert parse_name("sub-01__sc.h5") is None  # an empty part
+    assert parse_name("sub-01_ses-1_ses-2_sc.h5") is None  # a key given twice
     assert parse_name("sub-NDAR_INV-2_ses-1_sc.h5") == ("sub-NDAR_INV-2", "1", "sc")
     assert load_cohort(root).subjects == ["sub-NDAR_INV-1", "sub-NDAR_INV-2"]
 

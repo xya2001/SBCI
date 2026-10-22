@@ -40,6 +40,7 @@ import re
 import tarfile
 import time
 from collections.abc import Callable, Iterable
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from importlib import resources
 from pathlib import Path
@@ -291,6 +292,41 @@ def _write_data_use(manifest: dict, out: Path, report) -> None:
 # --- the transfer --------------------------------------------------------------------------
 
 
+@contextmanager
+def _owned(partial: Path, name: str):
+    """Hold ``partial`` for this download; a second download into the folder is refused.
+
+    Two downloads into one folder would take up the same ``.part`` and append to it
+    between them, and the bytes that came would be blamed on the server. The lock is
+    advisory, on a sidecar beside the part, held while the part is written, verified and
+    moved onto its destination; the sidecar goes with it. A download that cannot take the
+    lock is told whose it is.
+    """
+    lock = partial.with_name(partial.name + ".lock")
+    handle = open(lock, "a+")
+    try:
+        if os.name == "nt":  # pragma: no cover - Windows has no flock
+            import msvcrt
+
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()  # the lock is the other download's, and stays its
+        raise OSError(
+            f"another download is writing {name} into {partial.parent}; wait for it, or "
+            "download into another folder"
+        ) from None
+    try:
+        yield
+    finally:
+        handle.close()  # releases the lock
+        lock.unlink(missing_ok=True)
+
+
 def _transfer(opener, destination: Path, size: int, name: str, where: str) -> None:
     """Bytes 0 to ``size - 1`` of a file into ``destination``, taken up where a try stopped.
 
@@ -501,11 +537,12 @@ class _Dataverse:
                         destination, digest = members[info.name]
                         partial = destination.with_name(destination.name + ".part")
                         source = stream.extractfile(info)
-                        with open(partial, "wb") as handle:
-                            while block := source.read(CHUNK):
-                                handle.write(block)
-                        _verify(partial, digest, destination.name)
-                        partial.replace(destination)
+                        with _owned(partial, destination.name):
+                            with open(partial, "wb") as handle:
+                                while block := source.read(CHUNK):
+                                    handle.write(block)
+                            _verify(partial, digest, destination.name)
+                            partial.replace(destination)
                         written.append(destination)
         except (
             HTTPException,
@@ -686,12 +723,13 @@ def _fetch_files(manifest, chosen, out, modalities, force, fetcher, transfer, re
             # interrupted download leaves its part, which the next try takes up, and
             # force=True does not truncate a good copy before a byte has arrived.
             partial = destination.with_name(destination.name + ".part")
-            if force:
-                partial.unlink(missing_ok=True)
-            source = dict(record, subject=entry["subject"], modality=modality)
-            fetch(source, partial, report)
-            _verify(partial, record["sha256"], destination.name)  # removed if it is wrong
-            partial.replace(destination)
+            with _owned(partial, destination.name):
+                if force:
+                    partial.unlink(missing_ok=True)
+                source = dict(record, subject=entry["subject"], modality=modality)
+                fetch(source, partial, report)
+                _verify(partial, record["sha256"], destination.name)  # removed if it is wrong
+                partial.replace(destination)
             verified[destination] = True
     missing = [d.name for _e, _m, _r, d in wanted if not verified.get(d)]
     if missing:
@@ -729,7 +767,10 @@ def fetch_basis(out=None, force: bool = False, report: Callable[[str], None] = p
         Where progress lines go.
     """
     out = basis_dir() if out is None else Path(out)
-    out.mkdir(parents=True, exist_ok=True)
+    try:
+        out.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise OSError(f"{out} cannot be made to hold the basis: {error.strerror}") from None
     for name, (size, digest) in BASIS_FILES.items():
         destination = out / name
         if (
@@ -745,15 +786,16 @@ def fetch_basis(out=None, force: bool = False, report: Callable[[str], None] = p
             f"{BASIS_COMMIT[:7]}, into {out}"
         )
         partial = destination.with_name(name + ".part")
-        if force:
-            partial.unlink(missing_ok=True)
-        _transfer(
-            lambda first, last, url=url, name=name: _ranged(url, first, last, name),
-            partial,
-            size,
-            name,
-            url.split("/")[2],
-        )
-        _verify(partial, digest, name)
-        partial.replace(destination)
+        with _owned(partial, name):
+            if force:
+                partial.unlink(missing_ok=True)
+            _transfer(
+                lambda first, last, url=url, name=name: _ranged(url, first, last, name),
+                partial,
+                size,
+                name,
+                url.split("/")[2],
+            )
+            _verify(partial, digest, name)
+            partial.replace(destination)
     return out

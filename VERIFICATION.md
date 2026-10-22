@@ -65,7 +65,7 @@ are whole examples marked `+SKIP`; the GPU's thirty-four in `tests/test_gpu.py`
 need CuPy and a CUDA GPU (Tier 3); and without the plotting and render extras the
 figure tests in `tests/test_surface.py`, `test_plot_mesh.py` and
 `test_render.py` skip as well (CI's test matrix, with the plotting extra and
-not the render one, skips 75: the 74 and the PyVista view). With a network
+not the render one, skips 76: the 74 and the two PyVista tests). With a network
 connection, two more checks run on the released young adults:
 
 ```bash
@@ -496,9 +496,10 @@ streamline so that its output is the kernel: `tests/reference/concon_probe.py`
 regenerates that measurement, and `tests/test_smoothing.py` pins the kernel to
 the binary's own numbers at rms 0.0005.
 
-One residual remains, 6e-6 relative, at the level of the binary's own
-arithmetic: the dot products are formed in a different order, and one ULP moves
-a truncation bucket (PORTING.md item 6). The amplitude offset an
+One residual remains, 6e-6 relative, and it is the binary's: it reads its
+positions into single precision, and its harmonics library's constants have
+six digits; with both put back the package reproduces it to machine precision
+(1.05e-15 relative; PORTING.md item 6, *Shipping it*). The amplitude offset an
 earlier version carried was the binary's lookup-table quantization and is
 reproduced. A reviewer can re-run the comparison with
 `tests/reference/concon_fullscale.py`; it needs the `c3_main` binary, the

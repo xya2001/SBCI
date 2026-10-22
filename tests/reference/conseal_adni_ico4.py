@@ -1,4 +1,4 @@
-"""ConSEAL on real ico4 endpoints: three ADNI subjects at the published settings.
+"""ConSEAL on real ico4 endpoints: the lab's ADNI subjects (three were used), public settings.
 
 Loads each subject's ``mesh_intersections_ico4.mat`` (the barycentric endpoint
 crossings the SBCI pipeline wrote), aligns the three with
@@ -33,7 +33,9 @@ from sbci.conseal import (
 from sbci.smoothing import Endpoints
 
 ROOT = "/overflow/zzhanglab/ADNI/ADNI-bids"
-SUBJECTS = tuple(s for s in os.environ.get("SBCI_ADNI_SUBJECTS", "").split(",") if s)
+SUBJECTS = tuple(
+    s.strip() for s in os.environ.get("SBCI_ADNI_SUBJECTS", "").split(",") if s.strip()
+)
 THRESHOLD = 1e-4  # endpoint density per vertex; the mean over 5,124 vertices is 1.95e-4
 
 

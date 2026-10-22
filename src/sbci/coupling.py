@@ -8,7 +8,7 @@ closely that vertex's structural connectivity profile matches its functional
 one. Negative FC values are kept throughout, as the package's brief asks and the
 reference does. Setting them to zero instead raises coupling everywhere and keeps
 its pattern: on the tutorial's eleven young adults a subject's map with them
-zeroed correlates with its own at r = 0.89 to 0.96, and with them kept 0.5% to
+zeroed correlates with its own at r = 0.88 to 0.96, and with them kept 0.5% to
 1.7% of cortical vertices have negative coupling.
 
 Three details of the reference are easy to miss and are reproduced here.

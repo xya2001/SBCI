@@ -11,6 +11,14 @@ dist/
 venv/
 .env
 
+# A save killed part-way leaves its temporary beside the target (io/hdf5.py, export.py)
+*.partial
+.partial-*
+
+# What the example notebooks write when executed where they sit (run them from a copy)
+notebooks/hcp-ya/
+notebooks/exports/
+
 # Test / coverage
 .pytest_cache/
 .coverage

@@ -162,7 +162,8 @@ compute node running the pipeline should not need a rendering stack.
 ## 4. Where things stand
 
 The suite passes and lint is clean (`pytest -q` prints the current count, and
-PORTING.md's latest item the count at its last full run). Repository at `~/sbci` on
+PORTING.md's latest item with a *Verified* suite line the count at its last full run).
+Repository at `~/sbci` on
 Longleaf; environment at `/work/users/x/y/xya/sbci-venv` (scratch, rebuilt by
 `scripts/setup_longleaf.sh`); reference checkouts and MATLAB reference output
 under `/work/users/x/y/xya/`.
@@ -184,7 +185,8 @@ under `/work/users/x/y/xya/`.
   cingulate and entorhinal cortex (PORTING.md item 2)
 
 **Built since this section was first written:** the spherical heat kernel
-(PORTING.md item 6, r = 1.000000 at full scale), FPCA (item 5), ENCORE (item 4),
+(PORTING.md item 6, r = 1.000000 at full scale, but for the south pole of each
+hemisphere, which the binary never writes), FPCA (item 5), ENCORE (item 4),
 ConSEAL (item 7), and the subject download, `sbci download hcp-ya`, which
 fetches any of the 946 HCP Young Adult subjects published on UNC Dataverse and
 verifies each file.

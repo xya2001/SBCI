@@ -43,7 +43,8 @@ import sbci
 ROOT = Path("/work/users/x/y/xya/hcp-ya")
 SC = ROOT / "full" / "data"
 OUT = ROOT / "cohort"
-WORKERS = int(os.environ.get("SLURM_CPUS_PER_TASK", "1"))
+# SLURM's cores, or SBCI_WORKERS outside a job (one process a core, one thread a process)
+WORKERS = int(os.environ.get("SLURM_CPUS_PER_TASK") or os.environ.get("SBCI_WORKERS", "1"))
 
 
 def one(path: Path) -> tuple:
@@ -55,7 +56,10 @@ def one(path: Path) -> tuple:
     area = np.asarray(connectome.area, dtype=np.float64)
     strength = connectome.dense() @ area
     mass = connectome.to_atlas("Desikan", how="mass")
-    count = float(connectome.metadata.get("streamline_count"))
+    count = connectome.metadata.get("streamline_count")
+    if count is None:
+        raise ValueError(f"{path.name} records no streamline count")
+    count = float(count)
     return strength, mass, count, area, np.asarray(connectome.mask, dtype=bool)
 
 

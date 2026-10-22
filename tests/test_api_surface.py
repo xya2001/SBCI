@@ -20,6 +20,23 @@ from sbci import grid
 N = 5124
 
 
+def test_python_m_sbci_runs_the_command_line():
+    done = subprocess.run(
+        [sys.executable, "-m", "sbci", "--version"], capture_output=True, text=True, check=False
+    )
+    assert done.returncode == 0 and done.stdout.strip() == f"sbci {sbci.__version__}"
+
+
+def test_the_declared_version_is_the_installed_one():
+    from importlib import metadata
+
+    try:
+        installed = metadata.version("sbci")
+    except metadata.PackageNotFoundError:
+        pytest.skip("sbci is not installed, so there is no metadata to compare")
+    assert installed == sbci.__version__  # pyproject.toml and __init__.py both say it
+
+
 @pytest.fixture
 def cc(sc_metadata):
     """A connectome on the real grid, with complete metadata so it round-trips.

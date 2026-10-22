@@ -19,6 +19,9 @@ from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize
 from nilearn import plotting as nlp
 
+if __name__ != "__main__":  # a program read top to bottom; imported, it would run
+    raise ImportError(f"{__file__} is a program: run it, do not import it")
+
 W = "/work/users/x/y/xya"
 OUT = f"{W}/wb-out"
 DCONN = f"{W}/hcp-ya/exchange/sub-100307_space-fsLR_den-32k_desc-concon_sc.dconn.nii"

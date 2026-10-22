@@ -25,6 +25,9 @@ import numpy as np
 
 warnings.filterwarnings("ignore")
 
+if __name__ != "__main__":  # a program read top to bottom; imported, it would run
+    raise ImportError(f"{__file__} is a program: run it, do not import it")
+
 D = os.environ.get("SBCI_HCP_DIR", "/work/users/x/y/xya/hcp-ya/data")  # sbci download hcp-ya
 # the 16.9 GB file scripts/write_exchange_file.py writes; not part of the release
 EXCHANGE = os.environ.get("SBCI_EXCHANGE_DIR", "/work/users/x/y/xya/hcp-ya/exchange")

@@ -235,6 +235,8 @@ sex = sbci.local_test(maps[:, cortex], covariates, terms=[1], groups=np.array(gr
 sex.significant()                                             # vertices, here
 ```
 
+![The mean coupling map of the 903 young adults](figures/cohort_coupling.png)
+
 The cohort's mean map is the eleven's (r = 0.972), and two halves of the
 cohort, split by family, reproduce each other's at r = 0.998: the pattern is
 settled, and the question is how people depart from it. Fluid intelligence
@@ -264,7 +266,8 @@ men.*
 
 ## Repeatability and prediction, from the notebooks
 
-Two notebooks, saved with their outputs, ask what the continuous connectome is
+Two of the notebooks, `reliability.ipynb` and `prediction.ipynb`, saved with
+their outputs, ask what the continuous connectome is
 worth to a study of individuals (USAGE.md, *How far it repeats* and
 *Predicting from component scores*, has the calls).
 
@@ -303,7 +306,16 @@ linearly, more than any of 500 permutations; the components add nothing. That
 gain may still be size, measured better: the volume there is the skull-stripped
 mask's, not the FreeSurfer intracranial volume the tests above adjust for.
 Splitting families across folds raised fluid intelligence's r by 0.039 on
-average, 0.028 beyond features that cannot leak. And at rank 15 the
+average, 0.028 beyond features that cannot leak. Neither the atlas nor the
+smoothing explains the comparison with the regions: by the notebook's own
+procedure, run again with other features (job 5477801 on Longleaf,
+`paper-open-items/r8-benchmark-5477801.out`), Desikan-Killiany's 68 regions
+reach an AUC of 0.862 (0.813 to 0.903) for sex and HCP-MMP's 360 reach 0.880
+(0.834 to 0.922), within 0.02 of Schaefer-200, and Desikan-Killiany matrices
+counted straight from the streamline endpoints, with no smoothing, reach 0.883
+(0.839 to 0.924), a paired difference of +0.021 (-0.005 to +0.048) from the
+smoothed ones; none of the three predicts fluid intelligence (permutation p
+0.20, 0.20 and 0.09). And at rank 15 the
 continuous components carry less about sex than a PCA of the Schaefer-200
 matrices (0.66 against 0.87) because of their separable form: an unrestricted
 PCA of the same connectomes, at the vertex pairs and in the functional PCA's

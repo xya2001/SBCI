@@ -169,6 +169,18 @@ def subject_id(value) -> str:
 _ENTITY = re.compile(r"[a-z]+-")
 """How a ``key-value`` part of a name begins: a lowercase key, as BIDS writes its keys."""
 
+_BIDS_KEYS = re.compile(r"(?i)(ses|acq|run|task|desc|space|dir|echo|rec|ce|hemi|den|res)-.+")
+"""A BIDS key in any case, to notice one written in capitals and so read into the id."""
+
+
+def _uppercase_keys(subject: str) -> list[str]:
+    """The parts of an id that read as a BIDS key in capitals: ``SES-1`` in ``sub-01_SES-1``."""
+    return [
+        part
+        for part in subject[4:].split("_")[1:]
+        if _BIDS_KEYS.fullmatch(part) and not _ENTITY.match(part)
+    ]
+
 
 def parse_name(name: str) -> tuple[str, str | None, str] | None:
     """``(subject, session, modality)`` from a computational file's name, or ``None``.
@@ -177,7 +189,8 @@ def parse_name(name: str) -> tuple[str, str | None, str] | None:
     so it may hold underscores and hyphens: a ``key-value`` part begins with a
     lowercase key, as BIDS writes its keys (``ses-1``, ``acq-multi-shell``), and
     a part such as ``INV-1`` belongs to the id. A value may hold hyphens; case
-    does not matter in the ``sub-`` prefix, the modality or the extension.
+    does not matter in the ``sub-`` prefix, the modality or the extension. An
+    empty part (``sub-01__sc.h5``) or a key given twice makes a name unreadable.
 
     Examples
     --------
@@ -191,6 +204,8 @@ def parse_name(name: str) -> tuple[str, str | None, str] | None:
     ('sub-NDAR_INV-1', None, 'sc')
     >>> parse_name("sub-01_vertexarea.dscalar.nii") is None
     True
+    >>> parse_name("sub-01__sc.h5") is None and parse_name("sub-01_ses-1_ses-2_sc.h5") is None
+    True
     """
     match = _EXTENSION.search(name)
     if match is None:
@@ -199,7 +214,7 @@ def parse_name(name: str) -> tuple[str, str | None, str] | None:
     if len(parts) < 2 or parts[0][:4].lower() != "sub-" or len(parts[0]) == 4:
         return None
     modality = parts[-1].lower()
-    if modality not in spec.MODALITIES:
+    if modality not in spec.MODALITIES or "" in parts:
         return None
     label = [parts[0][4:]]
     index = 1
@@ -211,7 +226,7 @@ def parse_name(name: str) -> tuple[str, str | None, str] | None:
         if not _ENTITY.match(part):
             return None
         key, value = part.split("-", 1)
-        if not value:
+        if not value or key in entities:
             return None
         entities[key] = value
     return "sub-" + "_".join(label), entities.get("ses"), modality
@@ -686,7 +701,10 @@ class LoadedCohort:
                 f"modality: {shown}"
             )
         for modality, shared in self.settings.items():
-            listed = ", ".join(f"{key} {value!r}" for key, value in shared.items())
+            # a setting the files do not record, nu outside the Matern kernel, is left out
+            listed = ", ".join(
+                f"{key} {value!r}" for key, value in shared.items() if value is not None
+            )
             lines.append(f"  {modality} files share: {listed}")
         return "\n".join(lines)
 
@@ -812,6 +830,11 @@ def load_cohort(
     else:
         wanted = {m: session for m in modalities}
         chosen = session is not None
+    for modality, label in wanted.items():
+        if label is not None and not str(label).strip():
+            raise ValueError(
+                f"session= is blank for {modality}; None takes the files without a session label"
+            )
     missing = _markers(missing)  # "-999", or -999, is one marker
     if keep_default_missing:
         missing |= MISSING
@@ -833,8 +856,17 @@ def load_cohort(
     # the sessions of the files session= leaves out, so that the subjects they belong to are
     # reported, and a label no file carries is not taken for a folder without files
     elsewhere: dict[str, dict[str, set[str]]] = {}
+    warned: set[str] = set()
     for path in paths_found:
         subject, ses, modality = parse_name(path.name)
+        for part in _uppercase_keys(subject):
+            if part not in warned:  # once a spelling, not once a file
+                warned.add(part)
+                warnings.warn(
+                    f"{path.name}: {part!r} is read as part of the subject id; BIDS keys are "
+                    f"lowercase ({part.lower()})",
+                    stacklevel=2,
+                )
         if modality not in modalities:
             continue
         if chosen and not _same_label(ses, wanted[modality]):

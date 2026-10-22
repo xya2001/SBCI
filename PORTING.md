@@ -806,7 +806,8 @@ gives the linear algebra its threads.
   --OPT_VAL_exp_num_kern_samps 6 --OPT_VAL_exp_num_harm_samps 5`.
 - **To:** `src/sbci/smoothing.py`, reached through `cc.smooth(kernel="shk")`.
   Against `c3_main` itself the port reaches **r = 1.00000000** at full
-  scale, but for the one vertex the binary never writes (*Full scale*, below); the
+  scale, but for the south pole of each hemisphere, which the binary never writes (*Full
+  scale*, below); the
   0.65 this file reported for most of its life was measured against the wrong input.
 
 ### The verification that was missing, and now exists
@@ -964,11 +965,16 @@ pairs the binary lacks. The cause is in concon's source (commit `ce7e0d9`):
 `compute_kernel.cpp` looks up the vertices near an endpoint in a quad tree over
 the polar angle, clipping the range it asks for at pi, and `quad_tree.cpp`'s
 range test is half-open, `x < max_x`, so a vertex at exactly pi is never
-returned. Every connectome `c3_main` made has that hole. The package, which
-finds neighbours with a KD-tree, has none, and keeps it that way: the hole is
-the reference's error, put back only for the comparison, as the MATLAB
-references' are. With the pole emptied, the two agree to the binary's own
-arithmetic and write the same pairs.
+returned. The grid stores each pole as exactly (0, 0, -1), which the hole
+depends on; and the binary reads `--LOAD_grid_file` for both hemispheres,
+ignoring `--LOAD_rh_grid_file` (`main.cpp`), which is harmless because the
+lab's two `.m` files are identical, as the bundled sphere's halves are. Every
+connectome `c3_main` made has that hole. The package, which finds neighbours
+with a KD-tree, has none, and keeps it that way: the hole is the reference's
+error, put back only for the comparison, as the MATLAB references' are. With
+the pole emptied, the two write the same pairs and agree to 6e-6, and to
+machine precision once the binary's own two inaccuracies are put back as well
+(*Shipping it*, below).
 
 The port kept more pairs than `c3_main` until `apply_final_threshold`
 reproduced `--final_thold 1e-9`, the per-streamline value below which the
@@ -1092,9 +1098,30 @@ scale* above, the two paths side by side (job 5989183):
 | pairs equal to 1e-6 relative | **3,092,070** | 1 |
 | median ratio by distance band | 1.000001 throughout | 0.99834 to 0.99851 |
 
-The residual is 6e-6 relative, at the level of the binary's own
-arithmetic: the dot products are formed in a different order, and one ULP moves
-a truncation bucket.
+The residual of 6e-6 is not the binary's arithmetic, as this item first said
+(a one-ULP shift of a cosine moves about 2e-10 of the run's lookups across a
+bucket, a hundredth of one lookup in all), but two inaccuracies of the binary,
+found by the review of 22 October (item 41). `subject.cpp` reads the endpoint
+coordinates with `fscanf("%f")` into `float`, so the binary smooths
+single-precision positions, up to 3e-8 off a coordinate, where the package was
+handed the nine-decimal doubles. And its harmonics come from Google's
+spherical-harmonics library, whose closed forms for degrees 0 to 4 carry
+six-significant-digit constants (0.282095, 0.488603, 0.315392, 0.373176,
+0.105786; relative errors up to 4e-6) where `concon_kernel_table` uses the
+exact `sqrt((2l+1)/4pi)`: the kernel table's peak moves by 1.2e-7 and its
+tail near the cutoff by 2e-3, which is why the peak was only ever matched to
+six digits. Both are put back test-side in `concon_fullscale.py`, as the
+MATLAB references' errors are, and compared with the recorded run's output
+(job 6186083):
+
+| the package's density, south pole emptied | relative error | pairs within 1e-6 | largest difference |
+| --- | --- | --- | --- |
+| as shipped: double positions, exact constants | 0.000006 | 3,092,070 of 6,887,499 | 0.60 |
+| the positions cast to float32, as the binary reads them | 5.9e-7 | 3,475,156 of 6,887,499 | 2.1e-3 |
+| float32 positions and the library's six-digit constants | 1.05e-15 | 6,887,499 of 6,887,499 (all 6,887,499 within 1e-12, 2,736,226 bit-identical) | 6.4e-13 |
+
+So the table emulation is the binary's, and the package keeps the exact
+constants and the double positions, as it keeps the pole.
 
 The **excess of non-zero pairs** was mostly `--final_thold`: `compute_kernel.cpp`
 writes a pair only `if(temp > final_thold)` after dividing by the streamline
@@ -4073,7 +4100,9 @@ A ConSEAL iteration costs four to eight and a half times an ENCORE step (1.18 s 
 0.29 s on the V100, 3.6 s against 0.43 s on the GTX 1080): ENCORE carries a density through
 the warp by barycentric interpolation, three weights a row, where ConSEAL carries a
 subject's 1.6 million endpoints, finds each one's triangle on the warped mesh -- on the CPU
-on one core, the k-d tree's query and NumPy's arithmetic being single-threaded -- and
+on one core, the k-d tree's query and NumPy's arithmetic being single-threaded (until item
+36, which runs that search in threads, and corrected this: the triangles are found on the
+grid) -- and
 rebuilds the density through a heat kernel of 32 entries a row, with its derivatives. The
 CPU's nodes here are among Longleaf's faster: in item 26's runs the eleven took 570 to
 1,240 s with ENCORE and 4,288 to 7,894 s with ConSEAL.
@@ -4760,7 +4789,7 @@ numbers from `r6-figures-5408061.out`, and the coupling maps' last digits from
 | ENCORE behind the 1e-10 finite difference | 4.9e-4, 7.1e-4 and 5.4e-4 | 4.92e-4, 7.06e-4 and 5.35e-4 |
 | the parcellation and the coupling against MATLAB | 1.875e-16; 3.6 to 88.2 eps | 1.875e-16; 3.6 (within regions), 9.9 (global) and 88.2 eps (discrete) |
 | the clustered null | ignoring the families 16%; clustered 9.7%, 6.7%, 6.0% and 5.1% for 20, 50, 100 and 422 families | 16.6%, 16.1%, 15.6% and 16.8%; 9.7%, 6.7%, 6.0% and, for 400 families, 5.6% |
-| negative FC | discarding it changes the sign of the coupling map in association cortex | not so: with it kept, 0.5% to 1.7% of a subject's cortical vertices are negative; with it set to 0, the map correlates with the kept one at r = 0.89 to 0.96 and unimodal regions stay above association regions (0.38 against 0.30) in all eleven |
+| negative FC | discarding it changes the sign of the coupling map in association cortex | not so: with it kept, 0.5% to 1.7% of a subject's cortical vertices are negative; with it set to 0, the map correlates with the kept one at r = 0.88 to 0.96 (0.885 to 0.957; item 40) and unimodal regions stay above association regions (0.38 against 0.30) in all eleven |
 | the eleven's streamlines | 734,039 to 988,788 | the same |
 | `import sbci` | about 300 ms | 341 to 350 ms with the interpreter's own start |
 | the default ConSEAL against the other methods | the closest of every method on each of 24 known warps | the closest on 18; on the other six, the two largest warps' (4.9 and 6.5 degrees), the same kernel without the floor comes out as close (0.049 and 0.062 degrees on average, for both) |
@@ -5185,7 +5214,7 @@ than the review said. The second medium finding, a session label no file carries
   - A terms record of another shape counts as not accepted.
   - DATA_USE.txt is written before the first file is fetched.
   - manifest.csv lists only files the index knows.
-  - A subject id may be any whole number (100307.0 is sub-100307).
+  - A subject id may be any whole number (a spreadsheet's `NNNNNN.0` is read as `sub-NNNNNN`).
   - An `out` that is a file is refused before the terms are asked.
 - **The command line** ends quietly when its reader stops reading (`--list | head` printed
   a traceback every time).
@@ -5203,6 +5232,8 @@ than the review said. The second medium finding, a session label no file carries
 - **The spherical kernel's memory.** Its sparse path shrinks a block of endpoints until its
   neighbour pairs fit a budget of 1 GB a side. It keeps 65,536 endpoints at the default
   bandwidth and up to 0.1, and takes 21,805 at 0.5, where a block had needed 13.5 GB.
+  (The budget counted the pairs' 24 bytes alone, where the block's peak is about 64 a
+  pair: item 41 made the budget mean the peak, so a block at 0.5 is 8,176 endpoints.)
   `bandwidth=True` and `bandwidth="0.005"` are refused.
 - **What the kernel is given:**
   - sigma must be finite and positive, and a block a positive whole number;
@@ -5283,7 +5314,8 @@ than the review said. The second medium finding, a session label no file carries
   `scripts` and `tools` from any folder. `pytest .` from the root had imported them, and
   two do damage on import: `write_exchange_file.py`, which writes the 16.9 GB exchange
   file, and `tools/align_surface_faces.py`, which rewrites the bundled surfaces. Those two
-  now run only as scripts. The suite collects the same 1,422 tests, in the same order.
+  now run only as scripts. The suite collected item 37's 1,422 tests, in the same order,
+  before this item's hundred were added.
 - **`make_figures.py`** parses its arguments (`--help` had made a folder of that name),
   takes `--skip-cohort`, and refuses to write into `docs/figures`, whose real figures it
   would have overwritten.
@@ -5403,7 +5435,8 @@ the checks stay and that the subjects and their results leave the public documen
   pass on the final text.
 - **The full-scale comparison** is job 5989183, on an AMD EPYC 7763: the binary took 2,975 s and
   the package's density 15 s. A first run of the same comparison (job 5981456) found
-  the pole, and the toolkit's example output is empty at both poles too (job 5987601).
+  the pole, and the toolkit's example output is empty at both hemispheres' south poles too
+  (job 5987601).
 - **The ADNI checks still run.** Without `SBCI_ADNI_SUBJECTS` both refuse; given the lab's
   list, both load their subjects and start.
 - **Nothing else changes.** `src/` differs from item 38 only in those docstrings.
@@ -5453,6 +5486,102 @@ for fluid intelligence two Desikan regions tie for closest.
   `fetch_cohort`'s report.
 - **`scripts/cohort_data.py`** passes `ruff check` and `ruff format --check`.
 
+## 41. The review of 22 October 2026 -- FIVE REVIEWERS, NOTHING BROKEN; AN HCP ID OUT, THE BINARY'S RESIDUAL EXPLAINED, THE NOTEBOOKS' CHOICES WIRED THROUGH
+
+Five read-only reviewers read 89a9798, one each for the three example notebooks, the
+kernel commit (item 39), the code changed since the last outside review (5095374), the
+documents, and the packaging, CI and tests. None found a method wrong or a number
+unreproduced; the one high finding was an HCP subject id that item 38 had written into this
+file, a page that reports family-based results. What they found, and what changed:
+
+- **The HCP id** in item 38's *Downloads* ("a whole number ... is sub-...") is a placeholder
+  now. It was the tutorial subject's, written as an example of a spreadsheet's `.0`; the rule
+  of item 33 stands whatever the reason. No other id is on a family-result page: the review
+  scanned every tracked text file for the 946 ids.
+- **The binary's residual explained** (item 6, *Shipping it*): the 6e-6 left after the south
+  pole is emptied is not the binary's arithmetic but its single-precision read of the
+  positions and the six-digit constants of its harmonics library; with both put back, the
+  package reproduces `c3_main` to 1.05e-15 relative, 2,736,226 of 6,887,499 pairs bit for bit
+  (`tests/reference/concon_fullscale.py --reuse`, job 6186083). The script gained the two
+  emulations, `--reuse`, a check of the binary's exit status and the names of the variables
+  that point at the binary and the grid files. Item 6 also says now that the grid stores the
+  pole as exactly (0, 0, -1), that the binary reads one grid file for both hemispheres, and
+  that "the one vertex" was two, each hemisphere's south pole (README, BLUEPRINT, item 6).
+- **Downloads.** Two downloads into one folder took up the same `.part` between them and
+  blamed the server for the bytes ("sent more than the ... bytes", or a wrong SHA-256). A
+  second download into a folder is now refused while the first writes a file, by an advisory
+  lock on a sidecar beside the part, held while it is written, verified and moved onto its
+  destination (`_owned`); the resumable names stay. A basis folder that cannot be made is named.
+- **The command line.** `sbci info`, `cohort`, `download` and `basis` caught
+  `BrokenPipeError`, an `OSError`, in their own handlers and printed "[Errno 32] Broken pipe"
+  before `main()` could end quietly; each lets it through now. `sbci info` prints `nu` beside
+  a Matern file's bandwidth, and `sbci cohort`'s summary leaves out a setting the files do not
+  record (`nu None` beside every `shk` cohort). `python -m sbci` runs the command line.
+- **Cohort names.** A BIDS key written in capitals (`sub-01_SES-1`) is read into the id with a
+  warning now, once a spelling; a blank `session=` is refused; an empty part (`sub-01__sc.h5`)
+  or a key given twice makes a name unreadable, as `ses-` without a value did.
+- **The spherical kernel's memory budget** counted the pairs' 24 bytes alone, where the sparse
+  path's peak is about 64 a pair (tracemalloc: 658 MB at 2,000 endpoints and sigma 0.5, of
+  which 420 MB are the two dense arrays); `PAIR_BYTES` is 64, so the budget means the peak,
+  and a block at sigma 0.5 is 8,176 endpoints. The default bandwidth keeps its block, and its
+  bits.
+- **Tests from the root with the package installed, not `-e`**, failed to collect: the doctest
+  modules under `src/` were imported a second time beside the installed `sbci` and refused as
+  a mismatch (26 errors), which CI never saw because every job installs `-e`.
+  `--import-mode=importlib` in `addopts` fixes it (1,447 passed, 76 skipped on such an
+  install). `conftest.py` says that naming a script still collects it; the six scripts and
+  tools that did their work on import (`audit_api.py`, `plot_examples.py`,
+  `plot_exchange_file.py`, `tour.py`, `age_probe.py`, `build_fslr_surfaces.py`) refuse to be
+  imported instead.
+- **Packaging and CI.** `hatchling>=1.22`, which the sdist exclusion needs; the notebooks with
+  their outputs (10 MB of an 11 MB sdist), the CI configuration and `.gitignore` out of the
+  sdist; a `notebooks` extra (`sbci[render]`, scikit-learn, bctpy, jupyter); `.gitignore` covers
+  the save temporaries and what the notebooks write where they sit; the workflow runs on pushes
+  to main and on pull requests, with `permissions: contents: read`, a 60-minute limit on the
+  matrix, and ruff pinned. A test ties `__version__` to the installed metadata; the
+  five-minute-start fixture records the HCP terms in a scratch config, not the user's; the
+  MATLAB tier's basis fixture looks where the package keeps the basis too.
+- **The notebooks.** The cohort notebook's exposed outcome and covariates flow through every section now: `require` and `values` derive from them, the head-size comparisons run only when the volume is among them, and a model under which nothing passes says so instead of raising. Its smoothing-control sentence quotes docs/RESULTS.md's record instead of reading a log outside the repository; its network-based statistic's p-values are (b + 1)/(m + 1), so the 343-pair network reads 0.0002 and the 60-pair one 0.0022, and it says that each direction is tested at 0.05 on its own. The coupling notebook's spreads within and between regions use one weighting (unweighted; the between-region SD is 0.079 over 68 regions and 0.080 over 66, as the area-weighted means gave). The second and third notebooks end with the timing cell the first has, which their opening cells quote; nilearn's home-folder line is gone from their outputs. Re-executed as jobs 6186207, 6186208 and 6186209 (2.6, 2.7 and 11.4 minutes), every other number stands, but one count of the null control (random labels shared within families, families ignored, the negative direction) moved from 26 to 24 of 100 with the reworked cell's draws.
+- **Documents.** The GPU speed-up in README's table (ConSEAL's 17 times was before item 36; 5
+  now); the zeroed-negative-FC range, 0.88 to 0.96, in USAGE, `coupling.py` and item 33's table;
+  the review note's *Still open* bullet that item 36 answered; item 28's description of the
+  one-core search, until item 36; item 38's "1,422 tests" (item 37's count, before its hundred)
+  and its budget sentence; the skip counts (76 without the render extra, two PyVista tests, not
+  75 and one); "two notebooks" in RESULTS and BLUEPRINT; the atlases' source files are `.npz`;
+  `cohort_coupling.png` is embedded where RESULTS gives its numbers; the benchmark's smoothing
+  control is recorded in RESULTS (job 5477801), so the cohort notebook need not read a log;
+  USAGE says what a killed save leaves; `md2pdf.py`'s reportlab is named; the notebooks' README
+  says to run a copy, with the VTK setting a headless machine needs.
+
+### Corrections
+
+- **Item 6** said the residual was the binary's arithmetic; it is the binary's float read and
+  six-digit constants (above). It said "the one vertex"; it is each hemisphere's south pole.
+- **Item 28** described the point location on one core and on the warped mesh; item 36 threads
+  it and finds the triangles on the grid (marked in place).
+- **Item 33's table and item 38's text** carry the corrected range and counts (above).
+- **Item 40** quoted "0.89"; the notebook prints 0.885 to 0.957, and the documents say 0.88.
+
+### Left to the user
+
+- **The ADNI subjects in the history.** Commit 949ad82 took them out of the documents;
+  `git show 067c39d:PORTING.md` still prints them. If ADNI's agreement reaches the repository,
+  the history needs the treatment of item 33's purge (the ticket is open).
+- **The paper's wording** that notebook 02 found wanting (item 40), and Example 3's *Choices*
+  bullet, which names inclusion rules, a cross-validation design and atlas comparators the
+  cohort notebook does not expose (the prediction notebook holds the cross-validation).
+
+### Verified
+
+- **The suite.** 1,483 tests pass with 48 skipped on the released subjects, and 1,480 with 51 skipped as a fresh clone has
+  it (job 6187744, an AMD EPYC); the fresh clone's 51 skips are Longleaf's, where the MATLAB
+  references are present; a machine without them skips 74 with every extra, 76 without
+  render. `ruff check` and `ruff format --check` pass on CI's paths and `conftest.py`.
+- **The kernel comparison** against the recorded run's output, job 6186083 (above).
+- **The notebooks** ran again without an error, a traceback or a line on stderr (jobs
+  6186207, 6186208 and 6186209); no subject id in the cohort notebook, no home path in any output.
+- **CI** passed on the pushed commit, the first with `--import-mode=importlib`.
+
 ## Status
 
 All seven ports are done and verified, and the reviews of 5 to 7 October
@@ -5490,7 +5619,10 @@ findings and the low ones fixed, the numbers unchanged but for two-subject templ
 38); and the lab's ADNI subjects are out of the documents, the checks on them kept and the
 kernel's full-scale comparison made on a released young adult instead, which found that
 `c3_main` never writes the grid's south pole (item 39); and the paper's three worked
-examples are notebooks, every number they quote reproduced (item 40). What is left: a version of the dataset whose README names
+examples are notebooks, every number they quote reproduced (item 40); and five reviewers
+read all of it once more, an HCP id came out of this file, the binary's residual is the
+binary's, and the notebooks' choices flow through (item 41). What is left: a version of the
+dataset whose README names
 the commit that holds the code now, and GitHub's removal of the commits before it (item 33,
 *The history*); the components' sex result, which sits at the edge of the threshold (item
 32); the WP1 sign-offs of items 3 (the

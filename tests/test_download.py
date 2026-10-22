@@ -159,6 +159,47 @@ def test_any_subject_by_id_and_all_of_them(tmp_path, monkeypatch):
     assert (out / "manifest.csv").read_text().splitlines()[1:] == ["sub-A,F,26-30", "sub-B,F,26-30"]
 
 
+def test_a_second_download_into_the_folder_is_refused_while_the_first_writes(tmp_path, monkeypatch):
+    """Two downloads took up one .part between them and blamed the server for the bytes."""
+    manifest, blobs = release(FILES)
+    use(monkeypatch, manifest)
+    fetcher, _ = local_fetcher(blobs)
+    partial = tmp_path / "sub-A_sc.h5.part"
+    with download._owned(partial, "sub-A_sc.h5"):  # the other download, holding the part
+        with pytest.raises(OSError, match="another download is writing sub-A_sc.h5"):
+            download.fetch_cohort(
+                tmp_path, subjects="A", modalities=("sc",), fetcher=fetcher, **QUIET
+            )
+        assert (tmp_path / "sub-A_sc.h5.part.lock").exists()  # the refused one left it alone
+    assert not (tmp_path / "sub-A_sc.h5.part.lock").exists()  # the holder took it away
+    written = download.fetch_cohort(
+        tmp_path, subjects="A", modalities=("sc",), fetcher=fetcher, **QUIET
+    )
+    assert [p.name for p in written] == ["sub-A_sc.h5"]
+    assert not list(tmp_path.glob("*.lock")) and not list(tmp_path.glob("*.part"))
+
+
+def test_a_reader_gone_is_not_an_error_of_info_cohort_download_or_basis(tmp_path, monkeypatch):
+    """BrokenPipeError is an OSError, and the commands' handlers printed it as Errno 32."""
+    from sbci import cli, cohort
+
+    def gone(*args, **kwargs):
+        raise BrokenPipeError(32, "Broken pipe")
+
+    monkeypatch.setattr(cli, "_info", gone)
+    monkeypatch.setattr(cohort, "load_cohort", gone)  # the handler imports it when it runs
+    monkeypatch.setattr(download, "fetch_cohort", gone)
+    monkeypatch.setattr(download, "fetch_basis", gone)
+    for argv in (
+        ["info", str(tmp_path / "x.h5")],
+        ["cohort", str(tmp_path)],
+        ["download", "hcp-ya", "--out", str(tmp_path), "--accept-terms"],
+        ["basis", "--out", str(tmp_path)],
+    ):
+        with pytest.raises(BrokenPipeError):  # left to main(), which ends quietly
+            cli._command(argv)
+
+
 def test_a_wrong_digest_is_removed_and_reported(tmp_path, monkeypatch):
     manifest, _ = release(FILES)
     use(monkeypatch, manifest)
@@ -775,6 +816,14 @@ def test_the_basis_is_fetched_at_its_commit_verified_and_kept(tmp_path, raw):
     assert len(RawFiles.requests) == 2 and len(lines) == 2  # present and correct: kept
     download.fetch_basis(tmp_path / "lbo", force=True, report=lines.append)
     assert len(RawFiles.requests) == 4
+
+
+def test_a_basis_folder_that_cannot_be_made_is_named(tmp_path, monkeypatch):
+    monkeypatch.undo()  # the conftest's stand-in for fetch_basis: the real one fails first
+    blocked = tmp_path / "file"
+    blocked.write_text("")
+    with pytest.raises(OSError, match="cannot be made to hold the basis"):
+        download.fetch_basis(blocked / "basis")
 
 
 def test_a_basis_file_with_another_digest_is_removed(tmp_path, raw, monkeypatch):

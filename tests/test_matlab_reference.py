@@ -60,8 +60,13 @@ def _read(path: pathlib.Path, name: str) -> np.ndarray:
 
 @pytest.fixture(scope="module")
 def eigenpairs():
-    left = TOOLKIT / "concon_estimate/EV_LBO_ds_ico4_L.mat"
-    right = TOOLKIT / "concon_estimate/EV_LBO_ds_ico4_R.mat"
+    """The Laplace-Beltrami basis: the toolkit's copy, or the one the package keeps."""
+    from sbci.smoothing import find_basis
+
+    directory = TOOLKIT / "concon_estimate"
+    if not (directory / "EV_LBO_ds_ico4_L.mat").exists():
+        directory = find_basis() or directory  # SBCI_LBO_DIR, or the package's cache
+    left, right = directory / "EV_LBO_ds_ico4_L.mat", directory / "EV_LBO_ds_ico4_R.mat"
     _require(left, right)
     return load_eigenpairs(left, "L"), load_eigenpairs(right, "R")
 

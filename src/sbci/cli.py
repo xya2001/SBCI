@@ -182,6 +182,8 @@ def _command(argv: Sequence[str] | None = None) -> int:
     if args.command == "info":
         try:
             return _info(args.path)
+        except BrokenPipeError:
+            raise  # main() ends it quietly: the reader stopped reading
         except (SbciError, OSError) as error:
             print(f"error: {error}", file=sys.stderr)
             return 1
@@ -244,6 +246,8 @@ def _command(argv: Sequence[str] | None = None) -> int:
             print(loaded.summary())
             if args.report:
                 print(f"report written to {loaded.save_report(args.report)}")
+        except BrokenPipeError:
+            raise  # main() ends it quietly: the reader stopped reading
         except CohortError as error:
             print(f"error: {error}", file=sys.stderr)
             if args.report and error.report:
@@ -309,6 +313,8 @@ def _command(argv: Sequence[str] | None = None) -> int:
                 force=args.force,
                 accept_terms=args.accept_terms,
             )
+        except BrokenPipeError:
+            raise  # main() ends it quietly: the reader stopped reading
         except (ValueError, OSError, RuntimeError) as error:
             print(f"error: {error}", file=sys.stderr)
             return 1
@@ -322,6 +328,8 @@ def _command(argv: Sequence[str] | None = None) -> int:
 
         try:
             where = download.fetch_basis(args.out, force=args.force)
+        except BrokenPipeError:
+            raise  # main() ends it quietly: the reader stopped reading
         except OSError as error:
             print(f"error: {error}", file=sys.stderr)
             return 1
@@ -395,7 +403,12 @@ def _info(path: str) -> int:
     print(f"  spec version    {fields.get('spec_version')}")
     print(f"  normalization   {fields.get('normalization')}")
     if connectome.modality == "sc":
-        print(f"  kernel          {fields.get('kernel')} (bandwidth {fields.get('bandwidth')})")
+        settings = f"bandwidth {fields.get('bandwidth')}"
+        if fields.get("kernel") == "matern":
+            from .smoothing import DEFAULT_NU
+
+            settings += f", nu {fields.get('nu', DEFAULT_NU)}"  # a Matern file without nu is 3
+        print(f"  kernel          {fields.get('kernel')} ({settings})")
         print(f"  streamlines     {fields.get('streamline_count')}")
         print(f"  endpoints       {'yes' if connectome.has_endpoints else 'no'}")
     else:

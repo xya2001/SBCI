@@ -100,7 +100,7 @@ class Metadata:
 
         Examples
         --------
-        >>> Metadata({"grid": "fsaverage-ico4"}).validate()
+        >>> Metadata({"grid": "fsaverage-ico4"}).validate()  # doctest: +IGNORE_EXCEPTION_DETAIL
         Traceback (most recent call last):
         ...
         sbci.metadata.MetadataError: missing required metadata keys: ...

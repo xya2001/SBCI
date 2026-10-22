@@ -21,6 +21,9 @@ import numpy as np
 
 import sbci
 
+if __name__ != "__main__":  # a program read top to bottom; imported, it would run
+    raise ImportError(f"{__file__} is a program: run it, do not import it")
+
 D = "/work/users/x/y/xya/hcp-ya/data"
 SUBJECT = "sub-100307"
 

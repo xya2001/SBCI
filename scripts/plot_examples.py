@@ -14,6 +14,9 @@ import numpy as np
 
 from sbci import ContinuousConnectome, load_atlas
 
+if __name__ != "__main__":  # a program read top to bottom; imported, it would run
+    raise ImportError(f"{__file__} is a program: run it, do not import it")
+
 DATA = "/work/users/x/y/xya/hcp-ya/data"  # sbci download hcp-ya, the lab's copy
 OUT = "/work/users/x/y/xya/sbci-figures"
 

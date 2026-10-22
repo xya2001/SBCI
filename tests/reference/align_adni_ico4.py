@@ -2,9 +2,9 @@
 
 An earlier multi-subject check used the lab's HCP test-retest tensors, which
 exist only on the retired 4121-vertex 0.94 grid; it was retired with the grid.
-Five of the lab's ADNI subjects, the pipeline's ico4 output, make this the
-check that counts for the package: alignment must make the subjects more alike,
-and every Jacobian must stay positive. Reads lab data; run by hand. The
+The lab's ADNI subjects, the pipeline's ico4 output (five were used), make this
+the check that counts for the package: alignment must make the subjects more
+alike, and every Jacobian must stay positive. Any two or more run. Reads lab data; run by hand. The
 subjects are named in the environment, not here: ADNI's data are shared under
 their own agreement, and the lab keeps the list with them (PORTING.md item 39).
 
@@ -27,7 +27,9 @@ import sbci
 from sbci.grid import to_condensed
 
 ROOT = "/overflow/zzhanglab/ADNI/ADNI-bids"
-SUBJECTS = tuple(s for s in os.environ.get("SBCI_ADNI_SUBJECTS", "").split(",") if s)
+SUBJECTS = tuple(
+    s.strip() for s in os.environ.get("SBCI_ADNI_SUBJECTS", "").split(",") if s.strip()
+)
 if len(SUBJECTS) < 2:
     raise SystemExit("set SBCI_ADNI_SUBJECTS to two or more subjects, comma-separated")
 

@@ -203,17 +203,24 @@ endpoints, 65536 means 16.
 """
 
 SPARSE_PAIR_BUDGET = 10**9
-"""Bytes a block's (vertex, endpoint) pairs may take on the sparse path, one side at a time.
+"""Bytes a block's (vertex, endpoint) pairs may take at the sparse path's peak, a side at a time.
 
-The tree search returns each pair as two indices and a distance, 24 bytes, and
-the block's other arrays grow with its pairs. An endpoint reaches the vertices
-of its hemisphere inside the cutoff: 29 at the default bandwidth, 46 MB for a
-block of :data:`SPARSE_BLOCK`, but 1,911 at sigma 0.5, 3.0 GB. The default block
-is shrunk to stay within this (:func:`_sparse_block`).
+An endpoint reaches the vertices of its hemisphere inside the cutoff: 29 at the
+default bandwidth, 1,911 at sigma 0.5. At :data:`PAIR_BYTES` a pair, a block of
+:data:`SPARSE_BLOCK` endpoints takes 120 MB at the default and 8 GB at sigma
+0.5, so the default block is shrunk to stay within this (:func:`_sparse_block`).
+Two dense ``5124 x 5124`` arrays, 420 MB, sit beside the pairs whatever the block.
 """
 
-PAIR_BYTES = 24
-"""Bytes of one pair as ``cKDTree.sparse_distance_matrix`` returns it: two indices, a distance."""
+PAIR_BYTES = 64
+"""Bytes one pair costs at the sparse path's peak.
+
+``cKDTree.sparse_distance_matrix`` returns a pair as two indices and a distance,
+24 bytes; the block's other arrays -- the rows and columns, the vertices and
+points they gather, the cosines and the lookup's temporaries -- grow with the
+pairs as well, to about 64 bytes a pair measured with ``tracemalloc``
+(PORTING.md item 41).
+"""
 
 
 def _check_sigma(sigma) -> None:
@@ -532,7 +539,7 @@ def _sparse_block(cutoff: float, n_hemisphere: int) -> int:
     >>> _sparse_block(concon_kernel_table(DEFAULT_SIGMA).cutoff, 2562) == SPARSE_BLOCK
     True
     >>> _sparse_block(np.pi, 2562)    # the whole hemisphere: 2562 pairs an endpoint
-    16263
+    6098
     """
     pairs = max(1.0, n_hemisphere * (1.0 - np.cos(cutoff)) / 2.0)
     return int(max(1, min(SPARSE_BLOCK, SPARSE_PAIR_BUDGET // (PAIR_BYTES * pairs))))

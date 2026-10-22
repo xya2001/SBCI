@@ -2,7 +2,11 @@ name: tests
 
 on:
   push:
+    branches: [main]
   pull_request:
+
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -11,6 +15,7 @@ concurrency:
 jobs:
   test:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -98,6 +103,6 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - run: python -m pip install ruff
+      - run: python -m pip install "ruff==0.17.1"  # pinned: a new release's rules would turn CI red with no change here
       - run: ruff check src tests scripts tools
       - run: ruff format --check src tests scripts tools

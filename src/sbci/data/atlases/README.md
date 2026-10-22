@@ -6,6 +6,6 @@ vertices, left hemisphere first), containing:
 - `labels` -- `int32`, one entry per vertex, `0` for the medial wall
 - `names` -- region names, index `i` naming label `i + 1`
 
-They are converted from the SBCI_Toolkit `*_avg_roi_ico4.mat` files by
+They are converted from the SBCI_Toolkit `*_avg_roi_ico4.npz` files by
 `tools/convert_atlases.py` (PORTING.md, item 3) and committed, so no release
 step depends on MATLAB. `sbci.list_atlases()` lists them.

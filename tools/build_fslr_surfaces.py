@@ -21,6 +21,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from nilearn import plotting as nlp
 
+if __name__ != "__main__":  # a program read top to bottom; imported, it would run
+    raise ImportError(f"{__file__} is a program: run it, do not import it")
+
 W = "/work/users/x/y/xya"
 FSLR = f"{W}/fslr"
 FS = f"{W}/sbci-reference/SBCI_Pipeline/data/fsaverage"
